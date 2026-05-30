@@ -6,6 +6,16 @@ Parses your existing `*.spec.ts` files, then [Hermes Agent](https://github.com/N
 
 **You do not copy `scripts/` into your app.** Run everything with `npx` from your repo root.
 
+## Why this exists
+
+1. **Real E2E on live/staging matters** — mocked Playwright runs alone don’t prove the app works in production-like conditions.
+2. **Live E2E without mocks is non-deterministic** — account state, billing, credits, and third-party data change what “pass” looks like.
+3. **Teams usually handle that with QA engineers** — picking the right scenario, skipping dangerous steps, judging ambiguous UI.
+4. **At a startup, there often isn’t a dedicated QA role** — so reuse existing Playwright specs and let AI review the live DOM instead.
+5. **This tool wires that up:** `Playwright spec` → `spec` (JSON/MD) → **Hermes agent** judges staging and returns `pass` / `fail` / `manual_review` / `skip`.
+
+Annotations (`@qa-scenario`, `@qa-live-policy`, `@qa-fixture`) declare what is safe to verify on live; Hermes handles the rest.
+
 ```
 spec → judge → slack (optional)
 ```
