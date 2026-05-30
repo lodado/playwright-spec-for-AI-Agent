@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   applyPathTemplate,
   loadProjectConfig,
+  mergeUploadFixtures,
   resetProjectConfigForTests,
+  resolveDefaultUploadFixtures,
+  resolveFixturePaths,
 } from "../hermes-qa-project-config.mjs";
 import {
   parseTargetPathArg,
@@ -80,6 +83,49 @@ describe("loadProjectConfig", () => {
         join(root, "playwright/settings"),
       );
       expect(resolveOutputDir("settings")).toBe(join(root, ".qa/settings"));
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it("loads upload fixtures with page overrides", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hermes-qa-fixtures-"));
+    const configPath = join(root, "hermes-qa.config.mjs");
+    writeFileSync(
+      configPath,
+      `export default {
+        fixtures: { avatar: "tests/fixtures/global.png" },
+        staging: {
+          fixtures: { document: "tests/fixtures/doc.pdf" },
+        },
+        pages: {
+          profile: {
+            fixtures: { avatar: "tests/fixtures/profile.png" },
+          },
+        },
+      };
+`,
+    );
+
+    const previousCwd = process.cwd();
+    process.chdir(root);
+    try {
+      await loadProjectConfig([`--config=${configPath}`]);
+      expect(resolveDefaultUploadFixtures("profile")).toEqual({
+        avatar: "tests/fixtures/profile.png",
+        document: "tests/fixtures/doc.pdf",
+      });
+      expect(
+        resolveFixturePaths({ avatar: "tests/fixtures/a.png" }, root),
+      ).toEqual({
+        avatar: join(root, "tests/fixtures/a.png"),
+      });
+      expect(
+        mergeUploadFixtures(
+          { avatar: "tests/fixtures/global.png" },
+          { avatar: "tests/fixtures/test.png" },
+        ),
+      ).toEqual({ avatar: "tests/fixtures/test.png" });
     } finally {
       process.chdir(previousCwd);
     }

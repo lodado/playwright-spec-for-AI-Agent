@@ -38,6 +38,16 @@ function pageLabel(page) {
     .join(" ");
 }
 
+function formatFixtureLines(fixtures) {
+  if (!fixtures || Object.keys(fixtures).length === 0) return [];
+  return [
+    "- Upload fixtures:",
+    ...Object.entries(fixtures).map(
+      ([name, fixturePath]) => `  - \`${name}\`: \`${fixturePath}\``
+    ),
+  ];
+}
+
 function renderMarkdown(spec, page) {
   const label = pageLabel(page);
   const lines = [
@@ -62,6 +72,7 @@ function renderMarkdown(spec, page) {
         "- Always run: **yes** (runs on every Hermes browse, regardless of plan/status)"
       );
     }
+    lines.push(...formatFixtureLines(scenario.fixtures));
     if (scenario.liveSkip) {
       lines.push("- Live run: **skipped** (@qa-live-skip: true)");
     }
@@ -76,6 +87,7 @@ function renderMarkdown(spec, page) {
           `- QA annotation: \`@qa-live-policy: ${test.livePolicyAnnotation}\``
         );
       }
+      lines.push(...formatFixtureLines(test.fixtures));
 
       const policyNote = describeLiveRunPolicy(test.liveRunPolicy);
       if (test.liveRunPolicy !== "executable-readonly") {

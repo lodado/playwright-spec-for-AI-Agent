@@ -9,7 +9,9 @@ import { join } from "node:path";
  *   // @qa-live-skip: true
  *   // @qa-always-run: true
  *
- * Per-test (or test.describe) live policy — required on every test in @qa-scenario files:
+ * Upload fixtures for live file-input replay (optional):
+ *   // @qa-fixture: avatar=tests/fixtures/qa-avatar.png
+ *   Paths are repo-relative; override per test, describe, file, or hermes-qa.config.
  *   // @qa-live-policy: readonly | safe-interaction | safe-interaction-no-confirm | mock-judgment | subscription-mutation | auth-mock | skip
  *
  * Policy meanings:
@@ -100,6 +102,83 @@ export function extractTestBlocks(source) {
 }
 
 const LIVE_POLICY_COMMENT_PATTERN = /^\/\/\s*@qa-live-policy:\s*(\S+)\s*$/;
+const FIXTURE_COMMENT_PATTERN =
+  /^\/\/\s*@qa-fixture:\s*([A-Za-z0-9_-]+)\s*=\s*(.+)\s*$/;
+
+function unquoteFixturePath(value) {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+/** Parse a single `// @qa-fixture: name=path` comment line. */
+export function parseFixtureFromCommentLine(line) {
+  const match = line.match(FIXTURE_COMMENT_PATTERN);
+  if (!match) return null;
+  return { name: match[1], path: unquoteFixturePath(match[2]) };
+}
+
+/** Collect `@qa-fixture` lines directly above `index` (closest wins per name). */
+export function parseFixturesBeforeIndex(source, index) {
+  const fixtures = {};
+  const lines = source.slice(0, index).split("\n");
+
+  for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex -= 1) {
+    const trimmed = lines[lineIndex].trim();
+    if (trimmed === "") continue;
+
+    const parsed = parseFixtureFromCommentLine(trimmed);
+    if (parsed) {
+      if (!(parsed.name in fixtures)) {
+        fixtures[parsed.name] = parsed.path;
+      }
+      continue;
+    }
+
+    if (trimmed.startsWith("//")) continue;
+    break;
+  }
+
+  return fixtures;
+}
+
+/** File-level fixtures from header comments before the first test block. */
+export function parseFileFixtures(source) {
+  const firstTest = source.search(/\btest(?:\.describe)?\s*\(/);
+  const header = firstTest === -1 ? source : source.slice(0, firstTest);
+  const fixtures = {};
+
+  for (const line of header.split("\n")) {
+    const parsed = parseFixtureFromCommentLine(line.trim());
+    if (parsed) fixtures[parsed.name] = parsed.path;
+  }
+
+  return fixtures;
+}
+
+/**
+ * Merge file → enclosing describe(s) → test fixtures.
+ * Inner describe and test override outer defaults.
+ */
+export function resolveTestFixtures(source, testIndex, fileFixtures = {}) {
+  const merged = { ...fileFixtures };
+
+  const enclosing = findDescribeBlocks(source)
+    .filter(block => block.start < testIndex && testIndex < block.end)
+    .sort((left, right) => left.start - right.start);
+
+  for (const block of enclosing) {
+    Object.assign(merged, parseFixturesBeforeIndex(source, block.start));
+  }
+
+  Object.assign(merged, parseFixturesBeforeIndex(source, testIndex));
+  return merged;
+}
 
 /** Read the nearest `// @qa-live-policy:` directly above `index` (skips blank and other // lines). */
 export function parseLivePolicyBeforeIndex(source, index) {
@@ -478,6 +557,7 @@ export function parseDashboardSpecFile(fileName, source) {
 
   const labelMatch = source.match(SCENARIO_LABEL_PATTERN);
   const label = labelMatch ? unescapeString(labelMatch[2]) : fileName;
+  const fileFixtures = parseFileFixtures(source);
 
   const tests = extractTestBlocks(source).map(block => {
     // Whole-file @qa-live-skip marks every test as liveSkip.
@@ -511,12 +591,15 @@ export function parseDashboardSpecFile(fileName, source) {
           )
         : [];
 
+    const fixtures = resolveTestFixtures(source, block.index, fileFixtures);
+
     return {
       title: block.title,
       stagingMode,
       liveRunPolicy,
       livePolicyAnnotation,
       expectations,
+      ...(Object.keys(fixtures).length > 0 ? { fixtures } : {}),
       checkId: slugify(block.title) || "unnamed-test",
     };
   });
@@ -528,6 +611,7 @@ export function parseDashboardSpecFile(fileName, source) {
     alwaysRun: annotations.alwaysRun,
     sourceFile: fileName,
     label,
+    ...(Object.keys(fileFixtures).length > 0 ? { fixtures: fileFixtures } : {}),
     tests,
   };
 }

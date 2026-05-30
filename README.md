@@ -10,12 +10,12 @@ Parses your existing `*.spec.ts` files, then [Hermes Agent](https://github.com/N
 spec → judge → slack (optional)
 ```
 
-| Command   | What it does                                                                             |
-| --------- | ---------------------------------------------------------------------------------------- |
-| `spec`    | Parses `*.spec.ts` files annotated with `@qa-scenario` into a JSON + Markdown spec       |
-| `judge`   | Hermes logs in, visits `--target-path`, infers scenario, returns pass/fail/manual_review |
-| `slack`   | Posts the verdict to a Slack webhook on failure or manual review                         |
-| `nightly` | Runs `spec` → `judge` → optional `slack` in one command                                  |
+| Command   | What it does                                                                                       |
+| --------- | -------------------------------------------------------------------------------------------------- |
+| `spec`    | Parses `*.spec.ts` files annotated with `@qa-scenario` into a JSON + Markdown spec                 |
+| `judge`   | Hermes logs in, visits `--target-path`, infers scenario, returns `pass` / `fail` / `manual_review` |
+| `slack`   | Posts the verdict to a Slack webhook on `fail` or `manual_review` (not on `pass`)                  |
+| `nightly` | Runs `spec` → `judge` → optional `slack` in one command                                            |
 
 ---
 
@@ -70,6 +70,8 @@ STAGING_QA_PASSWORD=your-staging-password
 STAGING_QA_BASE_URL=https://staging.your-app.com
 ```
 
+Prefer **environment variables** (or CI secrets) over `--password=` on the command line — shell history and process lists can leak CLI flags.
+
 `judge` and `nightly` need staging email/password. `spec` does not.
 
 ### 4. Point at your spec and output folders
@@ -90,6 +92,9 @@ export default {
   },
   staging: {
     expectedSubscriptionStatus: "INACTIVE",
+    fixtures: {
+      avatar: "tests/fixtures/qa-avatar.png",
+    },
   },
   targetPaths: {
     billing: "/settings/billing",
@@ -115,7 +120,7 @@ npx playwright-spec-qa spec --page=billing \
 | --------------------------------- | --------------------------------------------------------- |
 | `--page=billing`                  | Page id; replaces `{page}` in path templates              |
 | `--spec-dir=tests/e2e/{page}`     | Folder with `*.spec.ts` (must include `// @qa-scenario:`) |
-| `--output-dir=.qa/{page}`         | Where JSON/MD/screenshots are written                     |
+| `--output-dir=.qa/{page}`         | Where JSON/MD artifacts are written                       |
 | `--project-root=.`                | Your app root (defaults to cwd or config file directory)  |
 | `--config=./hermes-qa.config.mjs` | Explicit config; otherwise searched upward from cwd       |
 
@@ -128,7 +133,11 @@ Placeholders: `{page}` = `--page=` value, `{root}` = project root.
 
 ### 5. Annotate Playwright specs
 
-See [Annotating your spec files](#annotating-your-spec-files). At minimum each file needs `// @qa-scenario:` and each test needs `// @qa-live-policy:`.
+See [Annotating your spec files](#annotating-your-spec-files). At minimum:
+
+- each file: `// @qa-scenario:`
+- each test: `// @qa-live-policy:`
+- upload tests (optional): `// @qa-fixture: name=tests/fixtures/file.png`
 
 ### 6. Run the pipeline
 
@@ -153,16 +162,21 @@ npx playwright-spec-qa nightly --page=pricing --with-slack --non-interactive
 
 ```
 your-app/
-├── hermes-qa.config.mjs      # optional paths + targetPaths
-├── .env                      # STAGING_QA_* credentials
-├── tests/e2e/
-│   └── billing/
-│       └── billing.spec.ts   # // @qa-scenario: ACTIVE
+├── hermes-qa.config.mjs      # paths, targetPaths, staging fixtures
+├── .env                      # STAGING_QA_* credentials (gitignored)
+├── tests/
+│   ├── fixtures/
+│   │   └── qa-avatar.png     # upload files for @qa-fixture / setInputFiles
+│   └── e2e/
+│       └── billing/
+│           └── billing.spec.ts   # // @qa-scenario: ACTIVE
 └── .qa/
     └── billing/              # generated (gitignore this)
         ├── billing-qa-spec.json
         ├── billing-qa-spec.md
-        └── billing-hermes-judgment.md
+        ├── billing-hermes-judgment.json
+        ├── billing-hermes-judgment.md
+        └── billing-hermes-raw-output.txt   # debug only
 ```
 
 ---
@@ -219,8 +233,8 @@ npx playwright-spec-qa spec --help    # same global flags on every command
 **Staging flags** (`judge`, `nightly`)
 
 ```bash
---email=<addr>             # or STAGING_QA_EMAIL
---password=<secret>        # or STAGING_QA_PASSWORD
+--email=<addr>             # or STAGING_QA_EMAIL (preferred in CI)
+--password=<secret>        # or STAGING_QA_PASSWORD (prefer env over CLI)
 --base-url=<origin>        # or STAGING_QA_BASE_URL
 --login-path=/login        # or STAGING_QA_LOGIN_PATH
 --expected-subscription-status=INACTIVE   # or STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS
@@ -287,6 +301,45 @@ Add file-level and test-level annotations to your existing Playwright specs.
 // @qa-scenario: ACTIVE          — which account state this file covers
 // @qa-live-skip: true           — exclude this file from live Hermes runs
 // @qa-always-run: true          — run regardless of live account state (e.g. BVA tests)
+// @qa-fixture: avatar=tests/fixtures/qa-avatar.png  — default upload file for this spec file
+```
+
+### Upload fixtures (`@qa-fixture`)
+
+For tests that call `setInputFiles`, declare which file Hermes should upload on live staging.
+
+```ts
+// File-level default (applies to all tests in this spec unless overridden)
+// @qa-fixture: avatar=tests/fixtures/qa-avatar.png
+
+// Per-test override (place directly above the test or test.describe)
+// @qa-fixture: avatar=tests/fixtures/other.png
+test("uploads avatar", async ({ page }) => {
+  await page
+    .getByTestId("avatar-input")
+    .setInputFiles("tests/fixtures/qa-avatar.png");
+});
+```
+
+**Resolution order** (later wins): `hermes-qa.config` root `fixtures` → `staging.fixtures` → `pages.<page>.fixtures` → file-level `@qa-fixture` → describe `@qa-fixture` → test `@qa-fixture`.
+
+Paths are **repo-relative**. During `judge`, paths are resolved to absolute paths and sent to Hermes as `uploadFixtures.defaults` and `uploadFixtures.byCheckId` (keyed by each test's `checkId` in the spec JSON).
+
+If a fixture file is missing on disk, the CLI prints `QA fixture missing on disk: ...` before calling Hermes.
+
+**Config example** (`hermes-qa.config.mjs`):
+
+```js
+export default {
+  staging: {
+    fixtures: { avatar: "tests/fixtures/qa-avatar.png" },
+  },
+  pages: {
+    settings: {
+      fixtures: { document: "tests/fixtures/qa-upload.pdf" },
+    },
+  },
+};
 ```
 
 ### Per-test `@qa-live-policy`
@@ -301,6 +354,14 @@ Every `test()` in an annotated file needs a live policy — place it directly ab
 | `mock-judgment`               | Skips `page.route` replay; Hermes judges intent against live DOM                                                        |
 | `subscription-mutation`       | Skipped (would change billing state)                                                                                    |
 | `auth-mock`                   | Skipped (requires mocked 401 flow)                                                                                      |
+
+**When to pick which policy**
+
+- **`readonly`** — assertions only; no clicks needed on live.
+- **`safe-interaction`** — safe, but you must replay steps (open dialog, navigate) to verify.
+- **`safe-interaction-no-confirm`** — replay is safe until confirm/submit; finishing verification would be dangerous on live.
+- **`mock-judgment`** — test uses `page.route` mocks; Hermes judges the live equivalent without mocking.
+- **`subscription-mutation` / `auth-mock`** — Hermes records `skip` in `checks[]` (overall status stays `pass` if everything else passes).
 
 Example:
 
@@ -330,6 +391,15 @@ test("closes dialog when confirm is clicked", async ({ page }) => {
   // Full verification needs confirm — dangerous on live; Hermes verifies dialog + Esc only
 });
 
+// @qa-live-policy: safe-interaction
+// @qa-fixture: avatar=tests/fixtures/qa-avatar.png
+test("uploads profile image", async ({ page }) => {
+  await page
+    .getByTestId("avatar-input")
+    .setInputFiles("tests/fixtures/qa-avatar.png");
+  await expect(page.getByTestId("avatar-preview")).toBeVisible();
+});
+
 // @qa-live-policy: subscription-mutation
 test("cancels subscription", async ({ page }) => {
   // Blocked on live — Hermes skips this
@@ -352,11 +422,13 @@ npx playwright-spec-qa judge --page=pricing --target-path=/pricing
 ### CI one-liner
 
 ```bash
+export STAGING_QA_EMAIL=...
+export STAGING_QA_PASSWORD=...
+export STAGING_QA_BASE_URL=https://staging.your-app.com
+
 npx playwright-spec-qa nightly --page=dashboard \
   --with-slack \
-  --non-interactive \
-  --email="$STAGING_QA_EMAIL" \
-  --password="$STAGING_QA_PASSWORD"
+  --non-interactive
 ```
 
 ### Legacy: vendored `scripts/`
@@ -367,22 +439,23 @@ You can still copy `scripts/` into your repo and run `node scripts/extract-page-
 
 ## CLI options
 
-| Option                                                                        | Required  | Description                                                      |
-| ----------------------------------------------------------------------------- | --------- | ---------------------------------------------------------------- |
-| `--page=`                                                                     | Yes       | Page slug, e.g. `dashboard`, `pricing`                           |
-| `--config=`                                                                   | No        | Path to `hermes-qa.config.*` (auto-discovered from cwd upward)   |
-| `--project-root=`                                                             | No        | App root (default: config file directory or cwd)                 |
-| `--spec-dir=`                                                                 | No        | Spec directory template (`{page}`, `{root}`)                     |
-| `--output-dir=`                                                               | No        | QA output directory template (`{page}`, `{root}`)                |
-| `--target-path=`                                                              | Per page  | Staging path (or `targetPaths` / `pages.*.targetPath` in config) |
-| `--email=` / `STAGING_QA_EMAIL`                                               | For judge | Staging login email                                              |
-| `--password=` / `STAGING_QA_PASSWORD`                                         | For judge | Staging login password                                           |
-| `--expected-plan=` / `STAGING_QA_EXPECTED_PLAN`                               | No        | Expected plan name                                               |
-| `--expected-subscription-status=` / `STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS` | No        | Expected subscription state                                      |
-| `--account-notes=` / `STAGING_QA_ACCOUNT_NOTES`                               | No        | Free-text note forwarded to Hermes                               |
-| `--base-url=` / `STAGING_QA_BASE_URL`                                         | No        | Staging origin                                                   |
-| `QA_OUTPUT_DIR`                                                               | No        | Override output directory                                        |
-| `SLACK_WEBHOOK_URL`                                                           | For slack | Slack incoming webhook                                           |
+| Option                                                                        | Required  | Description                                                       |
+| ----------------------------------------------------------------------------- | --------- | ----------------------------------------------------------------- |
+| `--page=`                                                                     | Yes       | Page slug, e.g. `dashboard`, `pricing`                            |
+| `--config=`                                                                   | No        | Path to `hermes-qa.config.*` (auto-discovered from cwd upward)    |
+| `--project-root=`                                                             | No        | App root (default: config file directory or cwd)                  |
+| `--spec-dir=`                                                                 | No        | Spec directory template (`{page}`, `{root}`)                      |
+| `--output-dir=`                                                               | No        | QA output directory template (`{page}`, `{root}`)                 |
+| `--target-path=`                                                              | Per page  | Staging path (or `targetPaths` / `pages.*.targetPath` in config)  |
+| `--email=` / `STAGING_QA_EMAIL`                                               | For judge | Staging login email                                               |
+| `--password=` / `STAGING_QA_PASSWORD`                                         | For judge | Staging login password                                            |
+| `--expected-plan=` / `STAGING_QA_EXPECTED_PLAN`                               | No        | Expected plan name                                                |
+| `--expected-subscription-status=` / `STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS` | No        | Expected subscription state                                       |
+| `--account-notes=` / `STAGING_QA_ACCOUNT_NOTES`                               | No        | Free-text note forwarded to Hermes                                |
+| `--base-url=` / `STAGING_QA_BASE_URL`                                         | No        | Staging origin                                                    |
+| Config `fixtures` / `staging.fixtures` / `pages.*.fixtures`                   | No        | Default upload files for Hermes live replay (repo-relative paths) |
+| `QA_OUTPUT_DIR`                                                               | No        | Override output directory                                         |
+| `SLACK_WEBHOOK_URL`                                                           | For slack | Slack incoming webhook                                            |
 
 ---
 
@@ -392,22 +465,34 @@ Output directory = `--output-dir` template or `paths.outputDir` in config (defau
 
 For `--page=billing` and `--output-dir=.qa/{page}`:
 
-| Step  | Files under `.qa/billing/`                                                   |
-| ----- | ---------------------------------------------------------------------------- |
-| spec  | `billing-qa-spec.json`, `billing-qa-spec.md`                                 |
-| run   | `billing-run-result.json`, `billing-run-report.md`, `billing-screenshot.png` |
-| judge | `billing-hermes-judgment.json`, `billing-hermes-judgment.md`                 |
-| debug | `billing-hermes-query.txt`, `billing-hermes-raw-output.txt`                  |
+| Step  | Files under `.qa/billing/`                                   |
+| ----- | ------------------------------------------------------------ |
+| spec  | `billing-qa-spec.json`, `billing-qa-spec.md`                 |
+| judge | `billing-hermes-judgment.json`, `billing-hermes-judgment.md` |
+| debug | `billing-hermes-query.txt`, `billing-hermes-raw-output.txt`  |
 
 Slug rule: `--page=settings/billing` → file prefix `settings-billing-`.
 
 `*-hermes-query.txt` and `*-hermes-raw-output.txt` are for debugging Hermes failures. Passwords and API keys are redacted before writing.
 
+During `judge`, Hermes also receives `uploadFixtures` in its prompt payload (absolute paths resolved from `@qa-fixture` + config). These are not written as separate files.
+
 ---
 
 ## Status aggregation (browse mode)
 
-The local normalizer re-derives the overall status from `checks[]`, ignoring Hermes's top-level status field to prevent false passes:
+The local normalizer re-derives the overall `status` from `checks[]`, ignoring Hermes's top-level status field to prevent false passes.
+
+### Per-check results
+
+| Check `result`  | Meaning                                                                              |
+| --------------- | ------------------------------------------------------------------------------------ |
+| `pass`          | Live DOM matches the test intent                                                     |
+| `fail`          | Live DOM contradicts an assertion                                                    |
+| `skip`          | Blocked on live (e.g. `subscription-mutation`, confirm required) — **not a failure** |
+| `manual_review` | Ambiguous or needs human / Playwright follow-up                                      |
+
+### Overall status
 
 | `checks[]` content       | Final status    |
 | ------------------------ | --------------- |
@@ -415,6 +500,8 @@ The local normalizer re-derives the overall status from `checks[]`, ignoring Her
 | Any `manual_review`      | `manual_review` |
 | Empty array              | `manual_review` |
 | All `pass` and/or `skip` | `pass`          |
+
+`skip` alone does **not** elevate the verdict to `manual_review`. Example: 10 pass + 1 skip → overall **`pass`**.
 
 ---
 
@@ -441,7 +528,9 @@ Required secrets: `STAGING_QA_EMAIL`, `STAGING_QA_PASSWORD`, optional `SLACK_WEB
 1. **Paths** — set `paths.specDir` / `paths.outputDir` in `hermes-qa.config.mjs`, or pass `--spec-dir=` / `--output-dir=`.
 2. **Subscription status** — set `staging.expectedSubscriptionStatus` or let Hermes infer on each page.
 3. **Target paths** — `targetPaths` / `pages.<slug>.targetPath` in config, or `--target-path=` per run.
-4. **Parser heuristics** — extend `detectSubscriptionMutation()` in `dashboard-spec-parser.mjs` if your specs use different destructive-action patterns.
+4. **Upload fixtures** — commit files under e.g. `tests/fixtures/`, declare with `@qa-fixture` or `staging.fixtures` in config.
+5. **Live policies** — pick `@qa-live-policy` per test: `readonly` for DOM-only, `safe-interaction` for safe replay, `safe-interaction-no-confirm` when verification would be dangerous.
+6. **Parser heuristics** — extend `detectSubscriptionMutation()` in `dashboard-spec-parser.mjs` if your specs use different destructive-action patterns.
 
 ---
 
@@ -451,11 +540,13 @@ Required secrets: `STAGING_QA_EMAIL`, `STAGING_QA_PASSWORD`, optional `SLACK_WEB
 | --------------------------------------- | -------------------------------- | --------------------------------------------------------- |
 | `Missing --page=`                       | Missing page argument            | Add `--page=billing` (after `--` for npm scripts)         |
 | `ENOENT` / empty spec dir               | Wrong `--spec-dir`               | Check path; use `tests/e2e/{page}` and existing specs     |
-| `Missing staging QA credentials`        | No email/password                | Set `.env` or `--email=` `--password=`                    |
+| `Missing staging QA credentials`        | No email/password                | Set `.env` or `STAGING_QA_*` env vars                     |
 | `Missing {page}-qa-spec.md`             | spec step not run                | Run `npx playwright-spec-qa spec --page=...` first        |
+| `QA fixture missing on disk`            | `@qa-fixture` path wrong         | Commit file under repo; check repo-relative path          |
 | `npx playwright-spec-qa` not found      | Package not on npm yet           | Use `npx github:lodado/playwright-spec-for-AI-Agent`      |
 | `Hermes did not return a JSON decision` | Hermes exited without JSON       | Check `{page}-hermes-raw-output.txt`                      |
 | `checks[]` table is empty               | Hermes returned no per-test rows | Browse mode result is `manual_review`; inspect raw output |
+| Verdict `manual_review` but checks skip | Old behavior / Hermes top-level  | Re-run `judge`; `skip` no longer forces `manual_review`   |
 
 ---
 

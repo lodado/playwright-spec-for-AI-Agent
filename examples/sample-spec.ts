@@ -1,5 +1,6 @@
 // @qa-scenario: ACTIVE
 // File-level annotation: this spec targets the ACTIVE subscription state.
+// @qa-fixture: avatar=tests/fixtures/qa-avatar.png
 // @qa-live-skip: true on a file means Hermes skips it entirely on live staging.
 // @qa-always-run: true means Hermes runs this file regardless of plan/status.
 
@@ -17,6 +18,15 @@ test.describe("Dashboard - Active subscription", () => {
       await page.getByTestId("subscription-history-btn").click();
       await expect(page.getByRole("dialog")).toBeVisible();
     });
+  });
+
+  // @qa-live-policy: safe-interaction
+  // @qa-fixture: avatar=tests/fixtures/qa-avatar.png
+  test("uploads a profile image", async ({ page }) => {
+    await page
+      .getByTestId("avatar-input")
+      .setInputFiles("tests/fixtures/qa-avatar.png");
+    await expect(page.getByTestId("avatar-preview")).toBeVisible();
   });
 
   // @qa-live-policy: subscription-mutation

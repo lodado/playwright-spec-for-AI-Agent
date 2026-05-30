@@ -10,7 +10,11 @@ import {
   mapLivePolicyAnnotation,
   parseAnnotations,
   parseDashboardSpecFile,
+  parseFileFixtures,
+  parseFixtureFromCommentLine,
+  parseFixturesBeforeIndex,
   parseLivePolicyBeforeIndex,
+  resolveTestFixtures,
   resolveTestLivePolicy,
 } from "../dashboard-spec-parser.mjs";
 
@@ -161,6 +165,72 @@ test.describe("x", () => {
 });`,
       ),
     ).toThrow(/Missing \/\/ @qa-live-policy/);
+  });
+});
+
+describe("@qa-fixture", () => {
+  it("parses name=path from comment lines", () => {
+    expect(
+      parseFixtureFromCommentLine(
+        "// @qa-fixture: avatar=tests/fixtures/qa-avatar.png",
+      ),
+    ).toEqual({
+      name: "avatar",
+      path: "tests/fixtures/qa-avatar.png",
+    });
+    expect(
+      parseFixtureFromCommentLine(
+        '// @qa-fixture: doc="tests/fixtures/a b.pdf"',
+      ),
+    ).toEqual({
+      name: "doc",
+      path: "tests/fixtures/a b.pdf",
+    });
+  });
+
+  it("merges file, describe, and test fixtures with inner overrides", () => {
+    const source = `
+// @qa-fixture: avatar=tests/fixtures/file.png
+// @qa-scenario: ACTIVE
+test.describe("uploads", () => {
+  // @qa-fixture: avatar=tests/fixtures/describe.png
+  // @qa-live-policy: safe-interaction
+  test("uploads avatar", async ({ page }) => {
+    await page.setInputFiles("x");
+  });
+});
+`;
+    const testIndex = source.indexOf('test("uploads avatar"');
+    expect(parseFileFixtures(source)).toEqual({
+      avatar: "tests/fixtures/file.png",
+    });
+    expect(parseFixturesBeforeIndex(source, testIndex)).toEqual({
+      avatar: "tests/fixtures/describe.png",
+    });
+    expect(
+      resolveTestFixtures(source, testIndex, parseFileFixtures(source)),
+    ).toEqual({
+      avatar: "tests/fixtures/describe.png",
+    });
+  });
+
+  it("includes fixtures on parsed tests", () => {
+    const parsed = parseDashboardSpecFile(
+      "upload.spec.ts",
+      `// @qa-scenario: ACTIVE
+// @qa-fixture: avatar=tests/fixtures/qa-avatar.png
+// @qa-live-policy: safe-interaction
+test("uploads avatar", async ({ page }) => {
+  await page.getByTestId("avatar-input").setInputFiles("tests/fixtures/qa-avatar.png");
+});`,
+    );
+
+    expect(parsed?.fixtures).toEqual({
+      avatar: "tests/fixtures/qa-avatar.png",
+    });
+    expect(parsed?.tests[0].fixtures).toEqual({
+      avatar: "tests/fixtures/qa-avatar.png",
+    });
   });
 });
 

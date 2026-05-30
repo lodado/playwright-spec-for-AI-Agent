@@ -28,6 +28,7 @@ export const DEFAULT_STAGING_ACCOUNT = {
   expectedPlan: "",
   expectedSubscriptionStatus: "",
   accountNotes: "",
+  fixtures: {},
 };
 
 /** @type {Record<string, unknown> | null} */
@@ -138,8 +139,14 @@ function normalizeFileConfig(raw) {
 
   const staging = {
     ...DEFAULT_STAGING_ACCOUNT,
+    fixtures: {},
     ...(isPlainObject(raw.staging) ? raw.staging : {}),
   };
+  if (!isPlainObject(staging.fixtures)) {
+    staging.fixtures = {};
+  }
+
+  const fixtures = isPlainObject(raw.fixtures) ? raw.fixtures : {};
 
   return {
     root: raw.root ? resolve(raw.root) : null,
@@ -147,6 +154,7 @@ function normalizeFileConfig(raw) {
     pages,
     targetPaths,
     staging,
+    fixtures,
   };
 }
 
@@ -165,7 +173,8 @@ function buildDefaultConfig(cwd, overrides = {}) {
     },
     pages: {},
     targetPaths: { ...DEFAULT_TARGET_PATHS },
-    staging: { ...DEFAULT_STAGING_ACCOUNT },
+    staging: { ...DEFAULT_STAGING_ACCOUNT, fixtures: {} },
+    fixtures: {},
     cliOverrides: {
       specDir: overrides.specDir || "",
       outputDir: overrides.outputDir || "",
@@ -275,6 +284,35 @@ export function resolveOutputDirForPage(page) {
     return resolvePathFromConfig(pageConfig.outputDir, page);
   }
   return resolvePathFromConfig(config.paths.outputDir, page);
+}
+
+/** Default upload fixtures from config (root → staging → page). Paths are repo-relative. */
+export function resolveDefaultUploadFixtures(page) {
+  const config = getProjectConfig();
+  const pageConfig = getPageConfig(page);
+  return {
+    ...(config.fixtures ?? {}),
+    ...(config.staging?.fixtures ?? {}),
+    ...(pageConfig.fixtures ?? {}),
+  };
+}
+
+export function mergeUploadFixtures(defaultFixtures, ...overrides) {
+  const merged = { ...(defaultFixtures ?? {}) };
+  for (const override of overrides) {
+    if (!override || typeof override !== "object") continue;
+    Object.assign(merged, override);
+  }
+  return merged;
+}
+
+/** Resolve repo-relative fixture paths to absolute paths on disk. */
+export function resolveFixturePaths(fixtures, root = getProjectConfig().root) {
+  const resolved = {};
+  for (const [name, fixturePath] of Object.entries(fixtures ?? {})) {
+    resolved[name] = resolve(root, fixturePath);
+  }
+  return resolved;
 }
 
 export function resolveTargetPathForPage(page) {

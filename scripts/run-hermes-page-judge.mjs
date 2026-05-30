@@ -28,6 +28,12 @@ import {
   parseTargetPathArg,
   resolveSpecDir,
 } from "./page-qa-paths.mjs";
+import {
+  getProjectConfig,
+  mergeUploadFixtures,
+  resolveDefaultUploadFixtures,
+  resolveFixturePaths,
+} from "./hermes-qa-project-config.mjs";
 
 const REQUIRED_HERMES_AGENT_BIN = "hermes-agent";
 const HERMES_QA_COMMAND =
@@ -262,6 +268,41 @@ function runHermes(query, maxTurns, { paths = null, secrets = [] } = {}) {
   });
 }
 
+function buildUploadFixturesPayload(specDefinition, page) {
+  const projectRoot = getProjectConfig().root;
+  const configDefaults = resolveDefaultUploadFixtures(page);
+  const resolvedDefaults = resolveFixturePaths(configDefaults, projectRoot);
+  const byCheckId = {};
+
+  for (const scenario of specDefinition?.scenarios ?? []) {
+    const scenarioDefaults = mergeUploadFixtures(
+      configDefaults,
+      scenario.fixtures ?? {}
+    );
+    for (const test of scenario.tests ?? []) {
+      const merged = mergeUploadFixtures(scenarioDefaults, test.fixtures ?? {});
+      if (Object.keys(merged).length === 0) continue;
+      byCheckId[test.checkId] = resolveFixturePaths(merged, projectRoot);
+    }
+  }
+
+  const allPaths = new Set([
+    ...Object.values(resolvedDefaults),
+    ...Object.values(byCheckId).flatMap(entry => Object.values(entry)),
+  ]);
+  for (const absPath of allPaths) {
+    if (!existsSync(absPath)) {
+      console.warn(`QA fixture missing on disk: ${absPath}`);
+    }
+  }
+
+  return {
+    projectRoot,
+    defaults: resolvedDefaults,
+    byCheckId,
+  };
+}
+
 function buildBrowseHermesQuery(payload) {
   return [
     "You are a QA judge for a live staging environment.",
@@ -304,6 +345,13 @@ function buildBrowseHermesQuery(payload) {
     "- If DOM clearly contradicts an assertion → fail",
     "- judgment-mock-api: never replay page.route mocks; judge whether live DOM satisfies the test intent",
     "- Skip tests from files with @qa-live-skip: true (excluded from specSourceFiles already)",
+    "",
+    "## Upload fixtures",
+    "- uploadFixtures.defaults — named upload files for all tests (absolute paths on disk)",
+    "- uploadFixtures.byCheckId — per-test overrides keyed by specDefinition.tests[].checkId",
+    "- For a test with setInputFiles in specSourceFiles: merge defaults + byCheckId[checkId], then upload those absolute paths to the matching file input",
+    "- Prefer named fixtures from @qa-fixture comments; if the test body uses a repo-relative path, match it against uploadFixtures values under projectRoot",
+    "- If a required fixture path is missing on disk, skip that upload step and note why in detail",
     "",
     "## Response format",
     "Return ONLY a raw JSON object — no prose, no markdown fences.",
@@ -424,6 +472,7 @@ async function runBrowseJudge(page, targetPath, paths, config) {
   const specSourceFiles = loadSpecSourceFiles(specDir);
 
   const specDefinition = readJson(paths.specJson);
+  const uploadFixtures = buildUploadFixturesPayload(specDefinition, page);
 
   const payload = {
     judgmentMode: "browse-and-verify",
@@ -438,6 +487,7 @@ async function runBrowseJudge(page, targetPath, paths, config) {
     stagingLogin,
     specMarkdown: readText(paths.specMd),
     specDefinition,
+    uploadFixtures,
     alwaysRunScenarioIds: listAlwaysRunScenarios(specDefinition).map(
       scenario => scenario.scenarioId
     ),

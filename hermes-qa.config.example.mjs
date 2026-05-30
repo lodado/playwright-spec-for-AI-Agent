@@ -23,12 +23,22 @@ export default {
     expectedSubscriptionStatus: "INACTIVE",
     expectedPlan: "BASIC",
     accountNotes: "QA account on staging — do not mutate billing",
+    /** Default upload files for Hermes live replay (repo-relative paths). */
+    fixtures: {
+      avatar: "tests/fixtures/qa-avatar.png",
+    },
   },
+
+  /** Page-wide upload fixture overrides (merged with staging.fixtures). */
+  fixtures: {},
 
   pages: {
     dashboard: {
       targetPath: "/dashboard",
       expectedSubscriptionStatus: "ACTIVE",
+      fixtures: {
+        avatar: "tests/fixtures/dashboard-avatar.png",
+      },
     },
     pricing: {
       targetPath: "/pricing",
