@@ -1,8 +1,11 @@
 /**
  * Copy to your app repo as hermes-qa.config.mjs (or playwright-spec-qa.config.mjs).
  *
- * Run from the app root:
- *   npx playwright-spec-qa spec --page=dashboard
+ *   npx playwright-spec-qa spec --page=billing \
+ *     --spec-dir=tests/e2e/{page} \
+ *     --output-dir=.qa/{page} \
+ *     --project-root=. \
+ *     --config=./hermes-qa.config.mjs
  */
 export default {
   /** Project root — defaults to the directory containing this config file. */
