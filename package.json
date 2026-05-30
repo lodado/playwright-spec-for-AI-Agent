@@ -1,0 +1,22 @@
+{
+  "name": "hermes-qa",
+  "version": "0.1.0",
+  "description": "AI-powered staging QA pipeline: parse Playwright specs with @qa-scenario annotations, run read-only evidence collection, and judge results with Hermes agent.",
+  "type": "module",
+  "scripts": {
+    "qa:spec": "node scripts/extract-page-e2e-spec.mjs",
+    "qa:run": "node scripts/run-staging-page-ai-qa.mjs",
+    "qa:judge": "node scripts/run-hermes-page-judge.mjs",
+    "qa:slack": "node scripts/slack-page-qa-report.mjs",
+    "qa:nightly": "node scripts/run-page-qa-nightly.mjs",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@playwright/test": ">=1.40.0",
+    "vitest": ">=1.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

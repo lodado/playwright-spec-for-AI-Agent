@@ -1,0 +1,106 @@
+# Run Playwright QA against staging, judge results with Hermes, and notify Slack.
+name: Nightly Dashboard AI QA
+
+on:
+  workflow_dispatch: # manual trigger
+  schedule:
+    # Every day at 15:15 UTC
+    - cron: "15 15 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  dashboard-ai-qa:
+    name: Dashboard AI QA
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Separate checkout paths per run_id/run_attempt to avoid conflicts on retries
+      CHECKOUT_PATH: repo-dashboard-ai-qa-${{ github.run_id }}-${{ github.run_attempt }}
+      STAGING_QA_BASE_URL: https://your-staging-url.example.com
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: ${{ env.CHECKOUT_PATH }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: ${{ env.CHECKOUT_PATH }}/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm exec playwright install chromium
+
+      - name: Install Hermes Agent
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/45bc65abbe4767b327cea3b44300a25e5e7d97aa/scripts/install.sh | bash -s -- --skip-setup --skip-browser --branch v2026.5.29.2
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.hermes/hermes-agent/venv/bin" >> "$GITHUB_PATH"
+          test -x "$HOME/.hermes/hermes-agent/venv/bin/hermes-agent"
+
+      # Step 1: Extract QA scenarios/spec -> writes to src/page/dashboard/__QA__/
+      - name: Extract dashboard QA spec
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: node scripts/extract-page-e2e-spec.mjs --page=dashboard
+
+      # Step 2: Login to staging and run Playwright (continue even on failure so judge and Slack still run)
+      - name: Run staging dashboard QA
+        id: dashboard-run
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        continue-on-error: true
+        env:
+          STAGING_QA_EMAIL: ${{ secrets.STAGING_QA_EMAIL }}
+          STAGING_QA_PASSWORD: ${{ secrets.STAGING_QA_PASSWORD }}
+        run: node scripts/run-staging-page-ai-qa.mjs --page=dashboard --non-interactive
+
+      # Step 3: Judge screenshots and reports with hermes-agent
+      - name: Run Hermes dashboard judge
+        id: hermes-judge
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        continue-on-error: true
+        env:
+          HERMES_QA_COMMAND: hermes-agent
+          STAGING_QA_EMAIL: ${{ secrets.STAGING_QA_EMAIL }}
+          STAGING_QA_PASSWORD: ${{ secrets.STAGING_QA_PASSWORD }}
+        run: node scripts/run-hermes-page-judge.mjs --page=dashboard --non-interactive
+
+      # Step 4: Send Slack webhook notification regardless of pass/fail
+      - name: Notify Slack
+        if: always()
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: node scripts/slack-page-qa-report.mjs --page=dashboard
+
+      - name: Upload dashboard QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-ai-qa-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CHECKOUT_PATH }}/src/page/dashboard/__QA__
+          if-no-files-found: warn
+          retention-days: 14
+
+      # Mark the workflow red if either the Playwright run or the Hermes judge failed
+      - name: Fail workflow on QA failure
+        if: steps.dashboard-run.outcome == 'failure' || steps.hermes-judge.outcome == 'failure'
+        run: exit 1
+
+      - name: Cleanup checkout directory
+        if: always()
+        run: rm -rf "${{ env.CHECKOUT_PATH }}" || true
