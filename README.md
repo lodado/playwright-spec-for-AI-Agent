@@ -14,18 +14,23 @@ It turns Playwright specs from deterministic test scripts into AI-readable QA sc
 
 
 1. **Real E2E on live/staging matters**
+   
    Mocked Playwright runs are useful, but they don’t prove the app actually works in production-like conditions.
 
 2. **Live E2E without mocks is inherently non-deterministic**
+   
    Account state, billing status, remaining credits, feature flags, and third-party data can change what “pass” should look like.
 
 3. **Larger teams usually solve this with QA engineers**
+   
    QA engineers choose safe scenarios, avoid destructive actions, interpret ambiguous UI states, and decide whether a result is a real failure.
 
 4. **Startups often don’t have a dedicated QA role**
+   
    Instead of building a full QA process from scratch, we can reuse existing Playwright specs as structured intent and let an AI agent inspect the live DOM, screenshots, and test context.
 
 5. **This tool wires that flow together**
+   
    `Playwright spec` → extracted `spec` as JSON/MD → **Hermes agent** judges staging behavior and returns `pass` / `fail` / `manual_review` / `skip`.
 
 
