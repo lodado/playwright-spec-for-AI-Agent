@@ -391,7 +391,7 @@ export function literalExpectedForLive(value) {
 
 export function liveTextLocatorForLive(value) {
   // Adapt this regex to match your app's username/plan label copy pattern.
-  if (/user is on .* plan/.test(value) || /님은 .* 플랜을 사용하고 있습니다/.test(value)) {
+  if (/user is on .* plan/.test(value)) {
     return {
       kind: "text",
       value: { kind: "regex", pattern: "plan" },
