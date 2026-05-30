@@ -8,11 +8,24 @@ Parses your existing `*.spec.ts` files, then [Hermes Agent](https://github.com/N
 
 ## Why this exists
 
-1. **Real E2E on live/staging matters** — mocked Playwright runs alone don’t prove the app works in production-like conditions.
-2. **Live E2E without mocks is non-deterministic** — account state, billing, credits, and third-party data change what “pass” looks like.
-3. **Teams usually handle that with QA engineers** — picking the right scenario, skipping dangerous steps, judging ambiguous UI.
-4. **At a startup, there often isn’t a dedicated QA role** — so reuse existing Playwright specs and let AI review the live DOM instead.
-5. **This tool wires that up:** `Playwright spec` → `spec` (JSON/MD) → **Hermes agent** judges staging and returns `pass` / `fail` / `manual_review` / `skip`.
+It turns Playwright specs from deterministic test scripts into AI-readable QA scenarios for live staging validation.
+
+
+1. **Real E2E on live/staging matters**
+   Mocked Playwright runs are useful, but they don’t prove the app actually works in production-like conditions.
+
+2. **Live E2E without mocks is inherently non-deterministic**
+   Account state, billing status, remaining credits, feature flags, and third-party data can change what “pass” should look like.
+
+3. **Larger teams usually solve this with QA engineers**
+   QA engineers choose safe scenarios, avoid destructive actions, interpret ambiguous UI states, and decide whether a result is a real failure.
+
+4. **Startups often don’t have a dedicated QA role**
+   Instead of building a full QA process from scratch, we can reuse existing Playwright specs as structured intent and let an AI agent inspect the live DOM, screenshots, and test context.
+
+5. **This tool wires that flow together**
+   `Playwright spec` → extracted `spec` as JSON/MD → **Hermes agent** judges staging behavior and returns `pass` / `fail` / `manual_review` / `skip`.
+
 
 Annotations (`@qa-scenario`, `@qa-live-policy`, `@qa-fixture`) declare what is safe to verify on live; Hermes handles the rest.
 
