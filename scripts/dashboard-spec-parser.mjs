@@ -242,7 +242,7 @@ export function detectApiMock(body) {
 
 /**
  * How a test may run on live staging.
- * - executable-readonly: Playwright qa:run + Hermes DOM checks
+ * - executable-readonly: Hermes verifies parsed expectations on live DOM
  * - executable-interaction: Hermes browse may replay clicks (no billing mutation)
  * - judgment-mock-api: Playwright skips mocks; Hermes judges live equivalent
  * - blocked-*: Hermes skips or manual_review only

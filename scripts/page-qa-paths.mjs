@@ -6,10 +6,7 @@ import {
   resolveOutputDirForPage,
   resolveSpecDirForPage,
   resolveTargetPathForPage,
-  pageSupportsPlaywrightRun,
 } from "./hermes-qa-project-config.mjs";
-
-export { pageSupportsPlaywrightRun };
 
 export const PAGE_QA_DIR_NAME = "__QA__";
 
@@ -95,9 +92,6 @@ export function artifactPaths(page, outputDir = resolveOutputDir(page)) {
     slug,
     specJson: join(outputDir, `${slug}-qa-spec.json`),
     specMd: join(outputDir, `${slug}-qa-spec.md`),
-    runResult: join(outputDir, `${slug}-run-result.json`),
-    runReport: join(outputDir, `${slug}-run-report.md`),
-    screenshot: join(outputDir, `${slug}-screenshot.png`),
     hermesJudgmentJson: join(outputDir, `${slug}-hermes-judgment.json`),
     hermesJudgmentMd: join(outputDir, `${slug}-hermes-judgment.md`),
     hermesRawOutput: join(outputDir, `${slug}-hermes-raw-output.txt`),

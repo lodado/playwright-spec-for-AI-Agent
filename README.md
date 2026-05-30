@@ -2,21 +2,20 @@
 
 AI-powered staging QA pipeline for web apps with Playwright test suites.
 
-Parses your existing `*.spec.ts` files, collects read-only evidence from staging, and asks [Hermes Agent](https://github.com/NousResearch/hermes-agent) to judge each test case against the live DOM — without mutating any data.
+Parses your existing `*.spec.ts` files, then [Hermes Agent](https://github.com/NousResearch/hermes-agent) logs into staging, opens each target page, and judges tests against the **live DOM** — without mutating billing or subscription state.
 
 **You do not copy `scripts/` into your app.** Run everything with `npx` from your repo root.
 
 ```
-spec → run (optional) → judge → slack (optional)
+spec → judge → slack (optional)
 ```
 
-| Command   | What it does                                                                                                 |
-| --------- | ------------------------------------------------------------------------------------------------------------ |
-| `spec`    | Parses `*.spec.ts` files annotated with `@qa-scenario` into a JSON + Markdown spec                           |
-| `run`     | Logs into staging with Playwright and collects read-only evidence (screenshot, visible text, console errors) |
-| `judge`   | Sends evidence + spec to Hermes Agent for a pass / fail / manual_review verdict                              |
-| `slack`   | Posts the verdict to a Slack webhook on failure or manual review                                             |
-| `nightly` | Runs `spec` → optional `run` → `judge` → optional `slack` in one command                                     |
+| Command   | What it does                                                                             |
+| --------- | ---------------------------------------------------------------------------------------- |
+| `spec`    | Parses `*.spec.ts` files annotated with `@qa-scenario` into a JSON + Markdown spec       |
+| `judge`   | Hermes logs in, visits `--target-path`, infers scenario, returns pass/fail/manual_review |
+| `slack`   | Posts the verdict to a Slack webhook on failure or manual review                         |
+| `nightly` | Runs `spec` → `judge` → optional `slack` in one command                                  |
 
 ---
 
@@ -39,8 +38,7 @@ npx playwright-spec-qa spec --page=dashboard
 ### 2. Install as a dev dependency (recommended for teams)
 
 ```bash
-npm install -D playwright-spec-qa playwright
-npx playwright install chromium
+npm install -D playwright-spec-qa
 ```
 
 Add scripts to your app's `package.json`:
@@ -49,7 +47,6 @@ Add scripts to your app's `package.json`:
 {
   "scripts": {
     "qa:spec": "playwright-spec-qa spec",
-    "qa:run": "playwright-spec-qa run",
     "qa:judge": "playwright-spec-qa judge",
     "qa:slack": "playwright-spec-qa slack",
     "qa:nightly": "playwright-spec-qa nightly"
@@ -73,7 +70,7 @@ STAGING_QA_PASSWORD=your-staging-password
 STAGING_QA_BASE_URL=https://staging.your-app.com
 ```
 
-`run` and `judge` need email/password. `spec` does not.
+`judge` and `nightly` need staging email/password. `spec` does not.
 
 ### 4. Point at your spec and output folders
 
@@ -91,16 +88,15 @@ export default {
     specDir: "tests/e2e/{page}",
     outputDir: ".qa/{page}",
   },
+  staging: {
+    expectedSubscriptionStatus: "INACTIVE",
+  },
   targetPaths: {
     billing: "/settings/billing",
     dashboard: "/dashboard",
   },
-  playwrightRunPages: ["dashboard"],
   pages: {
-    billing: {
-      targetPath: "/settings/billing",
-      playwrightRun: false,
-    },
+    billing: { targetPath: "/settings/billing" },
   },
 };
 ```
@@ -136,49 +132,22 @@ See [Annotating your spec files](#annotating-your-spec-files). At minimum each f
 
 ### 6. Run the pipeline
 
-**Billing (browse mode — Hermes checks live staging, no Playwright run):**
+**Any page (pricing, dashboard, billing, …):**
 
 ```bash
-# 1) Build spec from tests
-npx playwright-spec-qa spec --page=billing \
-  --spec-dir=tests/e2e/{page} \
-  --output-dir=.qa/{page} \
-  --project-root=. \
-  --config=./hermes-qa.config.mjs
+npx playwright-spec-qa spec --page=pricing
+npx playwright-spec-qa judge --page=pricing --target-path=/pricing
 
-# 2) Judge on staging (needs credentials + target path)
-npx playwright-spec-qa judge --page=billing \
-  --target-path=/settings/billing \
-  --spec-dir=tests/e2e/{page} \
-  --output-dir=.qa/{page} \
-  --project-root=. \
-  --config=./hermes-qa.config.mjs
-
-# 3) Open report
-open .qa/billing/billing-hermes-judgment.md
+open .qa/pricing/pricing-hermes-judgment.md
 ```
 
-If `targetPath` is set in `hermes-qa.config.mjs` under `pages.billing` or `targetPaths.billing`, you can omit `--target-path=`.
+If `targetPath` is set in `hermes-qa.config.mjs`, you can omit `--target-path=`.
 
-**Dashboard (artifact mode — Playwright collects evidence, then Hermes judges):**
+**Nightly + Slack:**
 
 ```bash
-npx playwright-spec-qa spec --page=dashboard
-npx playwright-spec-qa run --page=dashboard
-npx playwright-spec-qa judge --page=dashboard
+npx playwright-spec-qa nightly --page=pricing --with-slack --non-interactive
 ```
-
-**Full nightly (spec + run + judge + Slack):**
-
-```bash
-npx playwright-spec-qa nightly --page=dashboard --with-slack --non-interactive
-```
-
-Flags for `nightly`:
-
-- `--with-run` — force Playwright run even if page is not in `playwrightRunPages`
-- `--without-run` — skip Playwright (browse-only judge)
-- `--with-slack` — notify on fail / manual_review
 
 ### 7. Example repo layout
 
@@ -201,13 +170,10 @@ your-app/
 ## Prerequisites
 
 - Node.js 20+
-- [Playwright](https://playwright.dev) (`@playwright/test`)
+- [Playwright](https://playwright.dev) test specs in your app (`@playwright/test` — this tool only **reads** them)
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) CLI installed and configured
 
 ```bash
-# Install Playwright browser
-npx playwright install chromium
-
 # Install Hermes Agent
 curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
   | bash -s -- --skip-setup --skip-browser
@@ -224,13 +190,12 @@ npx playwright-spec-qa --help
 npx playwright-spec-qa spec --help    # same global flags on every command
 ```
 
-| Command   | Requires `--page=` | Needs credentials              | Typical use                                   |
-| --------- | ------------------ | ------------------------------ | --------------------------------------------- |
-| `spec`    | Yes                | No                             | Parse annotated `*.spec.ts` → JSON + Markdown |
-| `run`     | Yes                | Yes                            | Playwright login + read-only staging checks   |
-| `judge`   | Yes                | Yes                            | Hermes pass/fail/manual_review                |
-| `slack`   | Yes                | No (needs `SLACK_WEBHOOK_URL`) | Notify on failure                             |
-| `nightly` | Yes                | Yes (if run/judge included)    | CI / scheduled full pipeline                  |
+| Command   | Requires `--page=` | Needs credentials              | Typical use                                    |
+| --------- | ------------------ | ------------------------------ | ---------------------------------------------- |
+| `spec`    | Yes                | No                             | Parse annotated `*.spec.ts` → JSON + Markdown  |
+| `judge`   | Yes                | Yes                            | Hermes visits staging page and judges live DOM |
+| `slack`   | Yes                | No (needs `SLACK_WEBHOOK_URL`) | Notify on failure                              |
+| `nightly` | Yes                | Yes                            | `spec` → `judge` → optional `slack`            |
 
 **Install source**
 
@@ -251,20 +216,17 @@ npx playwright-spec-qa spec --help    # same global flags on every command
 --target-path=<path>       # staging URL path, e.g. /settings/billing
 ```
 
-**Staging flags** (`run`, `judge`, `nightly`)
+**Staging flags** (`judge`, `nightly`)
 
 ```bash
 --email=<addr>             # or STAGING_QA_EMAIL
 --password=<secret>        # or STAGING_QA_PASSWORD
 --base-url=<origin>        # or STAGING_QA_BASE_URL
 --login-path=/login        # or STAGING_QA_LOGIN_PATH
---non-interactive          # CI: no prompts
-```
-
-**Judge flags**
-
-```bash
---mode=browse|artifact     # force mode (default: artifact if run-result exists)
+--expected-subscription-status=INACTIVE   # or STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS
+--expected-plan=BASIC      # or STAGING_QA_EXPECTED_PLAN
+--account-notes=...        # or STAGING_QA_ACCOUNT_NOTES
+--non-interactive          # CI: no prompts (no interactive status prompt)
 ```
 
 Config file is searched upward from cwd for:
@@ -273,6 +235,45 @@ Config file is searched upward from cwd for:
 - `playwright-spec-qa.config.mjs` / `.js` / `.cjs` / `.json`
 
 CLI flags override config file values for that run.
+
+---
+
+## Subscription status (ACTIVE / INACTIVE / CANCEL_PENDING)
+
+This value picks which `@qa-scenario` block in your spec JSON is executed on staging. It is **not** read from your Playwright test code at runtime — you (or the tool) declare what state the staging account should be in.
+
+### How it is decided (priority)
+
+| Priority | Source             | Example                                                                                                     |
+| -------- | ------------------ | ----------------------------------------------------------------------------------------------------------- |
+| 1        | CLI                | `--expected-subscription-status=INACTIVE`                                                                   |
+| 2        | Environment        | `STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS=INACTIVE`                                                          |
+| 3        | Config file        | `staging.expectedSubscriptionStatus` or `pages.<page>.expectedSubscriptionStatus` in `hermes-qa.config.mjs` |
+| 4        | Interactive prompt | TTY asks: `Expected subscription status (...)` — leave empty to let Hermes infer on the live page           |
+| 5        | Hermes (judge)     | Opens `--target-path`, reads DOM/copy, picks the matching `@qa-scenario` from your spec                     |
+
+Set it in config so CI and teammates never get prompted:
+
+```js
+// hermes-qa.config.mjs
+export default {
+  staging: {
+    expectedSubscriptionStatus: "INACTIVE",
+    expectedPlan: "BASIC",
+  },
+  pages: {
+    dashboard: {
+      expectedSubscriptionStatus: "ACTIVE", // overrides staging.* for this page only
+    },
+  },
+};
+```
+
+### When you leave status empty
+
+`judge` sends the full spec to Hermes. Hermes logs in, navigates to `--target-path` (e.g. `/pricing`, `/dashboard`), inspects the **live page**, and chooses which `scenarioId` block in the JSON matches that account — then runs or judges each test under that scenario (plus `@qa-always-run` scenarios).
+
+Works the same for **pricing**, **dashboard**, and any other page; there is no separate Playwright runner step.
 
 ---
 
@@ -340,14 +341,6 @@ npx playwright-spec-qa spec --page=pricing
 npx playwright-spec-qa judge --page=pricing --target-path=/pricing
 ```
 
-### Dashboard (Playwright + Hermes)
-
-```bash
-npx playwright-spec-qa spec --page=dashboard
-npx playwright-spec-qa run --page=dashboard
-npx playwright-spec-qa judge --page=dashboard
-```
-
 ### CI one-liner
 
 ```bash
@@ -364,42 +357,24 @@ You can still copy `scripts/` into your repo and run `node scripts/extract-page-
 
 ---
 
-## Judge modes
-
-`qa:judge` auto-selects mode unless `--mode=` is set:
-
-| Condition                       | Mode selected   |
-| ------------------------------- | --------------- |
-| `{page}-run-result.json` exists | `artifact`      |
-| No run result                   | `browse`        |
-| `--mode=artifact`               | forced artifact |
-| `--mode=browse`                 | forced browse   |
-
-**Artifact mode** — Hermes reads Playwright evidence (screenshot, visible text, errors) and judges against the spec.
-
-**Browse mode** — Hermes logs into staging, navigates to the target page, inspects the live DOM, and runs each test case directly.
-
----
-
 ## CLI options
 
-| Option                                                                        | Required      | Description                                                      |
-| ----------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------- |
-| `--page=`                                                                     | Yes           | Page slug, e.g. `dashboard`, `pricing`                           |
-| `--config=`                                                                   | No            | Path to `hermes-qa.config.*` (auto-discovered from cwd upward)   |
-| `--project-root=`                                                             | No            | App root (default: config file directory or cwd)                 |
-| `--spec-dir=`                                                                 | No            | Spec directory template (`{page}`, `{root}`)                     |
-| `--output-dir=`                                                               | No            | QA output directory template (`{page}`, `{root}`)                |
-| `--target-path=`                                                              | Per page      | Staging path (or `targetPaths` / `pages.*.targetPath` in config) |
-| `--mode=browse\|artifact`                                                     | No            | Override Hermes judge mode                                       |
-| `--email=` / `STAGING_QA_EMAIL`                                               | For run/judge | Staging login email                                              |
-| `--password=` / `STAGING_QA_PASSWORD`                                         | For run/judge | Staging login password                                           |
-| `--expected-plan=` / `STAGING_QA_EXPECTED_PLAN`                               | No            | Expected plan name                                               |
-| `--expected-subscription-status=` / `STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS` | No            | Expected subscription state                                      |
-| `--account-notes=` / `STAGING_QA_ACCOUNT_NOTES`                               | No            | Free-text note forwarded to Hermes                               |
-| `--base-url=` / `STAGING_QA_BASE_URL`                                         | No            | Staging origin                                                   |
-| `QA_OUTPUT_DIR`                                                               | No            | Override output directory                                        |
-| `SLACK_WEBHOOK_URL`                                                           | For slack     | Slack incoming webhook                                           |
+| Option                                                                        | Required  | Description                                                      |
+| ----------------------------------------------------------------------------- | --------- | ---------------------------------------------------------------- |
+| `--page=`                                                                     | Yes       | Page slug, e.g. `dashboard`, `pricing`                           |
+| `--config=`                                                                   | No        | Path to `hermes-qa.config.*` (auto-discovered from cwd upward)   |
+| `--project-root=`                                                             | No        | App root (default: config file directory or cwd)                 |
+| `--spec-dir=`                                                                 | No        | Spec directory template (`{page}`, `{root}`)                     |
+| `--output-dir=`                                                               | No        | QA output directory template (`{page}`, `{root}`)                |
+| `--target-path=`                                                              | Per page  | Staging path (or `targetPaths` / `pages.*.targetPath` in config) |
+| `--email=` / `STAGING_QA_EMAIL`                                               | For judge | Staging login email                                              |
+| `--password=` / `STAGING_QA_PASSWORD`                                         | For judge | Staging login password                                           |
+| `--expected-plan=` / `STAGING_QA_EXPECTED_PLAN`                               | No        | Expected plan name                                               |
+| `--expected-subscription-status=` / `STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS` | No        | Expected subscription state                                      |
+| `--account-notes=` / `STAGING_QA_ACCOUNT_NOTES`                               | No        | Free-text note forwarded to Hermes                               |
+| `--base-url=` / `STAGING_QA_BASE_URL`                                         | No        | Staging origin                                                   |
+| `QA_OUTPUT_DIR`                                                               | No        | Override output directory                                        |
+| `SLACK_WEBHOOK_URL`                                                           | For slack | Slack incoming webhook                                           |
 
 ---
 
@@ -426,20 +401,19 @@ Slug rule: `--page=settings/billing` → file prefix `settings-billing-`.
 
 The local normalizer re-derives the overall status from `checks[]`, ignoring Hermes's top-level status field to prevent false passes:
 
-| `checks[]` content            | Final status    |
-| ----------------------------- | --------------- |
-| Any `fail`                    | `fail`          |
-| Any `manual_review` or `skip` | `manual_review` |
-| Empty array                   | `manual_review` |
-| All `pass`                    | `pass`          |
+| `checks[]` content       | Final status    |
+| ------------------------ | --------------- |
+| Any `fail`               | `fail`          |
+| Any `manual_review`      | `manual_review` |
+| Empty array              | `manual_review` |
+| All `pass` and/or `skip` | `pass`          |
 
 ---
 
 ## GitHub Actions
 
 ```yaml
-- run: npm install -D playwright-spec-qa playwright
-- run: npx playwright install chromium
+- run: npm install -D playwright-spec-qa
 - run: npx playwright-spec-qa nightly --page=dashboard --with-slack --non-interactive
   env:
     STAGING_QA_EMAIL: ${{ secrets.STAGING_QA_EMAIL }}
@@ -457,10 +431,9 @@ Required secrets: `STAGING_QA_EMAIL`, `STAGING_QA_PASSWORD`, optional `SLACK_WEB
 ## Adapting to your app
 
 1. **Paths** — set `paths.specDir` / `paths.outputDir` in `hermes-qa.config.mjs`, or pass `--spec-dir=` / `--output-dir=`.
-2. **Login flow** — fork or patch `run-staging-page-ai-qa.mjs` login selectors for your app (when vendoring scripts).
-3. **Plan/status detection** — update `dashboard-spec-parser.mjs` `liveTextLocatorForLive()` regex for your UI copy.
-4. **Confirm button names** — extend `detectSubscriptionMutation()` with your destructive-action button labels.
-5. **Target paths** — `targetPaths` / `pages.<slug>.targetPath` in config, or `--target-path=` per run.
+2. **Subscription status** — set `staging.expectedSubscriptionStatus` or let Hermes infer on each page.
+3. **Target paths** — `targetPaths` / `pages.<slug>.targetPath` in config, or `--target-path=` per run.
+4. **Parser heuristics** — extend `detectSubscriptionMutation()` in `dashboard-spec-parser.mjs` if your specs use different destructive-action patterns.
 
 ---
 
@@ -472,9 +445,7 @@ Required secrets: `STAGING_QA_EMAIL`, `STAGING_QA_PASSWORD`, optional `SLACK_WEB
 | `ENOENT` / empty spec dir               | Wrong `--spec-dir`               | Check path; use `tests/e2e/{page}` and existing specs     |
 | `Missing staging QA credentials`        | No email/password                | Set `.env` or `--email=` `--password=`                    |
 | `Missing {page}-qa-spec.md`             | spec step not run                | Run `npx playwright-spec-qa spec --page=...` first        |
-| `Missing {page}-run-result.json`        | artifact mode but no run         | Run `run` first, or `judge --mode=browse`                 |
 | `npx playwright-spec-qa` not found      | Package not on npm yet           | Use `npx github:lodado/playwright-spec-for-AI-Agent`      |
-| Playwright browser missing              | Chromium not installed           | `npx playwright install chromium`                         |
 | `Hermes did not return a JSON decision` | Hermes exited without JSON       | Check `{page}-hermes-raw-output.txt`                      |
 | `checks[]` table is empty               | Hermes returned no per-test rows | Browse mode result is `manual_review`; inspect raw output |
 

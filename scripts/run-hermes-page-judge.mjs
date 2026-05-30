@@ -1,23 +1,17 @@
 #!/usr/bin/env node
 /**
- * Generic Hermes QA judge for any page.
+ * Hermes QA judge — logs into staging, opens the target page, and verifies live DOM.
  *
  * Usage:
- *   node scripts/run-hermes-page-judge.mjs --page=dashboard
- *   node scripts/run-hermes-page-judge.mjs --page=pricing --target-path=/pricing
- *
- * Modes (auto-selected unless --mode= is set):
- *   artifact — uses Playwright run artifacts ({slug}-run-result.json). Requires qa:run first.
- *   browse   — Hermes logs in and verifies the live page directly.
+ *   npx playwright-spec-qa judge --page=pricing --target-path=/pricing
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
-  buildHermesJudgeInstructions,
   buildHermesStagingLogin,
-  hasExplicitAccountExpectations,
   assertStagingQaCredentials,
   redactEmail,
 } from "./staging-qa-config.mjs";
@@ -39,7 +33,6 @@ const REQUIRED_HERMES_AGENT_BIN = "hermes-agent";
 const HERMES_QA_COMMAND =
   process.env.HERMES_QA_COMMAND?.trim() || REQUIRED_HERMES_AGENT_BIN;
 const HERMES_MAX_TURNS_BROWSE = 150;
-const HERMES_MAX_TURNS_ARTIFACT = 3;
 
 function readText(path, fallback = "") {
   if (!existsSync(path)) return fallback;
@@ -330,24 +323,7 @@ function buildBrowseHermesQuery(payload) {
   ].join("\n");
 }
 
-function buildArtifactHermesQuery(payload) {
-  return [
-    "You are the page QA judge.",
-    'Return only one JSON object with this exact shape: {"status":"pass|fail|manual_review","summary":"...","evidence":["..."],"recommendedAction":"...","source":"hermes-agent"}',
-    "Do not wrap the JSON in prose. Do not perform state-changing actions.",
-    "Never downgrade deterministic Playwright failures to pass or manual_review.",
-    "Treat ambiguous visual concerns as manual_review.",
-    "If stagingLogin is present, use it only for staging authentication context or diagnosing login failures.",
-    payload.judgmentMode === "explicit-expectation"
-      ? "Use accountContext.expectedPlan / expectedSubscriptionStatus as authoritative expectations."
-      : "No explicit plan/status was provided. Infer the scenario from live evidence, then judge against the matching specMarkdown section.",
-    "",
-    "Page QA payload:",
-    JSON.stringify(payload, null, 2),
-  ].join("\n");
-}
-
-function normalizeBrowseDecision(raw) {
+export function normalizeBrowseDecision(raw) {
   const allowedStatuses = new Set(["pass", "fail", "manual_review"]);
   const allowedCheckResults = new Set([
     "pass",
@@ -368,7 +344,6 @@ function normalizeBrowseDecision(raw) {
   const derivedStatus = checks.some(check => check.result === "fail")
     ? "fail"
     : checks.some(check => check.result === "manual_review") ||
-        checks.some(check => check.result === "skip") ||
         checks.length === 0
       ? "manual_review"
       : "pass";
@@ -385,32 +360,7 @@ function normalizeBrowseDecision(raw) {
   };
 }
 
-function normalizeArtifactDecision(rawDecision, runResult) {
-  const allowed = new Set(["pass", "fail", "manual_review"]);
-  const status = allowed.has(rawDecision.status)
-    ? rawDecision.status
-    : "manual_review";
-
-  if (runResult.status === "fail" && status !== "fail") {
-    return {
-      status: "fail",
-      summary: `Hermes returned ${status}, but deterministic Playwright checks failed. Preserving hard failure.`,
-      evidence: Array.isArray(rawDecision.evidence) ? rawDecision.evidence : [],
-      recommendedAction: rawDecision.recommendedAction ?? "",
-      source: rawDecision.source ?? "hermes-agent",
-    };
-  }
-
-  return {
-    status,
-    summary: rawDecision.summary ?? "Hermes QA judgment completed.",
-    evidence: Array.isArray(rawDecision.evidence) ? rawDecision.evidence : [],
-    recommendedAction: rawDecision.recommendedAction ?? "",
-    source: rawDecision.source ?? "hermes-agent",
-  };
-}
-
-function renderMarkdown(decision, page, targetPath, mode) {
+function renderMarkdown(decision, page, targetPath) {
   const checkRows = decision.checks?.length
     ? decision.checks.map(c => {
         const icon =
@@ -429,7 +379,7 @@ function renderMarkdown(decision, page, targetPath, mode) {
     `# Hermes QA Judgment — ${page}`,
     "",
     `- Status: **${decision.status}**`,
-    `- Mode: \`${mode}\``,
+    `- Mode: \`browse\``,
     `- Page: \`${targetPath}\``,
     `- Source: ${decision.source}`,
     "",
@@ -460,51 +410,7 @@ function renderMarkdown(decision, page, targetPath, mode) {
   ].join("\n");
 }
 
-function resolveJudgeMode(argv, runResult) {
-  const modeArg = argv
-    .find(arg => arg.startsWith("--mode="))
-    ?.slice("--mode=".length);
-  if (modeArg === "artifact" || modeArg === "browse") return modeArg;
-  return runResult ? "artifact" : "browse";
-}
-
-async function runArtifactJudge(argv, page, targetPath, paths, config) {
-  const runResult = readJson(paths.runResult);
-  if (!runResult) {
-    throw new Error(
-      `Missing ${paths.slug}-run-result.json. Run \`node scripts/run-staging-page-ai-qa.mjs --page=${page}\` first, or use --mode=browse.`
-    );
-  }
-
-  const payload = {
-    judgmentMode: hasExplicitAccountExpectations(config)
-      ? "explicit-expectation"
-      : "infer-from-evidence",
-    page,
-    targetPath,
-    instructions: buildHermesJudgeInstructions(config),
-    stagingLogin: buildHermesStagingLogin(config),
-    accountContext: runResult.accountContext ?? {
-      email: runResult.loginEmail ?? null,
-      expectedPlan: null,
-      expectedSubscriptionStatus: null,
-    },
-    specMarkdown: readText(paths.specMd),
-    specDefinition: readJson(paths.specJson),
-    runResult,
-    runReportMarkdown: readText(paths.runReport),
-    screenshotPath: runResult.artifacts?.screenshot ?? paths.screenshot,
-  };
-
-  const raw = runHermes(
-    buildArtifactHermesQuery(payload),
-    HERMES_MAX_TURNS_ARTIFACT,
-    { paths, secrets: [config.email, config.password] }
-  );
-  return normalizeArtifactDecision(raw, runResult);
-}
-
-async function runBrowseJudge(argv, page, targetPath, paths, config) {
+async function runBrowseJudge(page, targetPath, paths, config) {
   if (!existsSync(paths.specMd)) {
     throw new Error(
       `Missing ${paths.slug}-qa-spec.md. Run \`npx playwright-spec-qa spec --page=${page}\` first.`
@@ -514,7 +420,6 @@ async function runBrowseJudge(argv, page, targetPath, paths, config) {
   const stagingLogin = buildHermesStagingLogin(config);
   stagingLogin.targetUrl = new URL(targetPath, config.baseUrl).toString();
 
-  const runResult = readJson(paths.runResult);
   const specDir = resolveSpecDir(page);
   const specSourceFiles = loadSpecSourceFiles(specDir);
 
@@ -538,7 +443,6 @@ async function runBrowseJudge(argv, page, targetPath, paths, config) {
     ),
     browseChecklist: buildBrowseChecklist(specDefinition),
     specSourceFiles,
-    ...(runResult ? { playwrightRunResult: runResult } : {}),
   };
 
   const raw = runHermes(
@@ -564,16 +468,11 @@ async function main() {
   const config = await resolveStagingQaConfig(argv, {
     stepLabel: `${page} Hermes judge`,
     targetPath,
+    page,
   });
   assertStagingQaCredentials(config);
 
-  const runResult = readJson(paths.runResult);
-  const mode = resolveJudgeMode(argv, runResult);
-
-  const decision =
-    mode === "artifact"
-      ? await runArtifactJudge(argv, page, targetPath, paths, config)
-      : await runBrowseJudge(argv, page, targetPath, paths, config);
+  const decision = await runBrowseJudge(page, targetPath, paths, config);
 
   writeFileSync(
     paths.hermesJudgmentJson,
@@ -581,14 +480,20 @@ async function main() {
   );
   writeFileSync(
     paths.hermesJudgmentMd,
-    renderMarkdown(decision, page, targetPath, mode)
+    renderMarkdown(decision, page, targetPath)
   );
 
-  console.log(`Hermes ${page} QA judgment (${mode}): ${decision.status}`);
+  console.log(`Hermes ${page} QA judgment (browse): ${decision.status}`);
   if (decision.status === "fail") process.exitCode = 1;
 }
 
-main().catch(error => {
-  console.error(error.stack ?? error.message);
-  process.exitCode = 1;
-});
+const isDirectRun =
+  process.argv[1] &&
+  fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+
+if (isDirectRun) {
+  main().catch(error => {
+    console.error(error.stack ?? error.message);
+    process.exitCode = 1;
+  });
+}

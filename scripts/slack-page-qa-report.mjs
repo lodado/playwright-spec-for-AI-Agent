@@ -19,11 +19,9 @@ function readJson(path, fallback) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
-function shouldNotify(runResult, judgment) {
+function shouldNotify(judgment) {
   return (
-    runResult?.status === "fail" ||
-    judgment?.status === "fail" ||
-    judgment?.status === "manual_review"
+    judgment?.status === "fail" || judgment?.status === "manual_review"
   );
 }
 
@@ -43,13 +41,11 @@ async function postToSlack(payload) {
   }
 }
 
-function buildPayload(page, targetPath, runResult, judgment) {
-  const status = judgment?.status ?? runResult?.status ?? "unknown";
+function buildPayload(page, targetPath, judgment) {
+  const status = judgment?.status ?? "unknown";
   const statusLabel =
     status === "fail" ? "FAIL" : status === "manual_review" ? "MANUAL REVIEW" : "PASS";
-  const target = runResult
-    ? `${runResult.targetOrigin}${runResult.dashboardPath ?? runResult.targetPath ?? targetPath}`
-    : `${DEFAULT_BASE_URL}${targetPath}`;
+  const target = `${DEFAULT_BASE_URL}${targetPath}`;
   const evidence = judgment?.evidence?.slice(0, 5) ?? [];
 
   return {
@@ -80,7 +76,7 @@ function buildPayload(page, targetPath, runResult, judgment) {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*Summary:*\n${judgment?.summary ?? runResult?.status ?? status}`,
+          text: `*Summary:*\n${judgment?.summary ?? status}`,
         },
       },
       ...(evidence.length
@@ -105,21 +101,20 @@ async function main() {
   const targetPath = parseTargetPathArg(argv, page);
   const paths = artifactPaths(page);
 
-  const runResult = readJson(paths.runResult, null);
   const judgment = readJson(paths.hermesJudgmentJson, null);
 
-  if (!runResult && !judgment) {
+  if (!judgment) {
     throw new Error(
-      `Missing ${paths.slug}-run-result.json and ${paths.slug}-hermes-judgment.json.`
+      `Missing ${paths.slug}-hermes-judgment.json. Run \`npx playwright-spec-qa judge --page=${page}\` first.`
     );
   }
 
-  if (!shouldNotify(runResult, judgment)) {
+  if (!shouldNotify(judgment)) {
     console.log(`${page} QA passed; no Slack notification sent.`);
     return;
   }
 
-  await postToSlack(buildPayload(page, targetPath, runResult, judgment));
+  await postToSlack(buildPayload(page, targetPath, judgment));
   console.log(`${page} QA Slack notification sent.`);
 }
 

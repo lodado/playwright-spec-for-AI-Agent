@@ -24,7 +24,11 @@ export const DEFAULT_TARGET_PATHS = {
   pricing: "/pricing",
 };
 
-export const DEFAULT_PLAYWRIGHT_RUN_PAGES = ["dashboard"];
+export const DEFAULT_STAGING_ACCOUNT = {
+  expectedPlan: "",
+  expectedSubscriptionStatus: "",
+  accountNotes: "",
+};
 
 /** @type {Record<string, unknown> | null} */
 let activeConfig = null;
@@ -132,16 +136,17 @@ function normalizeFileConfig(raw) {
     }
   }
 
-  const playwrightRunPages = Array.isArray(raw.playwrightRunPages)
-    ? raw.playwrightRunPages
-    : DEFAULT_PLAYWRIGHT_RUN_PAGES;
+  const staging = {
+    ...DEFAULT_STAGING_ACCOUNT,
+    ...(isPlainObject(raw.staging) ? raw.staging : {}),
+  };
 
   return {
     root: raw.root ? resolve(raw.root) : null,
     paths,
     pages,
     targetPaths,
-    playwrightRunPages,
+    staging,
   };
 }
 
@@ -160,7 +165,7 @@ function buildDefaultConfig(cwd, overrides = {}) {
     },
     pages: {},
     targetPaths: { ...DEFAULT_TARGET_PATHS },
-    playwrightRunPages: [...DEFAULT_PLAYWRIGHT_RUN_PAGES],
+    staging: { ...DEFAULT_STAGING_ACCOUNT },
     cliOverrides: {
       specDir: overrides.specDir || "",
       outputDir: overrides.outputDir || "",
@@ -282,12 +287,38 @@ export function resolveTargetPathForPage(page) {
   return targetPath;
 }
 
-export function pageSupportsPlaywrightRun(page) {
+/**
+ * Merge staging account defaults from hermes-qa.config (does not override CLI/env).
+ * @param {Record<string, string>} config
+ * @param {string} page
+ */
+export function applyStagingAccountDefaults(config, page) {
+  const project = getProjectConfig();
   const pageConfig = getPageConfig(page);
-  if (typeof pageConfig.playwrightRun === "boolean") {
-    return pageConfig.playwrightRun;
+  const global = project.staging ?? DEFAULT_STAGING_ACCOUNT;
+
+  if (!config.expectedPlan) {
+    config.expectedPlan =
+      pageConfig.expectedPlan ?? global.expectedPlan ?? "";
   }
-  return getProjectConfig().playwrightRunPages.includes(page);
+  if (!config.expectedSubscriptionStatus) {
+    config.expectedSubscriptionStatus =
+      pageConfig.expectedSubscriptionStatus ??
+      global.expectedSubscriptionStatus ??
+      "";
+  }
+  if (!config.accountNotes) {
+    config.accountNotes =
+      pageConfig.accountNotes ?? global.accountNotes ?? "";
+  }
+
+  if (config.expectedSubscriptionStatus) {
+    config.expectedSubscriptionStatus = String(
+      config.expectedSubscriptionStatus
+    )
+      .trim()
+      .toUpperCase();
+  }
 }
 
 export function getPackageScriptsDir() {
@@ -314,8 +345,8 @@ Example hermes-qa.config.mjs:
       outputDir: "qa-output/{page}",
     },
     pages: {
-      dashboard: { targetPath: "/app/dashboard", playwrightRun: true },
-      pricing: { targetPath: "/pricing", playwrightRun: false },
+      dashboard: { targetPath: "/app/dashboard" },
+      pricing: { targetPath: "/pricing" },
     },
   };
 `);

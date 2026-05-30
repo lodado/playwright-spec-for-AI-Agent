@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { applyStagingAccountDefaults } from "./hermes-qa-project-config.mjs";
 import {
   assertStagingQaCredentials,
   parseStagingQaArgs,
@@ -7,8 +8,13 @@ import {
 } from "./staging-qa-config.mjs";
 
 const NON_INTERACTIVE_FLAGS = new Set(["--non-interactive", "--yes", "-y"]);
+const VALID_SCENARIO_IDS = new Set(["ACTIVE", "INACTIVE", "CANCEL_PENDING"]);
 
-const SCENARIO_CHOICES = ["ACTIVE", "INACTIVE", "CANCEL_PENDING"];
+export function normalizeScenarioId(value) {
+  if (!value) return "";
+  const normalized = String(value).trim().toUpperCase();
+  return VALID_SCENARIO_IDS.has(normalized) ? normalized : "";
+}
 
 export function shouldPromptInteractively(argv = process.argv.slice(2)) {
   if (argv.some(arg => NON_INTERACTIVE_FLAGS.has(arg))) return false;
@@ -85,38 +91,15 @@ async function promptConfirm(question, defaultYes = true) {
   return /^y(es)?$/i.test(answer);
 }
 
-function formatScenarioSignals(signals) {
-  return [
-    `  subtitle: ${signals.subtitle || "(empty)"}`,
-    `  subscription-cancel-link: ${signals.subscriptionCancelLink ? "visible" : "hidden"}`,
-    `  subscription-resume-link: ${signals.subscriptionResumeLink ? "visible" : "hidden"}`,
-    `  subscription-disabled-link: ${signals.subscriptionDisabledLink ? "visible" : "hidden"}`,
-  ].join("\n");
-}
-
-async function promptScenarioChoice(message) {
-  const answer = await promptLine(
-    `${message} (${SCENARIO_CHOICES.join("/")}, skip=manual_review)`
-  );
-  const normalized = answer.toUpperCase();
-  if (!normalized || normalized === "SKIP" || normalized === "MANUAL_REVIEW") {
-    return null;
-  }
-  if (SCENARIO_CHOICES.includes(normalized)) return normalized;
-  throw new Error(
-    `Invalid scenario "${answer}". Use ${SCENARIO_CHOICES.join(", ")}, or skip.`
-  );
-}
-
 /**
  * @param {ReturnType<typeof parseStagingQaArgs>} config
  * @param {{ stepLabel?: string, targetPath?: string | null }} [options]
  */
 export async function promptRunConfig(
   config,
-  { stepLabel = "Playwright run", targetPath = null } = {}
+  { stepLabel = "Hermes judge", targetPath = null } = {}
 ) {
-  output.write(`\n--- Dashboard QA: ${stepLabel} ---\n\n`);
+  output.write(`\n--- Page QA: ${stepLabel} ---\n\n`);
 
   if (config.email) {
     const keepEmail = await promptConfirm(
@@ -144,11 +127,16 @@ export async function promptRunConfig(
 
   if (!config.expectedSubscriptionStatus) {
     const override = await promptLine(
-      "Expected subscription status (ACTIVE/INACTIVE/CANCEL_PENDING, empty=auto infer)"
+      "Expected subscription status (ACTIVE/INACTIVE/CANCEL_PENDING, empty=let Hermes infer on live page)"
     );
-    if (override) {
-      config.expectedSubscriptionStatus = override.toUpperCase();
+    const normalized = normalizeScenarioId(override);
+    if (normalized) {
+      config.expectedSubscriptionStatus = normalized;
     }
+  } else {
+    output.write(
+      `Using expected subscription status from config/env: ${config.expectedSubscriptionStatus}\n`
+    );
   }
 
   assertStagingQaCredentials(config);
@@ -166,41 +154,18 @@ export async function promptRunConfig(
   return config;
 }
 
-export async function promptScenarioConfirmation(inspection) {
-  const { scenarioId, inferredFrom, signals } = inspection;
-
-  output.write("\n--- Dashboard scenario ---\n\n");
-  output.write(`${formatScenarioSignals(signals)}\n\n`);
-
-  if (inferredFrom === "override" && scenarioId) {
-    output.write(`Using override: ${scenarioId}\n`);
-    return scenarioId;
-  }
-
-  if (!scenarioId) {
-    output.write("Could not infer ACTIVE / INACTIVE / CANCEL_PENDING.\n");
-    return promptScenarioChoice("Choose scenario for spec assertions");
-  }
-
-  output.write(`Inferred: ${scenarioId} (from ${inferredFrom})\n`);
-  const proceed = await promptConfirm(
-    `Run spec assertions for ${scenarioId}?`,
-    true
-  );
-  if (proceed) return scenarioId;
-
-  return promptScenarioChoice("Choose a different scenario");
-}
-
 /**
  * @param {string[]} [argv]
- * @param {{ stepLabel?: string, targetPath?: string | null }} [options]
+ * @param {{ stepLabel?: string, targetPath?: string | null, page?: string | null }} [options]
  */
 export async function resolveStagingQaConfig(
   argv = process.argv.slice(2),
-  { stepLabel, targetPath = null } = {}
+  { stepLabel, targetPath = null, page = null } = {}
 ) {
   const config = parseStagingQaArgs(argv);
+  if (page) {
+    applyStagingAccountDefaults(config, page);
+  }
   if (!shouldPromptInteractively(argv)) {
     assertStagingQaCredentials(config);
     return config;

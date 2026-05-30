@@ -39,15 +39,13 @@ describe("loadProjectConfig", () => {
           specDir: "tests/{page}",
           outputDir: "artifacts/{page}",
         },
-        pages: {
+          pages: {
           dashboard: {
             targetPath: "/app/home",
-            playwrightRun: true,
             outputDir: "custom-out/dashboard",
           },
         },
         targetPaths: { pricing: "/plans" },
-        playwrightRunPages: [],
       };
 `,
     );

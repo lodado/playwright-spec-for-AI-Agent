@@ -145,10 +145,9 @@ export function buildHermesJudgeInstructions(config) {
   } else {
     instructions.push(
       "No explicit plan/status expectation was provided.",
-      "Infer the likely dashboard scenario from runResult.playwrightSteps, checks, observed subscription link testIds, visible text, and screenshotPath.",
-      "Use specMarkdown only for the scenario that best matches the inferred live state.",
-      "Hint mapping: subscription-cancel-link -> ACTIVE, subscription-resume-link -> CANCEL_PENDING, subscription-disabled-link -> INACTIVE/FREE.",
-      "If live evidence conflicts with the inferred scenario, return fail or manual_review with concrete evidence."
+      "Infer the matching @qa-scenario from the live page DOM, copy, and UI state.",
+      "Use specMarkdown only for the scenario that best matches what you observe on staging.",
+      "If live evidence conflicts with the chosen scenario, return fail or manual_review with concrete evidence."
     );
   }
 
@@ -189,9 +188,8 @@ Interactive mode:
   target confirmation, and inferred dashboard scenario before assertions.
 
 Examples:
-  STAGING_QA_EMAIL='qa@example.com' STAGING_QA_PASSWORD='secret!' node scripts/run-staging-page-ai-qa.mjs --page=dashboard
-  node scripts/run-staging-page-ai-qa.mjs --page=dashboard --email='qa@example.com' --password='secret!'
-  node scripts/run-hermes-page-judge.mjs --page=dashboard --email='qa@example.com' --password='secret!'
+  STAGING_QA_EMAIL='qa@example.com' STAGING_QA_PASSWORD='secret!' npx playwright-spec-qa judge --page=dashboard
+  npx playwright-spec-qa judge --page=dashboard --email='qa@example.com' --password='secret!'
 `);
 }
 

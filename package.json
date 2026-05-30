@@ -1,7 +1,7 @@
 {
   "name": "playwright-spec-qa",
   "version": "0.2.0",
-  "description": "AI-powered staging QA pipeline: parse Playwright specs with @qa-scenario annotations, run read-only evidence collection, and judge results with Hermes agent.",
+  "description": "AI-powered staging QA: parse Playwright specs with @qa-scenario annotations and judge live staging pages with Hermes agent.",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -33,7 +33,6 @@
   ],
   "scripts": {
     "qa:spec": "node bin/playwright-spec-qa.mjs spec",
-    "qa:run": "node bin/playwright-spec-qa.mjs run",
     "qa:judge": "node bin/playwright-spec-qa.mjs judge",
     "qa:slack": "node bin/playwright-spec-qa.mjs slack",
     "qa:nightly": "node bin/playwright-spec-qa.mjs nightly",
@@ -41,14 +40,10 @@
     "prepublishOnly": "npm test"
   },
   "peerDependencies": {
-    "@playwright/test": ">=1.40.0",
-    "playwright": ">=1.40.0"
+    "@playwright/test": ">=1.40.0"
   },
   "peerDependenciesMeta": {
     "@playwright/test": {
-      "optional": true
-    },
-    "playwright": {
       "optional": true
     },
     "vitest": {

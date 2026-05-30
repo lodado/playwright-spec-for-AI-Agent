@@ -9,7 +9,6 @@ const SCRIPTS_DIR = join(PACKAGE_ROOT, "scripts");
 
 const COMMANDS = {
   spec: "extract-page-e2e-spec.mjs",
-  run: "run-staging-page-ai-qa.mjs",
   judge: "run-hermes-page-judge.mjs",
   slack: "slack-page-qa-report.mjs",
   nightly: "run-page-qa-nightly.mjs",
@@ -22,10 +21,9 @@ Usage:
 
 Commands:
   spec     Parse @qa-scenario specs → JSON + Markdown
-  run      Playwright read-only staging evidence collection
-  judge    Hermes agent pass/fail/manual_review verdict
+  judge    Hermes logs into staging, visits the page, and judges live DOM
   slack    Post verdict to Slack webhook
-  nightly  spec → (optional run) → judge → (optional slack)
+  nightly  spec → judge → (optional slack)
 
 Common options:
   --page=<slug>              Page id (required for most commands)
@@ -38,8 +36,7 @@ Common options:
   --non-interactive          Skip prompts (CI)
 
 Examples:
-  npx playwright-spec-qa spec --page=dashboard
-  npx playwright-spec-qa run --page=dashboard
+  npx playwright-spec-qa spec --page=pricing
   npx playwright-spec-qa judge --page=pricing --target-path=/pricing
   npx playwright-spec-qa nightly --page=dashboard --with-slack
 

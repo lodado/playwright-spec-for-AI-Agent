@@ -1,26 +1,20 @@
 #!/usr/bin/env node
 /**
- * Orchestrate spec -> (optional run) -> judge -> (optional slack) for any page.
+ * Orchestrate spec -> judge -> (optional slack) for any page.
  *
  * Usage:
- *   node scripts/run-page-qa-nightly.mjs --page=dashboard --with-run --with-slack
- *   node scripts/run-page-qa-nightly.mjs --page=pricing
+ *   npx playwright-spec-qa nightly --page=pricing --with-slack
  *
  * Flags:
- *   --page=              (required)
- *   --target-path=       optional when DEFAULT_TARGET_PATHS has an entry
- *   --with-run           run Playwright staging checks (dashboard only by default)
- *   --without-run        skip Playwright even for dashboard
- *   --with-slack         post Slack on fail/manual_review
- *
- * Additional args (--email=, --non-interactive, ...) are forwarded to each step.
+ *   --page=       (required)
+ *   --target-path= optional when targetPaths / pages.*.targetPath is set
+ *   --with-slack  post Slack on fail/manual_review
  */
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { getPackageScriptsDir } from "./hermes-qa-project-config.mjs";
 import {
   ensureProjectConfig,
-  pageSupportsPlaywrightRun,
   parsePageArg,
   parseTargetPathArg,
 } from "./page-qa-paths.mjs";
@@ -32,9 +26,7 @@ function hasFlag(argv, flag) {
 }
 
 function forwardArgs(argv) {
-  return argv.filter(
-    arg => !["--with-run", "--without-run", "--with-slack"].includes(arg)
-  );
+  return argv.filter(arg => arg !== "--with-slack");
 }
 
 function runNode(script, args) {
@@ -51,25 +43,12 @@ async function main() {
   const page = parsePageArg(argv);
   const targetPath = parseTargetPathArg(argv, page);
   const rest = forwardArgs(argv);
-
-  const withRun =
-    hasFlag(argv, "--with-run") ||
-    (!hasFlag(argv, "--without-run") && pageSupportsPlaywrightRun(page));
   const withSlack = hasFlag(argv, "--with-slack");
 
   let exitCode = 0;
 
   exitCode = runNode("extract-page-e2e-spec.mjs", [`--page=${page}`, ...rest]);
   if (exitCode !== 0) process.exit(exitCode);
-
-  if (withRun) {
-    const runExit = runNode("run-staging-page-ai-qa.mjs", [
-      `--page=${page}`,
-      `--target-path=${targetPath}`,
-      ...rest,
-    ]);
-    if (runExit !== 0) exitCode = runExit;
-  }
 
   const judgeExit = runNode("run-hermes-page-judge.mjs", [
     `--page=${page}`,
