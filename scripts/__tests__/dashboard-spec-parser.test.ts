@@ -123,7 +123,7 @@ test.describe("group", () => {
     });
   });
 
-  it("maps safe-interaction-no-confirm for live destructive confirm ban", () => {
+  it("maps safe-interaction-no-confirm when verification would be dangerous on live", () => {
     expect(
       mapLivePolicyAnnotation("safe-interaction-no-confirm"),
     ).toMatchObject({

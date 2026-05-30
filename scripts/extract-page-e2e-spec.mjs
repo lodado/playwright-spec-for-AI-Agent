@@ -47,7 +47,7 @@ function renderMarkdown(spec, page) {
     "",
     `Parsed from \`${formatSpecDirLabel(page)}/\` Playwright specs.`,
     "Hermes `judge` logs into staging, opens the target page, and verifies tests against the live DOM.",
-    "Hermes may execute tests with `liveRunPolicy: executable-interaction` (UI-only clicks).",
+    "Hermes replays tests with `liveRunPolicy: executable-interaction` — safe actions that need live verification, not DOM-only checks.",
     "Subscription/billing mutations, auth mocks, and `@qa-live-skip` stay blocked.",
     "`judgment-mock-api` tests skip on Playwright but Hermes judges live equivalents.",
     "",

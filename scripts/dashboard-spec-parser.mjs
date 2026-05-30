@@ -11,16 +11,23 @@ import { join } from "node:path";
  *
  * Per-test (or test.describe) live policy — required on every test in @qa-scenario files:
  *   // @qa-live-policy: readonly | safe-interaction | safe-interaction-no-confirm | mock-judgment | subscription-mutation | auth-mock | skip
+ *
+ * Policy meanings:
+ *   readonly — DOM-only checks; no interaction needed on live
+ *   safe-interaction — safe UI actions that still require live test replay to verify
+ *   safe-interaction-no-confirm — verification would be dangerous on live; mock may click confirm, Hermes must not
  */
 export const QA_LIVE_POLICY_MAP = {
   readonly: {
     liveRunPolicy: "executable-readonly",
     stagingMode: "read-only",
   },
+  /** Safe actions that need live test replay — not verifiable from static DOM alone. */
   "safe-interaction": {
     liveRunPolicy: "executable-interaction",
     stagingMode: "interaction",
   },
+  /** Verification would be dangerous on live (e.g. confirm mutates state). */
   "safe-interaction-no-confirm": {
     liveRunPolicy: "judgment-interaction-no-confirm",
     stagingMode: "interaction",
@@ -243,7 +250,7 @@ export function detectApiMock(body) {
 /**
  * How a test may run on live staging.
  * - executable-readonly: Hermes verifies parsed expectations on live DOM
- * - executable-interaction: Hermes browse may replay clicks (no billing mutation)
+ * - executable-interaction: safe actions that need live test replay to verify (no billing mutation)
  * - judgment-mock-api: Playwright skips mocks; Hermes judges live equivalent
  * - blocked-*: Hermes skips or manual_review only
  */
@@ -264,9 +271,9 @@ export function classifyLiveRunPolicy(body, stagingMode) {
 export function describeLiveRunPolicy(liveRunPolicy) {
   switch (liveRunPolicy) {
     case "executable-interaction":
-      return "Hermes may execute on staging (safe interaction — UI only, no subscription/billing mutation; never click a destructive confirm button)";
+      return "Safe UI action requiring live test replay and assertion verification (no subscription/billing mutation; dismiss destructive confirms with Esc only)";
     case "judgment-interaction-no-confirm":
-      return "Playwright E2E runs full test; on live Hermes opens dialog and verifies, closes with Esc only — NEVER clicks a destructive confirm button (avoids accidental cancel/resume)";
+      return "UI action where completing verification would be dangerous on live — Hermes replays safe open steps, verifies up to the dangerous point, dismisses with Esc only (never clicks confirm)";
     case "judgment-mock-api":
       return "Playwright skips (page.route mocks); Hermes judges whether live DOM satisfies test intent without mocking";
     case "blocked-subscription-mutation":

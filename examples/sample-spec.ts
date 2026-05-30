@@ -11,7 +11,7 @@ test.describe("Dashboard - Active subscription", () => {
     await expect(page.getByTestId("plan-name")).toBeVisible();
   });
 
-  // @qa-live-policy: safe-interaction
+  // @qa-live-policy: safe-interaction — safe UI action; Hermes replays steps and verifies on live staging
   test.describe("when 'View full subscription history' button is clicked", () => {
     test("opens the subscription history dialog", async ({ page }) => {
       await page.getByTestId("subscription-history-btn").click();

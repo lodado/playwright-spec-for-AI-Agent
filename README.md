@@ -293,14 +293,14 @@ Add file-level and test-level annotations to your existing Playwright specs.
 
 Every `test()` in an annotated file needs a live policy — place it directly above the test or the enclosing `test.describe`:
 
-| Annotation                    | Hermes behavior on live staging                                      |
-| ----------------------------- | -------------------------------------------------------------------- |
-| `readonly`                    | DOM assertions only, no clicks                                       |
-| `safe-interaction`            | Opens dialogs / toggles; dismisses with Esc — never clicks confirm   |
-| `safe-interaction-no-confirm` | Same as above; even if the mock test clicks confirm, Hermes must not |
-| `mock-judgment`               | Skips `page.route` replay; Hermes judges intent against live DOM     |
-| `subscription-mutation`       | Skipped (would change billing state)                                 |
-| `auth-mock`                   | Skipped (requires mocked 401 flow)                                   |
+| Annotation                    | Hermes behavior on live staging                                                                                         |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `readonly`                    | DOM-only checks — no interaction needed                                                                                 |
+| `safe-interaction`            | Safe UI actions that still require live test replay to verify (clicks, navigation, dialogs)                             |
+| `safe-interaction-no-confirm` | UI action where completing verification would be dangerous on live — Hermes verifies up to the dangerous step, Esc only |
+| `mock-judgment`               | Skips `page.route` replay; Hermes judges intent against live DOM                                                        |
+| `subscription-mutation`       | Skipped (would change billing state)                                                                                    |
+| `auth-mock`                   | Skipped (requires mocked 401 flow)                                                                                      |
 
 Example:
 
@@ -320,6 +320,14 @@ test.describe("when subscription history button is clicked", () => {
     await page.getByTestId("subscription-history-btn").click();
     await expect(page.getByRole("dialog")).toBeVisible();
   });
+});
+
+// @qa-live-policy: safe-interaction-no-confirm
+test("closes dialog when confirm is clicked", async ({ page }) => {
+  await page.getByTestId("subscription-history-btn").click();
+  await page.getByRole("button", { name: "Confirm" }).click();
+  await expect(page.getByRole("dialog")).not.toBeVisible();
+  // Full verification needs confirm — dangerous on live; Hermes verifies dialog + Esc only
 });
 
 // @qa-live-policy: subscription-mutation
