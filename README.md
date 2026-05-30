@@ -1,8 +1,10 @@
 # playwright-spec-qa
 
-AI-powered staging QA pipeline for web apps with Playwright test suites.
+AI-assisted live staging QA layer for web apps with Playwright test suites.
 
-Parses your existing `*.spec.ts` files, then [Hermes Agent](https://github.com/NousResearch/hermes-agent) logs into staging, opens each target page, and judges tests against the **live DOM** — without mutating billing or subscription state.
+`playwright-spec-qa` keeps deterministic Playwright tests in CI, but reuses their intent as structured QA scenarios for production-like validation. It parses your existing `*.spec.ts` files, then [Hermes Agent](https://github.com/NousResearch/hermes-agent) logs into staging, opens each target page, and judges the scenario against the **live DOM**, screenshots, and test context — without mutating billing or subscription state.
+
+> **Important:** this tool does **not** run your Playwright tests against staging. It extracts test intent from annotated Playwright specs and asks Hermes to judge the live page against that intent.
 
 **You do not copy `scripts/` into your app.** Run everything with `npx` from your repo root.
 
@@ -39,6 +41,37 @@ spec → judge → slack (optional)
 | `judge`   | Hermes logs in, visits `--target-path`, infers scenario, returns `pass` / `fail` / `manual_review` |
 | `slack`   | Posts the verdict to a Slack webhook on `fail` or `manual_review` (not on `pass`)                  |
 | `nightly` | Runs `spec` → `judge` → optional `slack` in one command                                            |
+
+---
+
+## Recommended workflow
+
+This tool is designed to **complement**, not replace, your existing automated tests.
+
+| Stage | Run | Purpose |
+| --- | --- | --- |
+| PR | Mocked Playwright E2E | Deterministic UI regression checks |
+| PR / Nightly | API contract tests | Prevent mock/API drift |
+| Nightly | `playwright-spec-qa nightly` | AI-assisted live staging judgment |
+| Release | Selected live scenarios | Human or AI-assisted smoke validation |
+
+A practical setup is:
+
+```text
+Mocked E2E = stable UI-state verification
+API contract tests = real API schema guardrail
+playwright-spec-qa = live staging QA judgment
+```
+
+---
+
+## What this is not
+
+- Not a replacement for deterministic Playwright CI.
+- Not a replacement for API contract tests.
+- Not safe for destructive flows unless they are explicitly marked as `skip`, `subscription-mutation`, or `safe-interaction-no-confirm`.
+- Not guaranteed to catch backend regressions that do not affect visible DOM, screenshots, navigation, or user-facing copy.
+- Not a full QA engineer replacement. It automates the first-pass judgment layer and escalates ambiguous cases as `manual_review`.
 
 ---
 
@@ -386,6 +419,8 @@ Every `test()` in an annotated file needs a live policy — place it directly ab
 - **`mock-judgment`** — test uses `page.route` mocks; Hermes judges the live equivalent without mocking.
 - **`subscription-mutation` / `auth-mock`** — Hermes records `skip` in `checks[]` (overall status stays `pass` if everything else passes).
 
+Use `mock-judgment` when the original Playwright test depends on `page.route()` or mocked API states. Hermes will not replay the mock. Instead, it judges whether the live page exposes an equivalent user-visible state, CTA, copy, fallback, disabled control, or empty/error UI.
+
 Example:
 
 ```ts
@@ -543,6 +578,31 @@ The local normalizer re-derives the overall `status` from `checks[]`, ignoring H
 Or without installing: `npx github:lodado/playwright-spec-for-AI-Agent nightly ...`
 
 Required secrets: `STAGING_QA_EMAIL`, `STAGING_QA_PASSWORD`, optional `SLACK_WEBHOOK_URL`.
+
+---
+
+## Design philosophy
+
+`playwright-spec-qa` exists because mocked E2E and live E2E solve different problems.
+
+Mocked Playwright tests are fast, deterministic, and excellent for validating UI states such as loading, empty, error, unauthorized, credit shortage, and plan-gated screens. Their weakness is that they can drift away from the real backend contract. A mocked test may still pass after the real API response shape, auth behavior, or feature flag behavior has changed.
+
+Live staging checks are closer to reality, but they are naturally non-deterministic. Account state, billing status, remaining credits, third-party data, and feature flags can change what a correct page looks like. That is why this tool treats Playwright specs as **scenario intent**, not as commands to blindly replay.
+
+The intended split is:
+
+```text
+Keep Playwright for deterministic CI.
+Keep API contract tests for backend/frontend compatibility.
+Use playwright-spec-qa for live staging judgment.
+```
+
+Hermes should return:
+
+- `pass` when the live DOM clearly satisfies the scenario intent.
+- `fail` when the live DOM clearly contradicts the scenario intent.
+- `manual_review` when the result is ambiguous or needs a human decision.
+- `skip` when the scenario is unsafe or inappropriate for live staging.
 
 ---
 
