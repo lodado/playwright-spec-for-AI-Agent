@@ -1,22 +1,64 @@
 {
-  "name": "hermes-qa",
-  "version": "0.1.0",
+  "name": "playwright-spec-qa",
+  "version": "0.2.0",
   "description": "AI-powered staging QA pipeline: parse Playwright specs with @qa-scenario annotations, run read-only evidence collection, and judge results with Hermes agent.",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lodado/playwright-spec-for-AI-Agent.git"
+  },
+  "homepage": "https://github.com/lodado/playwright-spec-for-AI-Agent#readme",
+  "bugs": {
+    "url": "https://github.com/lodado/playwright-spec-for-AI-Agent/issues"
+  },
+  "keywords": [
+    "playwright",
+    "qa",
+    "e2e",
+    "hermes",
+    "ai",
+    "staging"
+  ],
+  "bin": {
+    "playwright-spec-qa": "./bin/playwright-spec-qa.mjs",
+    "hermes-qa": "./bin/playwright-spec-qa.mjs"
+  },
+  "files": [
+    "bin",
+    "scripts",
+    "hermes-qa.config.example.mjs",
+    "examples",
+    "README.md"
+  ],
   "scripts": {
-    "qa:spec": "node scripts/extract-page-e2e-spec.mjs",
-    "qa:run": "node scripts/run-staging-page-ai-qa.mjs",
-    "qa:judge": "node scripts/run-hermes-page-judge.mjs",
-    "qa:slack": "node scripts/slack-page-qa-report.mjs",
-    "qa:nightly": "node scripts/run-page-qa-nightly.mjs",
-    "test": "vitest run"
+    "qa:spec": "node bin/playwright-spec-qa.mjs spec",
+    "qa:run": "node bin/playwright-spec-qa.mjs run",
+    "qa:judge": "node bin/playwright-spec-qa.mjs judge",
+    "qa:slack": "node bin/playwright-spec-qa.mjs slack",
+    "qa:nightly": "node bin/playwright-spec-qa.mjs nightly",
+    "test": "vitest run",
+    "prepublishOnly": "npm test"
   },
   "peerDependencies": {
     "@playwright/test": ">=1.40.0",
-    "vitest": ">=1.0.0"
+    "playwright": ">=1.40.0"
+  },
+  "peerDependenciesMeta": {
+    "@playwright/test": {
+      "optional": true
+    },
+    "playwright": {
+      "optional": true
+    },
+    "vitest": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
   },
   "engines": {
     "node": ">=20"
-  },
-  "license": "MIT"
+  }
 }

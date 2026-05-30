@@ -16,15 +16,16 @@
  * Additional args (--email=, --non-interactive, ...) are forwarded to each step.
  */
 import { spawnSync } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { getPackageScriptsDir } from "./hermes-qa-project-config.mjs";
 import {
+  ensureProjectConfig,
   pageSupportsPlaywrightRun,
   parsePageArg,
   parseTargetPathArg,
 } from "./page-qa-paths.mjs";
 
-const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const SCRIPT_DIR = getPackageScriptsDir();
 
 function hasFlag(argv, flag) {
   return argv.includes(flag);
@@ -44,8 +45,9 @@ function runNode(script, args) {
   return result.status ?? 1;
 }
 
-function main() {
+async function main() {
   const argv = process.argv.slice(2);
+  await ensureProjectConfig(argv);
   const page = parsePageArg(argv);
   const targetPath = parseTargetPathArg(argv, page);
   const rest = forwardArgs(argv);
@@ -88,4 +90,7 @@ function main() {
   process.exit(exitCode);
 }
 
-main();
+main().catch(error => {
+  console.error(error instanceof Error ? error.stack || error.message : error);
+  process.exit(1);
+});

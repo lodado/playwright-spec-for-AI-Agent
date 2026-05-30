@@ -38,21 +38,72 @@ Hermes also needs an inference model configured in `~/.hermes/config.yaml`, or v
 
 ## Installation
 
-Copy `scripts/` into your project root and add the npm scripts to your `package.json`:
+### Option A — `npx` (recommended)
+
+From your app repo root (no copy step):
+
+```bash
+# one-off
+npx playwright-spec-qa spec --page=dashboard
+
+# or install as a dev dependency
+npm install -D playwright-spec-qa playwright
+```
+
+Optional npm scripts in your app:
 
 ```json
 {
   "scripts": {
-    "qa:spec": "node scripts/extract-page-e2e-spec.mjs",
-    "qa:run": "node scripts/run-staging-page-ai-qa.mjs",
-    "qa:judge": "node scripts/run-hermes-page-judge.mjs",
-    "qa:slack": "node scripts/slack-page-qa-report.mjs",
-    "qa:nightly": "node scripts/run-page-qa-nightly.mjs"
+    "qa:spec": "playwright-spec-qa spec",
+    "qa:run": "playwright-spec-qa run",
+    "qa:judge": "playwright-spec-qa judge",
+    "qa:slack": "playwright-spec-qa slack",
+    "qa:nightly": "playwright-spec-qa nightly"
   }
 }
 ```
 
-Copy `.env.example` to `.env` and fill in your values.
+Copy `.env.example` to `.env` and fill in staging credentials.
+
+### Option B — copy `scripts/` (legacy)
+
+You can still vendor `scripts/` into your repo and call them with `node scripts/...` — behavior is the same when run from the project root.
+
+### Project config
+
+Copy `hermes-qa.config.example.mjs` → `hermes-qa.config.mjs` in your app root to customize paths:
+
+```js
+export default {
+  paths: {
+    specDir: "e2e/{page}", // where *.spec.ts live
+    outputDir: "qa-artifacts/{page}", // JSON/MD/screenshots
+  },
+  targetPaths: {
+    dashboard: "/dashboard",
+    pricing: "/pricing",
+  },
+  playwrightRunPages: ["dashboard"],
+  pages: {
+    dashboard: {
+      targetPath: "/app/dashboard",
+      playwrightRun: true,
+    },
+  },
+};
+```
+
+CLI overrides (no config file edit needed):
+
+```bash
+npx playwright-spec-qa spec --page=billing \
+  --spec-dir=tests/e2e/{page} \
+  --output-dir=.qa/{page} \
+  --project-root=.
+```
+
+Placeholders: `{page}` = `--page=` slug, `{root}` = project root.
 
 ---
 
@@ -116,40 +167,24 @@ See `examples/sample-spec.ts` for a complete example.
 ### Pricing page (browse mode — no Playwright run needed)
 
 ```bash
-# 1. Generate QA spec
-node scripts/extract-page-e2e-spec.mjs --page=pricing
-
-# 2. Hermes browses staging and judges live DOM directly
-node scripts/run-hermes-page-judge.mjs --page=pricing --target-path=/pricing
-
-# 3. View results
-open src/page/pricing/__QA__/pricing-hermes-judgment.md
+npx playwright-spec-qa spec --page=pricing
+npx playwright-spec-qa judge --page=pricing --target-path=/pricing
+# → {outputDir}/pricing-hermes-judgment.md (see hermes-qa.config.mjs)
 ```
 
 ### Dashboard page (artifact mode — Playwright collects evidence first)
 
 ```bash
-# 1. Generate QA spec
-node scripts/extract-page-e2e-spec.mjs --page=dashboard
-
-# 2. Playwright read-only evidence collection
-node scripts/run-staging-page-ai-qa.mjs --page=dashboard
-
-# 3. Hermes judges the collected artifacts
-node scripts/run-hermes-page-judge.mjs --page=dashboard
-
-# 4. View results
-open src/page/dashboard/__QA__/dashboard-hermes-judgment.md
+npx playwright-spec-qa spec --page=dashboard
+npx playwright-spec-qa run --page=dashboard
+npx playwright-spec-qa judge --page=dashboard
 ```
 
 ### One-liner nightly run
 
 ```bash
-# With Playwright run + Slack notification
-node scripts/run-page-qa-nightly.mjs --page=dashboard --with-slack
-
-# Browse mode only (no Playwright run)
-node scripts/run-page-qa-nightly.mjs --page=pricing --target-path=/pricing --with-slack
+npx playwright-spec-qa nightly --page=dashboard --with-slack
+npx playwright-spec-qa nightly --page=pricing --target-path=/pricing --with-slack
 ```
 
 ---
@@ -173,19 +208,23 @@ node scripts/run-page-qa-nightly.mjs --page=pricing --target-path=/pricing --wit
 
 ## CLI options
 
-| Option                                                                        | Required      | Description                                                            |
-| ----------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------- |
-| `--page=`                                                                     | Yes           | Page slug, e.g. `dashboard`, `pricing`                                 |
-| `--target-path=`                                                              | Per page      | Staging path. Defaults: `dashboard → /dashboard`, `pricing → /pricing` |
-| `--mode=browse\|artifact`                                                     | No            | Override Hermes judge mode                                             |
-| `--email=` / `STAGING_QA_EMAIL`                                               | For run/judge | Staging login email                                                    |
-| `--password=` / `STAGING_QA_PASSWORD`                                         | For run/judge | Staging login password                                                 |
-| `--expected-plan=` / `STAGING_QA_EXPECTED_PLAN`                               | No            | Expected plan name                                                     |
-| `--expected-subscription-status=` / `STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS` | No            | Expected subscription state                                            |
-| `--account-notes=` / `STAGING_QA_ACCOUNT_NOTES`                               | No            | Free-text note forwarded to Hermes                                     |
-| `--base-url=` / `STAGING_QA_BASE_URL`                                         | No            | Staging origin                                                         |
-| `QA_OUTPUT_DIR`                                                               | No            | Override output directory                                              |
-| `SLACK_WEBHOOK_URL`                                                           | For slack     | Slack incoming webhook                                                 |
+| Option                                                                        | Required      | Description                                                      |
+| ----------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------- |
+| `--page=`                                                                     | Yes           | Page slug, e.g. `dashboard`, `pricing`                           |
+| `--config=`                                                                   | No            | Path to `hermes-qa.config.*` (auto-discovered from cwd upward)   |
+| `--project-root=`                                                             | No            | App root (default: config file directory or cwd)                 |
+| `--spec-dir=`                                                                 | No            | Spec directory template (`{page}`, `{root}`)                     |
+| `--output-dir=`                                                               | No            | QA output directory template (`{page}`, `{root}`)                |
+| `--target-path=`                                                              | Per page      | Staging path (or `targetPaths` / `pages.*.targetPath` in config) |
+| `--mode=browse\|artifact`                                                     | No            | Override Hermes judge mode                                       |
+| `--email=` / `STAGING_QA_EMAIL`                                               | For run/judge | Staging login email                                              |
+| `--password=` / `STAGING_QA_PASSWORD`                                         | For run/judge | Staging login password                                           |
+| `--expected-plan=` / `STAGING_QA_EXPECTED_PLAN`                               | No            | Expected plan name                                               |
+| `--expected-subscription-status=` / `STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS` | No            | Expected subscription state                                      |
+| `--account-notes=` / `STAGING_QA_ACCOUNT_NOTES`                               | No            | Free-text note forwarded to Hermes                               |
+| `--base-url=` / `STAGING_QA_BASE_URL`                                         | No            | Staging origin                                                   |
+| `QA_OUTPUT_DIR`                                                               | No            | Override output directory                                        |
+| `SLACK_WEBHOOK_URL`                                                           | For slack     | Slack incoming webhook                                           |
 
 ---
 
@@ -235,11 +274,11 @@ The `qa:run` and `qa:judge` steps use `continue-on-error: true` so Slack notific
 
 ## Adapting to your app
 
-1. **Spec directory** — scripts look for `*.spec.ts` in `src/page/{page}/__tests__/` by default. Override with `--spec-dir=`.
-2. **Login flow** — edit `run-staging-page-ai-qa.mjs` to match your app's login form selectors.
-3. **Plan/status detection** — `dashboard-spec-parser.mjs` `liveTextLocatorForLive()` contains a regex for username/plan copy. Update it to match your app's text.
-4. **Confirm button names** — `detectSubscriptionMutation()` checks for button names that indicate destructive actions. Add your app's button copy there.
-5. **Target paths** — set `DEFAULT_TARGET_PATHS` in `page-qa-paths.mjs` or pass `--target-path=` per run.
+1. **Paths** — set `paths.specDir` / `paths.outputDir` in `hermes-qa.config.mjs`, or pass `--spec-dir=` / `--output-dir=`.
+2. **Login flow** — fork or patch `run-staging-page-ai-qa.mjs` login selectors for your app (when vendoring scripts).
+3. **Plan/status detection** — update `dashboard-spec-parser.mjs` `liveTextLocatorForLive()` regex for your UI copy.
+4. **Confirm button names** — extend `detectSubscriptionMutation()` with your destructive-action button labels.
+5. **Target paths** — `targetPaths` / `pages.<slug>.targetPath` in config, or `--target-path=` per run.
 
 ---
 

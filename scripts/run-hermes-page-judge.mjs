@@ -28,6 +28,7 @@ import {
 } from "./dashboard-spec-parser.mjs";
 import {
   artifactPaths,
+  ensureProjectConfig,
   listAnnotatedSpecFiles,
   parsePageArg,
   parseTargetPathArg,
@@ -506,7 +507,7 @@ async function runArtifactJudge(argv, page, targetPath, paths, config) {
 async function runBrowseJudge(argv, page, targetPath, paths, config) {
   if (!existsSync(paths.specMd)) {
     throw new Error(
-      `Missing ${paths.slug}-qa-spec.md. Run \`node scripts/extract-page-e2e-spec.mjs --page=${page}\` first.`
+      `Missing ${paths.slug}-qa-spec.md. Run \`npx playwright-spec-qa spec --page=${page}\` first.`
     );
   }
 
@@ -553,6 +554,7 @@ async function runBrowseJudge(argv, page, targetPath, paths, config) {
 
 async function main() {
   const argv = process.argv.slice(2);
+  await ensureProjectConfig(argv);
   const page = parsePageArg(argv);
   const targetPath = parseTargetPathArg(argv, page);
   const paths = artifactPaths(page);

@@ -25,6 +25,8 @@ import {
 } from "./dashboard-spec-parser.mjs";
 import {
   artifactPaths,
+  ensureProjectConfig,
+  formatSpecDirLabel,
   parsePageArg,
   resolveSpecDir,
 } from "./page-qa-paths.mjs";
@@ -43,7 +45,7 @@ function renderMarkdown(spec, page) {
     "",
     `Generated at: ${spec.generatedAt}`,
     "",
-    `Parsed from \`src/page/${page}/__tests__/\` Playwright specs.`,
+    `Parsed from \`${formatSpecDirLabel(page)}/\` Playwright specs.`,
     "Playwright `node scripts/run-staging-page-ai-qa.mjs` replays **read-only** expectations for the inferred scenario.",
     "Hermes browse judge may execute tests with `liveRunPolicy: executable-interaction` (UI-only clicks).",
     "Subscription/billing mutations, auth mocks, and `@qa-live-skip` stay blocked.",
@@ -117,8 +119,9 @@ function renderMarkdown(spec, page) {
   return `${lines.join("\n")}\n`;
 }
 
-function main() {
+async function main() {
   const argv = process.argv.slice(2);
+  await ensureProjectConfig(argv);
   const page = parsePageArg(argv);
   const specDir = resolveSpecDir(page);
   const { outputDir, specJson: jsonPath, specMd: mdPath } = artifactPaths(page);
@@ -150,4 +153,7 @@ function label(page) {
   return pageLabel(page);
 }
 
-main();
+main().catch(error => {
+  console.error(error instanceof Error ? error.stack || error.message : error);
+  process.exit(1);
+});

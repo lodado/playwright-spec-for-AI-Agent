@@ -1,14 +1,15 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, relative } from "node:path";
+import {
+  getProjectConfig,
+  loadProjectConfig,
+  resolveOutputDirForPage,
+  resolveSpecDirForPage,
+  resolveTargetPathForPage,
+  pageSupportsPlaywrightRun,
+} from "./hermes-qa-project-config.mjs";
 
-const APP_ROOT = resolve(new URL("..", import.meta.url).pathname);
-
-export const DEFAULT_TARGET_PATHS = {
-  dashboard: "/dashboard",
-  pricing: "/pricing",
-};
-
-export const PAGES_WITH_PLAYWRIGHT_RUN = new Set(["dashboard"]);
+export { pageSupportsPlaywrightRun };
 
 export const PAGE_QA_DIR_NAME = "__QA__";
 
@@ -16,8 +17,8 @@ export function pageSlug(page) {
   return page.replace(/\//g, "-");
 }
 
-export function pageSupportsPlaywrightRun(page) {
-  return PAGES_WITH_PLAYWRIGHT_RUN.has(page);
+export async function ensureProjectConfig(argv = process.argv.slice(2)) {
+  return loadProjectConfig(argv);
 }
 
 export function parsePageArg(argv, { required = true } = {}) {
@@ -28,8 +29,8 @@ export function parsePageArg(argv, { required = true } = {}) {
       [
         "Missing --page= argument.",
         "Examples:",
-        "  node scripts/extract-page-e2e-spec.mjs --page=dashboard",
-        "  node scripts/run-hermes-page-judge.mjs --page=pricing --target-path=/pricing",
+        "  npx playwright-spec-qa spec --page=dashboard",
+        "  npx playwright-spec-qa judge --page=pricing --target-path=/pricing",
       ].join("\n")
     );
     process.exit(1);
@@ -43,10 +44,14 @@ export function parseTargetPathArg(argv, page) {
     return targetPathArg.slice("--target-path=".length).trim();
   }
 
-  const defaultPath = DEFAULT_TARGET_PATHS[page];
+  const defaultPath = resolveTargetPathForPage(page);
   if (!defaultPath) {
     console.error(
-      `Missing --target-path= for page "${page}". Example: --target-path=/${page}`
+      [
+        `Missing --target-path= for page "${page}".`,
+        `Set pages.${page}.targetPath or targetPaths.${page} in hermes-qa.config.*,`,
+        `or pass --target-path=/${page}`,
+      ].join(" ")
     );
     process.exit(1);
   }
@@ -54,21 +59,21 @@ export function parseTargetPathArg(argv, page) {
 }
 
 export function resolvePageQaDir(page) {
-  return join(APP_ROOT, "src/page", page, PAGE_QA_DIR_NAME);
+  return resolveOutputDirForPage(page);
 }
 
 export function resolveOutputDir(page) {
-  if (process.env.QA_OUTPUT_DIR) {
-    return resolve(process.env.QA_OUTPUT_DIR);
-  }
-  if (page === "dashboard" && process.env.DASHBOARD_QA_OUTPUT_DIR) {
-    return resolve(process.env.DASHBOARD_QA_OUTPUT_DIR);
-  }
-  return resolve(resolvePageQaDir(page));
+  return resolveOutputDirForPage(page);
 }
 
 export function resolveSpecDir(page) {
-  return join(APP_ROOT, "src/page", page, "__tests__");
+  return resolveSpecDirForPage(page);
+}
+
+export function formatSpecDirLabel(page) {
+  const config = getProjectConfig();
+  const specDir = resolveSpecDir(page);
+  return relative(config.root, specDir) || specDir;
 }
 
 export function listAnnotatedSpecFiles(specDir) {
@@ -100,4 +105,7 @@ export function artifactPaths(page, outputDir = resolveOutputDir(page)) {
   };
 }
 
-export { APP_ROOT };
+/** @deprecated Use getProjectConfig().root */
+export function getProjectRoot() {
+  return getProjectConfig().root;
+}

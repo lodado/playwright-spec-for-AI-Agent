@@ -2,6 +2,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import {
   artifactPaths,
+  ensureProjectConfig,
   parsePageArg,
   parseTargetPathArg,
 } from "./page-qa-paths.mjs";
@@ -99,6 +100,7 @@ function buildPayload(page, targetPath, runResult, judgment) {
 
 async function main() {
   const argv = process.argv.slice(2);
+  await ensureProjectConfig(argv);
   const page = parsePageArg(argv);
   const targetPath = parseTargetPathArg(argv, page);
   const paths = artifactPaths(page);

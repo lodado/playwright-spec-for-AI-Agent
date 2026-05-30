@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { chromium } from "playwright";
 import {
   buildPersistedAccountContext,
@@ -9,6 +9,7 @@ import {
 } from "./staging-qa-config.mjs";
 import {
   artifactPaths,
+  ensureProjectConfig,
   pageSupportsPlaywrightRun,
   parsePageArg,
   parseTargetPathArg,
@@ -23,8 +24,6 @@ import {
   resolveStagingQaConfig,
   shouldPromptInteractively,
 } from "./staging-qa-prompt.mjs";
-
-const APP_ROOT = resolve(new URL("..", import.meta.url).pathname);
 
 const READ_ONLY_POLICY = {
   summary:
@@ -193,6 +192,7 @@ async function login(browserPage, config, steps) {
 
 async function main() {
   const argv = process.argv.slice(2);
+  await ensureProjectConfig(argv);
   const qaPage = parsePageArg(argv);
   if (!pageSupportsPlaywrightRun(qaPage)) {
     throw new Error(
