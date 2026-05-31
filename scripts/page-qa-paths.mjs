@@ -26,8 +26,8 @@ export function parsePageArg(argv, { required = true } = {}) {
       [
         "Missing --page= argument.",
         "Examples:",
-        "  npx playwright-spec-qa spec --page=dashboard",
-        "  npx playwright-spec-qa judge --page=pricing --target-path=/pricing",
+        "  npx playwright-spec-for-ai-agent spec --page=dashboard",
+        "  npx playwright-spec-for-ai-agent judge --page=pricing --target-path=/pricing",
       ].join("\n")
     );
     process.exit(1);
@@ -46,7 +46,7 @@ export function parseTargetPathArg(argv, page) {
     console.error(
       [
         `Missing --target-path= for page "${page}".`,
-        `Set pages.${page}.targetPath or targetPaths.${page} in hermes-qa.config.*,`,
+        `Set pages.${page}.targetPath or targetPaths.${page} in playwright-spec-for-ai-agent.config.*,`,
         `or pass --target-path=/${page}`,
       ].join(" ")
     );

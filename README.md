@@ -1,8 +1,8 @@
-# playwright-spec-qa
+# playwright-spec-for-AI-Agent
 
 AI-assisted live staging QA layer for web apps with Playwright test suites.
 
-`playwright-spec-qa` keeps deterministic Playwright tests in CI, but reuses their intent as structured QA scenarios for production-like validation. It parses your existing `*.spec.ts` files, then [Hermes Agent](https://github.com/NousResearch/hermes-agent) logs into staging, opens each target page, and judges the scenario against the **live DOM**, screenshots, and test context — without mutating billing or subscription state.
+`playwright-spec-for-AI-Agent` keeps deterministic Playwright tests in CI, but reuses their intent as structured QA scenarios for production-like validation. It parses your existing `*.spec.ts` files, then [Hermes Agent](https://github.com/NousResearch/hermes-agent) logs into staging, opens each target page, and judges the scenario against the **live DOM**, screenshots, and test context — without mutating billing or subscription state.
 
 > **Important:** this tool does **not** run your Playwright tests against staging. It extracts test intent from annotated Playwright specs and asks Hermes to judge the live page against that intent.
 
@@ -12,27 +12,25 @@ AI-assisted live staging QA layer for web apps with Playwright test suites.
 
 It turns Playwright specs from deterministic test scripts into AI-readable QA scenarios for live staging validation.
 
-
 1. **Real E2E on live/staging matters**
-   
+
    Mocked Playwright runs are useful, but they don’t prove the app actually works in production-like conditions.
 
 2. **Live E2E without mocks is inherently non-deterministic**
-   
+
    Account state, billing status, remaining credits, feature flags, and third-party data can change what “pass” should look like.
 
 3. **Larger teams usually solve this with QA engineers**
-   
+
    QA engineers choose safe scenarios, avoid destructive actions, interpret ambiguous UI states, and decide whether a result is a real failure.
 
 4. **Startups often don’t have a dedicated QA role**
-   
+
    Instead of building a full QA process from scratch, we can reuse existing Playwright specs as structured intent and let an AI agent inspect the live DOM, screenshots, and test context.
 
 5. **This tool wires that flow together**
-   
-   `Playwright spec` → extracted `spec` as JSON/MD → **Hermes agent** judges staging behavior and returns `pass` / `fail` / `manual_review` / `skip`.
 
+   `Playwright spec` → extracted `spec` as JSON/MD → **Hermes agent** judges staging behavior and returns `pass` / `fail` / `manual_review` / `skip`.
 
 Annotations (`@qa-scenario`, `@qa-live-policy`, `@qa-fixture`) declare what is safe to verify on live; Hermes handles the rest.
 
@@ -53,19 +51,19 @@ spec → judge → slack (optional)
 
 This tool is designed to **complement**, not replace, your existing automated tests.
 
-| Stage | Run | Purpose |
-| --- | --- | --- |
-| PR | Mocked Playwright E2E | Deterministic UI regression checks |
-| PR / Nightly | API contract tests | Prevent mock/API drift |
-| Nightly | `playwright-spec-qa nightly` | AI-assisted live staging judgment |
-| Release | Selected live scenarios | Human or AI-assisted smoke validation |
+| Stage        | Run                                    | Purpose                               |
+| ------------ | -------------------------------------- | ------------------------------------- |
+| PR           | Mocked Playwright E2E                  | Deterministic UI regression checks    |
+| PR / Nightly | API contract tests                     | Prevent mock/API drift                |
+| Nightly      | `playwright-spec-for-ai-agent nightly` | AI-assisted live staging judgment     |
+| Release      | Selected live scenarios                | Human or AI-assisted smoke validation |
 
 A practical setup is:
 
 ```text
 Mocked E2E = stable UI-state verification
 API contract tests = real API schema guardrail
-playwright-spec-qa = live staging QA judgment
+playwright-spec-for-AI-Agent = live staging QA judgment
 ```
 
 ---
@@ -82,7 +80,7 @@ playwright-spec-qa = live staging QA judgment
 
 ## Quick start with `npx`
 
-### 1. Run from GitHub (no install)
+### 1. Run with `npx` (no install)
 
 In **your app repo root** (where Playwright specs live):
 
@@ -90,16 +88,16 @@ In **your app repo root** (where Playwright specs live):
 npx github:lodado/playwright-spec-for-AI-Agent spec --page=dashboard
 ```
 
-After the package is published to npm, you can use the shorter name:
+After the package is published to npm:
 
 ```bash
-npx playwright-spec-qa spec --page=dashboard
+npx playwright-spec-for-ai-agent spec --page=dashboard
 ```
 
 ### 2. Install as a dev dependency (recommended for teams)
 
 ```bash
-npm install -D playwright-spec-qa
+npm install -D playwright-spec-for-ai-agent
 ```
 
 Add scripts to your app's `package.json`:
@@ -107,10 +105,10 @@ Add scripts to your app's `package.json`:
 ```json
 {
   "scripts": {
-    "qa:spec": "playwright-spec-qa spec",
-    "qa:judge": "playwright-spec-qa judge",
-    "qa:slack": "playwright-spec-qa slack",
-    "qa:nightly": "playwright-spec-qa nightly"
+    "qa:spec": "playwright-spec-for-ai-agent spec",
+    "qa:judge": "playwright-spec-for-ai-agent judge",
+    "qa:slack": "playwright-spec-for-ai-agent slack",
+    "qa:nightly": "playwright-spec-for-ai-agent nightly"
   }
 }
 ```
@@ -143,7 +141,7 @@ If your layout is different (e.g. billing specs under `tests/e2e/billing/`), use
 
 **Option A — config file (best for multiple pages)**
 
-Copy [`hermes-qa.config.example.mjs`](./hermes-qa.config.example.mjs) to your app as `hermes-qa.config.mjs`:
+Copy [`playwright-spec-for-ai-agent.config.example.mjs`](./playwright-spec-for-ai-agent.config.example.mjs) to your app as `playwright-spec-for-ai-agent.config.mjs`:
 
 ```js
 export default {
@@ -170,20 +168,20 @@ export default {
 **Option B — CLI only (good for one-off runs)**
 
 ```bash
-npx playwright-spec-qa spec --page=billing \
+npx playwright-spec-for-ai-agent spec --page=billing \
   --spec-dir=tests/e2e/{page} \
   --output-dir=.qa/{page} \
   --project-root=. \
-  --config=./hermes-qa.config.mjs
+  --config=./playwright-spec-for-ai-agent.config.mjs
 ```
 
-| Flag                              | Meaning                                                   |
-| --------------------------------- | --------------------------------------------------------- |
-| `--page=billing`                  | Page id; replaces `{page}` in path templates              |
-| `--spec-dir=tests/e2e/{page}`     | Folder with `*.spec.ts` (must include `// @qa-scenario:`) |
-| `--output-dir=.qa/{page}`         | Where JSON/MD artifacts are written                       |
-| `--project-root=.`                | Your app root (defaults to cwd or config file directory)  |
-| `--config=./hermes-qa.config.mjs` | Explicit config; otherwise searched upward from cwd       |
+| Flag                                                 | Meaning                                                   |
+| ---------------------------------------------------- | --------------------------------------------------------- |
+| `--page=billing`                                     | Page id; replaces `{page}` in path templates              |
+| `--spec-dir=tests/e2e/{page}`                        | Folder with `*.spec.ts` (must include `// @qa-scenario:`) |
+| `--output-dir=.qa/{page}`                            | Where JSON/MD artifacts are written                       |
+| `--project-root=.`                                   | Your app root (defaults to cwd or config file directory)  |
+| `--config=./playwright-spec-for-ai-agent.config.mjs` | Explicit config; otherwise searched upward from cwd       |
 
 Resolved paths for `--page=billing`:
 
@@ -205,25 +203,25 @@ See [Annotating your spec files](#annotating-your-spec-files). At minimum:
 **Any page (pricing, dashboard, billing, …):**
 
 ```bash
-npx playwright-spec-qa spec --page=pricing
-npx playwright-spec-qa judge --page=pricing --target-path=/pricing
+npx playwright-spec-for-ai-agent spec --page=pricing
+npx playwright-spec-for-ai-agent judge --page=pricing --target-path=/pricing
 
 open .qa/pricing/pricing-hermes-judgment.md
 ```
 
-If `targetPath` is set in `hermes-qa.config.mjs`, you can omit `--target-path=`.
+If `targetPath` is set in `playwright-spec-for-ai-agent.config.mjs`, you can omit `--target-path=`.
 
 **Nightly + Slack:**
 
 ```bash
-npx playwright-spec-qa nightly --page=pricing --with-slack --non-interactive
+npx playwright-spec-for-ai-agent nightly --page=pricing --with-slack --non-interactive
 ```
 
 ### 7. Example repo layout
 
 ```
 your-app/
-├── hermes-qa.config.mjs      # paths, targetPaths, staging fixtures
+├── playwright-spec-for-ai-agent.config.mjs      # paths, targetPaths, staging fixtures
 ├── .env                      # STAGING_QA_* credentials (gitignored)
 ├── tests/
 │   ├── fixtures/
@@ -261,8 +259,8 @@ Hermes also needs an inference model configured in `~/.hermes/config.yaml`, or v
 ## `npx` command reference
 
 ```bash
-npx playwright-spec-qa --help
-npx playwright-spec-qa spec --help    # same global flags on every command
+npx playwright-spec-for-ai-agent --help
+npx playwright-spec-for-ai-agent spec --help    # same global flags on every command
 ```
 
 | Command   | Requires `--page=` | Needs credentials              | Typical use                                    |
@@ -274,17 +272,17 @@ npx playwright-spec-qa spec --help    # same global flags on every command
 
 **Install source**
 
-| Method                | Command                                                                     |
-| --------------------- | --------------------------------------------------------------------------- |
-| GitHub (always works) | `npx github:lodado/playwright-spec-for-AI-Agent <command> ...`              |
-| npm package           | `npx playwright-spec-qa <command> ...`                                      |
-| Local dev dep         | `npm install -D playwright-spec-qa` then `playwright-spec-qa <command> ...` |
+| Method                | Command                                                                                         |
+| --------------------- | ----------------------------------------------------------------------------------------------- |
+| GitHub (always works) | `npx github:lodado/playwright-spec-for-AI-Agent <command> ...`                                  |
+| npm package           | `npx playwright-spec-for-ai-agent <command> ...`                                                |
+| Local dev dep         | `npm install -D playwright-spec-for-ai-agent` then `playwright-spec-for-ai-agent <command> ...` |
 
 **Path & config flags** (all commands)
 
 ```bash
 --page=<slug>              # required, e.g. billing, dashboard, settings/billing
---config=<path>            # hermes-qa.config.mjs (auto-discovered if omitted)
+--config=<path>            # playwright-spec-for-ai-agent.config.mjs (auto-discovered if omitted)
 --project-root=<path>      # app root (default: cwd or config file directory)
 --spec-dir=<template>      # e.g. tests/e2e/{page}
 --output-dir=<template>    # e.g. .qa/{page}
@@ -306,8 +304,8 @@ npx playwright-spec-qa spec --help    # same global flags on every command
 
 Config file is searched upward from cwd for:
 
-- `hermes-qa.config.mjs` / `.js` / `.cjs` / `.json`
-- `playwright-spec-qa.config.mjs` / `.js` / `.cjs` / `.json`
+- `playwright-spec-for-ai-agent.config.mjs` / `.js` / `.cjs` / `.json`
+- `hermes-qa.config.*` and `playwright-spec-qa.config.*` (legacy, still supported)
 
 CLI flags override config file values for that run.
 
@@ -319,18 +317,18 @@ This value picks which `@qa-scenario` block in your spec JSON is executed on sta
 
 ### How it is decided (priority)
 
-| Priority | Source             | Example                                                                                                     |
-| -------- | ------------------ | ----------------------------------------------------------------------------------------------------------- |
-| 1        | CLI                | `--expected-subscription-status=INACTIVE`                                                                   |
-| 2        | Environment        | `STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS=INACTIVE`                                                          |
-| 3        | Config file        | `staging.expectedSubscriptionStatus` or `pages.<page>.expectedSubscriptionStatus` in `hermes-qa.config.mjs` |
-| 4        | Interactive prompt | TTY asks: `Expected subscription status (...)` — leave empty to let Hermes infer on the live page           |
-| 5        | Hermes (judge)     | Opens `--target-path`, reads DOM/copy, picks the matching `@qa-scenario` from your spec                     |
+| Priority | Source             | Example                                                                                                                        |
+| -------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| 1        | CLI                | `--expected-subscription-status=INACTIVE`                                                                                      |
+| 2        | Environment        | `STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS=INACTIVE`                                                                             |
+| 3        | Config file        | `staging.expectedSubscriptionStatus` or `pages.<page>.expectedSubscriptionStatus` in `playwright-spec-for-ai-agent.config.mjs` |
+| 4        | Interactive prompt | TTY asks: `Expected subscription status (...)` — leave empty to let Hermes infer on the live page                              |
+| 5        | Hermes (judge)     | Opens `--target-path`, reads DOM/copy, picks the matching `@qa-scenario` from your spec                                        |
 
 Set it in config so CI and teammates never get prompted:
 
 ```js
-// hermes-qa.config.mjs
+// playwright-spec-for-ai-agent.config.mjs
 export default {
   staging: {
     expectedSubscriptionStatus: "INACTIVE",
@@ -382,13 +380,13 @@ test("uploads avatar", async ({ page }) => {
 });
 ```
 
-**Resolution order** (later wins): `hermes-qa.config` root `fixtures` → `staging.fixtures` → `pages.<page>.fixtures` → file-level `@qa-fixture` → describe `@qa-fixture` → test `@qa-fixture`.
+**Resolution order** (later wins): config root `fixtures` → `staging.fixtures` → `pages.<page>.fixtures` → file-level `@qa-fixture` → describe `@qa-fixture` → test `@qa-fixture`.
 
 Paths are **repo-relative**. During `judge`, paths are resolved to absolute paths and sent to Hermes as `uploadFixtures.defaults` and `uploadFixtures.byCheckId` (keyed by each test's `checkId` in the spec JSON).
 
 If a fixture file is missing on disk, the CLI prints `QA fixture missing on disk: ...` before calling Hermes.
 
-**Config example** (`hermes-qa.config.mjs`):
+**Config example** (`playwright-spec-for-ai-agent.config.mjs`):
 
 ```js
 export default {
@@ -478,8 +476,8 @@ See `examples/sample-spec.ts` for a complete example.
 ### Pricing (browse only)
 
 ```bash
-npx playwright-spec-qa spec --page=pricing
-npx playwright-spec-qa judge --page=pricing --target-path=/pricing
+npx playwright-spec-for-ai-agent spec --page=pricing
+npx playwright-spec-for-ai-agent judge --page=pricing --target-path=/pricing
 ```
 
 ### CI one-liner
@@ -489,7 +487,7 @@ export STAGING_QA_EMAIL=...
 export STAGING_QA_PASSWORD=...
 export STAGING_QA_BASE_URL=https://staging.your-app.com
 
-npx playwright-spec-qa nightly --page=dashboard \
+npx playwright-spec-for-ai-agent nightly --page=dashboard \
   --with-slack \
   --non-interactive
 ```
@@ -502,23 +500,23 @@ You can still copy `scripts/` into your repo and run `node scripts/extract-page-
 
 ## CLI options
 
-| Option                                                                        | Required  | Description                                                       |
-| ----------------------------------------------------------------------------- | --------- | ----------------------------------------------------------------- |
-| `--page=`                                                                     | Yes       | Page slug, e.g. `dashboard`, `pricing`                            |
-| `--config=`                                                                   | No        | Path to `hermes-qa.config.*` (auto-discovered from cwd upward)    |
-| `--project-root=`                                                             | No        | App root (default: config file directory or cwd)                  |
-| `--spec-dir=`                                                                 | No        | Spec directory template (`{page}`, `{root}`)                      |
-| `--output-dir=`                                                               | No        | QA output directory template (`{page}`, `{root}`)                 |
-| `--target-path=`                                                              | Per page  | Staging path (or `targetPaths` / `pages.*.targetPath` in config)  |
-| `--email=` / `STAGING_QA_EMAIL`                                               | For judge | Staging login email                                               |
-| `--password=` / `STAGING_QA_PASSWORD`                                         | For judge | Staging login password                                            |
-| `--expected-plan=` / `STAGING_QA_EXPECTED_PLAN`                               | No        | Expected plan name                                                |
-| `--expected-subscription-status=` / `STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS` | No        | Expected subscription state                                       |
-| `--account-notes=` / `STAGING_QA_ACCOUNT_NOTES`                               | No        | Free-text note forwarded to Hermes                                |
-| `--base-url=` / `STAGING_QA_BASE_URL`                                         | No        | Staging origin                                                    |
-| Config `fixtures` / `staging.fixtures` / `pages.*.fixtures`                   | No        | Default upload files for Hermes live replay (repo-relative paths) |
-| `QA_OUTPUT_DIR`                                                               | No        | Override output directory                                         |
-| `SLACK_WEBHOOK_URL`                                                           | For slack | Slack incoming webhook                                            |
+| Option                                                                        | Required  | Description                                                                       |
+| ----------------------------------------------------------------------------- | --------- | --------------------------------------------------------------------------------- |
+| `--page=`                                                                     | Yes       | Page slug, e.g. `dashboard`, `pricing`                                            |
+| `--config=`                                                                   | No        | Path to `playwright-spec-for-ai-agent.config.*` (auto-discovered from cwd upward) |
+| `--project-root=`                                                             | No        | App root (default: config file directory or cwd)                                  |
+| `--spec-dir=`                                                                 | No        | Spec directory template (`{page}`, `{root}`)                                      |
+| `--output-dir=`                                                               | No        | QA output directory template (`{page}`, `{root}`)                                 |
+| `--target-path=`                                                              | Per page  | Staging path (or `targetPaths` / `pages.*.targetPath` in config)                  |
+| `--email=` / `STAGING_QA_EMAIL`                                               | For judge | Staging login email                                                               |
+| `--password=` / `STAGING_QA_PASSWORD`                                         | For judge | Staging login password                                                            |
+| `--expected-plan=` / `STAGING_QA_EXPECTED_PLAN`                               | No        | Expected plan name                                                                |
+| `--expected-subscription-status=` / `STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS` | No        | Expected subscription state                                                       |
+| `--account-notes=` / `STAGING_QA_ACCOUNT_NOTES`                               | No        | Free-text note forwarded to Hermes                                                |
+| `--base-url=` / `STAGING_QA_BASE_URL`                                         | No        | Staging origin                                                                    |
+| Config `fixtures` / `staging.fixtures` / `pages.*.fixtures`                   | No        | Default upload files for Hermes live replay (repo-relative paths)                 |
+| `QA_OUTPUT_DIR`                                                               | No        | Override output directory                                                         |
+| `SLACK_WEBHOOK_URL`                                                           | For slack | Slack incoming webhook                                                            |
 
 ---
 
@@ -571,8 +569,8 @@ The local normalizer re-derives the overall `status` from `checks[]`, ignoring H
 ## GitHub Actions
 
 ```yaml
-- run: npm install -D playwright-spec-qa
-- run: npx playwright-spec-qa nightly --page=dashboard --with-slack --non-interactive
+- run: npm install -D playwright-spec-for-ai-agent
+- run: npx playwright-spec-for-ai-agent nightly --page=dashboard --with-slack --non-interactive
   env:
     STAGING_QA_EMAIL: ${{ secrets.STAGING_QA_EMAIL }}
     STAGING_QA_PASSWORD: ${{ secrets.STAGING_QA_PASSWORD }}
@@ -588,7 +586,7 @@ Required secrets: `STAGING_QA_EMAIL`, `STAGING_QA_PASSWORD`, optional `SLACK_WEB
 
 ## Design philosophy
 
-`playwright-spec-qa` exists because mocked E2E and live E2E solve different problems.
+`playwright-spec-for-AI-Agent` exists because mocked E2E and live E2E solve different problems.
 
 Mocked Playwright tests are fast, deterministic, and excellent for validating UI states such as loading, empty, error, unauthorized, credit shortage, and plan-gated screens. Their weakness is that they can drift away from the real backend contract. A mocked test may still pass after the real API response shape, auth behavior, or feature flag behavior has changed.
 
@@ -599,7 +597,7 @@ The intended split is:
 ```text
 Keep Playwright for deterministic CI.
 Keep API contract tests for backend/frontend compatibility.
-Use playwright-spec-qa for live staging judgment.
+Use playwright-spec-for-AI-Agent for live staging judgment.
 ```
 
 Hermes should return:
@@ -613,7 +611,7 @@ Hermes should return:
 
 ## Adapting to your app
 
-1. **Paths** — set `paths.specDir` / `paths.outputDir` in `hermes-qa.config.mjs`, or pass `--spec-dir=` / `--output-dir=`.
+1. **Paths** — set `paths.specDir` / `paths.outputDir` in `playwright-spec-for-ai-agent.config.mjs`, or pass `--spec-dir=` / `--output-dir=`.
 2. **Subscription status** — set `staging.expectedSubscriptionStatus` or let Hermes infer on each page.
 3. **Target paths** — `targetPaths` / `pages.<slug>.targetPath` in config, or `--target-path=` per run.
 4. **Upload fixtures** — commit files under e.g. `tests/fixtures/`, declare with `@qa-fixture` or `staging.fixtures` in config.
@@ -624,17 +622,17 @@ Hermes should return:
 
 ## Troubleshooting
 
-| Symptom                                 | Cause                            | Fix                                                       |
-| --------------------------------------- | -------------------------------- | --------------------------------------------------------- |
-| `Missing --page=`                       | Missing page argument            | Add `--page=billing` (after `--` for npm scripts)         |
-| `ENOENT` / empty spec dir               | Wrong `--spec-dir`               | Check path; use `tests/e2e/{page}` and existing specs     |
-| `Missing staging QA credentials`        | No email/password                | Set `.env` or `STAGING_QA_*` env vars                     |
-| `Missing {page}-qa-spec.md`             | spec step not run                | Run `npx playwright-spec-qa spec --page=...` first        |
-| `QA fixture missing on disk`            | `@qa-fixture` path wrong         | Commit file under repo; check repo-relative path          |
-| `npx playwright-spec-qa` not found      | Package not on npm yet           | Use `npx github:lodado/playwright-spec-for-AI-Agent`      |
-| `Hermes did not return a JSON decision` | Hermes exited without JSON       | Check `{page}-hermes-raw-output.txt`                      |
-| `checks[]` table is empty               | Hermes returned no per-test rows | Browse mode result is `manual_review`; inspect raw output |
-| Verdict `manual_review` but checks skip | Old behavior / Hermes top-level  | Re-run `judge`; `skip` no longer forces `manual_review`   |
+| Symptom                                      | Cause                            | Fix                                                          |
+| -------------------------------------------- | -------------------------------- | ------------------------------------------------------------ |
+| `Missing --page=`                            | Missing page argument            | Add `--page=billing` (after `--` for npm scripts)            |
+| `ENOENT` / empty spec dir                    | Wrong `--spec-dir`               | Check path; use `tests/e2e/{page}` and existing specs        |
+| `Missing staging QA credentials`             | No email/password                | Set `.env` or `STAGING_QA_*` env vars                        |
+| `Missing {page}-qa-spec.md`                  | spec step not run                | Run `npx playwright-spec-for-ai-agent spec --page=...` first |
+| `QA fixture missing on disk`                 | `@qa-fixture` path wrong         | Commit file under repo; check repo-relative path             |
+| `npx playwright-spec-for-ai-agent` not found | Package not on npm yet           | Use `npx github:lodado/playwright-spec-for-AI-Agent`         |
+| `Hermes did not return a JSON decision`      | Hermes exited without JSON       | Check `{page}-hermes-raw-output.txt`                         |
+| `checks[]` table is empty                    | Hermes returned no per-test rows | Browse mode result is `manual_review`; inspect raw output    |
+| Verdict `manual_review` but checks skip      | Old behavior / Hermes top-level  | Re-run `judge`; `skip` no longer forces `manual_review`      |
 
 ---
 

@@ -3,7 +3,7 @@
  * Orchestrate spec -> judge -> (optional slack) for any page.
  *
  * Usage:
- *   npx playwright-spec-qa nightly --page=pricing --with-slack
+ *   npx playwright-spec-for-ai-agent nightly --page=pricing --with-slack
  *
  * Flags:
  *   --page=       (required)

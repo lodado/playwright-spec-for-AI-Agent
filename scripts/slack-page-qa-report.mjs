@@ -105,7 +105,7 @@ async function main() {
 
   if (!judgment) {
     throw new Error(
-      `Missing ${paths.slug}-hermes-judgment.json. Run \`npx playwright-spec-qa judge --page=${page}\` first.`
+      `Missing ${paths.slug}-hermes-judgment.json. Run \`npx playwright-spec-for-ai-agent judge --page=${page}\` first.`
     );
   }
 

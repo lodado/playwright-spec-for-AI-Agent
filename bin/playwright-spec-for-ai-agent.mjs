@@ -14,10 +14,10 @@ const COMMANDS = {
   nightly: "run-page-qa-nightly.mjs",
 };
 
-const HELP = `playwright-spec-qa — AI staging QA for Playwright specs
+const HELP = `playwright-spec-for-AI-Agent — AI staging QA for Playwright specs
 
 Usage:
-  npx playwright-spec-qa <command> [options]
+  npx playwright-spec-for-ai-agent <command> [options]
 
 Commands:
   spec     Parse @qa-scenario specs → JSON + Markdown
@@ -36,11 +36,12 @@ Common options:
   --non-interactive          Skip prompts (CI)
 
 Examples:
-  npx playwright-spec-qa spec --page=pricing
-  npx playwright-spec-qa judge --page=pricing --target-path=/pricing
-  npx playwright-spec-qa nightly --page=dashboard --with-slack
+  npx playwright-spec-for-ai-agent spec --page=pricing
+  npx playwright-spec-for-ai-agent judge --page=pricing --target-path=/pricing
+  npx playwright-spec-for-ai-agent nightly --page=dashboard --with-slack
 
-Config: hermes-qa.config.mjs in your project root (see hermes-qa.config.example.mjs)
+Config: playwright-spec-for-ai-agent.config.mjs in your project root
+         (see playwright-spec-for-ai-agent.config.example.mjs)
 `;
 
 function printHelp() {

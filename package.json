@@ -1,9 +1,10 @@
 {
-  "name": "playwright-spec-qa",
+  "name": "playwright-spec-for-ai-agent",
   "version": "0.2.0",
-  "description": "AI-powered staging QA: parse Playwright specs with @qa-scenario annotations and judge live staging pages with Hermes agent.",
+  "description": "AI-assisted live staging QA layer for Playwright test suites. Parses @qa-scenario annotations from *.spec.ts into structured QA scenarios, then uses Hermes Agent to log into staging, visit target pages, and judge live DOM against test intent — returning pass, fail, manual_review, or skip without running Playwright against staging or mutating billing state.",
   "type": "module",
   "license": "MIT",
+  "author": "lodado <ycp998@naver.com>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lodado/playwright-spec-for-AI-Agent.git"
@@ -14,28 +15,39 @@
   },
   "keywords": [
     "playwright",
-    "qa",
+    "playwright-test",
     "e2e",
+    "qa",
+    "staging",
+    "live-qa",
+    "live-staging",
     "hermes",
+    "hermes-agent",
     "ai",
-    "staging"
+    "ai-qa",
+    "testing",
+    "test-automation",
+    "cli",
+    "nightly",
+    "slack",
+    "qa-scenario",
+    "manual-review"
   ],
   "bin": {
-    "playwright-spec-qa": "./bin/playwright-spec-qa.mjs",
-    "hermes-qa": "./bin/playwright-spec-qa.mjs"
+    "playwright-spec-for-ai-agent": "./bin/playwright-spec-for-ai-agent.mjs"
   },
   "files": [
     "bin",
     "scripts",
-    "hermes-qa.config.example.mjs",
+    "playwright-spec-for-ai-agent.config.example.mjs",
     "examples",
     "README.md"
   ],
   "scripts": {
-    "qa:spec": "node bin/playwright-spec-qa.mjs spec",
-    "qa:judge": "node bin/playwright-spec-qa.mjs judge",
-    "qa:slack": "node bin/playwright-spec-qa.mjs slack",
-    "qa:nightly": "node bin/playwright-spec-qa.mjs nightly",
+    "qa:spec": "node bin/playwright-spec-for-ai-agent.mjs spec",
+    "qa:judge": "node bin/playwright-spec-for-ai-agent.mjs judge",
+    "qa:slack": "node bin/playwright-spec-for-ai-agent.mjs slack",
+    "qa:nightly": "node bin/playwright-spec-for-ai-agent.mjs nightly",
     "test": "vitest run",
     "prepublishOnly": "npm test"
   },
@@ -55,5 +67,9 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

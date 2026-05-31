@@ -3,7 +3,7 @@
  * Hermes QA judge — logs into staging, opens the target page, and verifies live DOM.
  *
  * Usage:
- *   npx playwright-spec-qa judge --page=pricing --target-path=/pricing
+ *   npx playwright-spec-for-ai-agent judge --page=pricing --target-path=/pricing
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -461,7 +461,7 @@ function renderMarkdown(decision, page, targetPath) {
 async function runBrowseJudge(page, targetPath, paths, config) {
   if (!existsSync(paths.specMd)) {
     throw new Error(
-      `Missing ${paths.slug}-qa-spec.md. Run \`npx playwright-spec-qa spec --page=${page}\` first.`
+      `Missing ${paths.slug}-qa-spec.md. Run \`npx playwright-spec-for-ai-agent spec --page=${page}\` first.`
     );
   }
 

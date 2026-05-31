@@ -1,8 +1,10 @@
 /**
- * Copy to your app repo as hermes-qa.config.mjs (or playwright-spec-qa.config.mjs).
+ * Copy to your app repo as playwright-spec-for-ai-agent.config.mjs.
  *
- *   npx playwright-spec-qa spec --page=billing
- *   npx playwright-spec-qa judge --page=billing --target-path=/settings/billing
+ *   npx playwright-spec-for-ai-agent spec --page=billing
+ *   npx playwright-spec-for-ai-agent judge --page=billing --target-path=/settings/billing
+ *
+ * Legacy config names (hermes-qa.config.*, playwright-spec-qa.config.*) are still discovered.
  */
 export default {
   paths: {

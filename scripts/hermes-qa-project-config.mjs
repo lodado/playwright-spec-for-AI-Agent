@@ -4,6 +4,10 @@ import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const CONFIG_FILENAMES = [
+  "playwright-spec-for-ai-agent.config.mjs",
+  "playwright-spec-for-ai-agent.config.js",
+  "playwright-spec-for-ai-agent.config.cjs",
+  "playwright-spec-for-ai-agent.config.json",
   "hermes-qa.config.mjs",
   "hermes-qa.config.js",
   "hermes-qa.config.cjs",
@@ -372,10 +376,11 @@ export function printProjectConfigHelp() {
   --output-dir=<template>   Output directory template or path ({page}, {root})
 
 Config file names (first match wins):
-  hermes-qa.config.mjs | .js | .cjs | .json
-  playwright-spec-qa.config.mjs | .js | .cjs | .json
+  playwright-spec-for-ai-agent.config.mjs | .js | .cjs | .json
+  hermes-qa.config.mjs | .js | .cjs | .json  (legacy)
+  playwright-spec-qa.config.mjs | .js | .cjs | .json  (legacy)
 
-Example hermes-qa.config.mjs:
+Example playwright-spec-for-ai-agent.config.mjs:
   export default {
     root: process.cwd(),
     paths: {

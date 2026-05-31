@@ -188,8 +188,8 @@ Interactive mode:
   target confirmation, and inferred dashboard scenario before assertions.
 
 Examples:
-  STAGING_QA_EMAIL='qa@example.com' STAGING_QA_PASSWORD='secret!' npx playwright-spec-qa judge --page=dashboard
-  npx playwright-spec-qa judge --page=dashboard --email='qa@example.com' --password='secret!'
+  STAGING_QA_EMAIL='qa@example.com' STAGING_QA_PASSWORD='secret!' npx playwright-spec-for-ai-agent judge --page=dashboard
+  npx playwright-spec-for-ai-agent judge --page=dashboard --email='qa@example.com' --password='secret!'
 `);
 }
 
