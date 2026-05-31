@@ -1,4 +1,3 @@
 node_modules/
-**/__QA__/
 .env
 *.png

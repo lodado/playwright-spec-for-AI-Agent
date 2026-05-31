@@ -1,0 +1,540 @@
+{
+  "generatedAt": "2026-05-30T17:05:11.854Z",
+  "sourceDirectory": "/Users/chungheon/Desktop/programming/Deep-Agent/src/page/dashboard/__tests__",
+  "scenarios": [
+    {
+      "scenarioId": "ACTIVE",
+      "page": "dashboard",
+      "liveSkip": false,
+      "alwaysRun": false,
+      "sourceFile": "dashboard-active.spec.ts",
+      "label": "Dashboard — ACTIVE subscription",
+      "tests": [
+        {
+          "title": "to be: username and plan name appear in the title",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "visible",
+              "locator": {
+                "kind": "text",
+                "value": "dev-user is on the Basic plan"
+              }
+            }
+          ],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: subtitle shows 'Check your remaining credits'",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "containText",
+              "locator": {
+                "kind": "testId",
+                "value": "dashboard-subtitle"
+              },
+              "expected": {
+                "kind": "literal",
+                "value": "Check your remaining credits"
+              }
+            }
+          ],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: remaining credits '42,835' are displayed",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "containText",
+              "locator": {
+                "kind": "testId",
+                "value": "credit-remaining"
+              },
+              "expected": {
+                "kind": "regex",
+                "pattern": "[\\d,]+"
+              },
+              "liveNote": "mock numeric fixture; live uses digit wildcard matching"
+            }
+          ],
+          "checkId": "to-be-42-835"
+        },
+        {
+          "title": "to be: 'Subscription info' section is visible",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "visible",
+              "locator": {
+                "kind": "text",
+                "value": "Subscription info"
+              }
+            }
+          ],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: 'Cancel subscription' link is enabled (clickable)",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "visible",
+              "locator": {
+                "kind": "testId",
+                "value": "subscription-cancel-link"
+              }
+            },
+            {
+              "type": "notVisible",
+              "locator": {
+                "kind": "testId",
+                "value": "subscription-disabled-link"
+              }
+            }
+          ],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: subscription history dialog opens",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "executable-interaction",
+          "livePolicyAnnotation": "safe-interaction",
+          "expectations": [],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: dialog closes via Confirm button",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "judgment-interaction-no-confirm",
+          "livePolicyAnnotation": "safe-interaction-no-confirm",
+          "expectations": [],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: dialog closes via Close (X) button",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "executable-interaction",
+          "livePolicyAnnotation": "safe-interaction",
+          "expectations": [],
+          "checkId": "to-be-x"
+        },
+        {
+          "title": "to be: dialog closes via Escape key",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "executable-interaction",
+          "livePolicyAnnotation": "safe-interaction",
+          "expectations": [],
+          "checkId": "to-be-escape"
+        },
+        {
+          "title": "to be: cancel subscription dialog opens",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "executable-interaction",
+          "livePolicyAnnotation": "safe-interaction",
+          "expectations": [],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: dialog closes via Cancel button",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "executable-interaction",
+          "livePolicyAnnotation": "safe-interaction",
+          "expectations": [],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: dialog closes via Close (X) button",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "executable-interaction",
+          "livePolicyAnnotation": "safe-interaction",
+          "expectations": [],
+          "checkId": "to-be-x"
+        },
+        {
+          "title": "to be: Confirm button is disabled when no cancel reason is selected",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "executable-interaction",
+          "livePolicyAnnotation": "safe-interaction",
+          "expectations": [],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: Confirm button is enabled when one cancel reason is selected",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "executable-interaction",
+          "livePolicyAnnotation": "safe-interaction",
+          "expectations": [],
+          "checkId": "to-be-1"
+        },
+        {
+          "title": "to be: redirects to /login",
+          "stagingMode": "auth",
+          "liveRunPolicy": "blocked-auth-mock",
+          "livePolicyAnnotation": "auth-mock",
+          "expectations": [],
+          "checkId": "to-be-login"
+        }
+      ]
+    },
+    {
+      "scenarioId": "CANCEL_PENDING",
+      "page": "dashboard",
+      "liveSkip": false,
+      "alwaysRun": false,
+      "sourceFile": "dashboard-cancel-pending.spec.ts",
+      "label": "Dashboard — CANCEL_PENDING (cancel scheduled)",
+      "tests": [
+        {
+          "title": "to be: subtitle shows 'Subscription cancellation is scheduled'",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "containText",
+              "locator": {
+                "kind": "testId",
+                "value": "dashboard-subtitle"
+              },
+              "expected": {
+                "kind": "literal",
+                "value": "Subscription cancellation is scheduled"
+              }
+            }
+          ],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: 'Resume subscription' link is enabled (clickable)",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "visible",
+              "locator": {
+                "kind": "testId",
+                "value": "subscription-resume-link"
+              }
+            },
+            {
+              "type": "notVisible",
+              "locator": {
+                "kind": "testId",
+                "value": "subscription-cancel-link"
+              }
+            },
+            {
+              "type": "notVisible",
+              "locator": {
+                "kind": "testId",
+                "value": "subscription-disabled-link"
+              }
+            }
+          ],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: remaining credit amount is displayed",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "containText",
+              "locator": {
+                "kind": "testId",
+                "value": "credit-remaining"
+              },
+              "expected": {
+                "kind": "regex",
+                "pattern": "[\\d,]+"
+              },
+              "liveNote": "mock numeric fixture; live uses digit wildcard matching"
+            }
+          ],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: resume subscription dialog opens",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "executable-interaction",
+          "livePolicyAnnotation": "safe-interaction",
+          "expectations": [],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: dialog closes via Cancel button",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "executable-interaction",
+          "livePolicyAnnotation": "safe-interaction",
+          "expectations": [],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: dialog closes via Close (X) button",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "executable-interaction",
+          "livePolicyAnnotation": "safe-interaction",
+          "expectations": [],
+          "checkId": "to-be-x"
+        },
+        {
+          "title": "to be: subscription history dialog opens",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "executable-interaction",
+          "livePolicyAnnotation": "safe-interaction",
+          "expectations": [],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: dialog closes via Confirm button",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "judgment-interaction-no-confirm",
+          "livePolicyAnnotation": "safe-interaction-no-confirm",
+          "expectations": [],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: subtitle shows 'Subscription resume completed'",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "blocked-subscription-mutation",
+          "livePolicyAnnotation": "subscription-mutation",
+          "expectations": [],
+          "checkId": "to-be"
+        }
+      ]
+    },
+    {
+      "scenarioId": "CREDIT_BVA",
+      "page": "dashboard",
+      "liveSkip": false,
+      "alwaysRun": true,
+      "sourceFile": "dashboard-credit-bva.spec.ts",
+      "label": "Dashboard credit display — BVA (summary.remaining_credits)",
+      "tests": [
+        {
+          "title": "to be: when remaining_credits is 0, shows 0 remaining credits",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "containText",
+              "locator": {
+                "kind": "testId",
+                "value": "credit-remaining"
+              },
+              "expected": {
+                "kind": "regex",
+                "pattern": "Credit [\\d,]+"
+              },
+              "liveNote": "mock numeric fixture; live uses digit wildcard matching"
+            }
+          ],
+          "checkId": "to-be-remaining-credits-0-0"
+        },
+        {
+          "title": "to be: when remaining_credits is positive, shows that value",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "containText",
+              "locator": {
+                "kind": "testId",
+                "value": "credit-remaining"
+              },
+              "expected": {
+                "kind": "regex",
+                "pattern": "^Credit [\\d,]+$"
+              },
+              "liveNote": "mock dynamic credit; live uses numeric wildcard matching"
+            }
+          ],
+          "checkId": "to-be-remaining-credits"
+        }
+      ]
+    },
+    {
+      "scenarioId": "INACTIVE",
+      "page": "dashboard",
+      "liveSkip": false,
+      "alwaysRun": false,
+      "sourceFile": "dashboard-inactive.spec.ts",
+      "label": "Dashboard — INACTIVE/FREE plan (lower boundary)",
+      "tests": [
+        {
+          "title": "to be: username and 'Free plan' text appear in the title",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "visible",
+              "locator": {
+                "kind": "text",
+                "value": "dev-user is on the Free plan"
+              }
+            }
+          ],
+          "checkId": "to-be-free"
+        },
+        {
+          "title": "to be: subtitle shows 'Check your remaining credits'",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "containText",
+              "locator": {
+                "kind": "testId",
+                "value": "dashboard-subtitle"
+              },
+              "expected": {
+                "kind": "literal",
+                "value": "Check your remaining credits"
+              }
+            }
+          ],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: credit balance shows 0",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "containText",
+              "locator": {
+                "kind": "testId",
+                "value": "credit-remaining"
+              },
+              "expected": {
+                "kind": "regex",
+                "pattern": "Credit [\\d,]+"
+              },
+              "liveNote": "mock numeric fixture; live uses digit wildcard matching"
+            }
+          ],
+          "checkId": "to-be-0"
+        },
+        {
+          "title": "to be: 'Cancel subscription' link is disabled (cursor-not-allowed)",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "visible",
+              "locator": {
+                "kind": "testId",
+                "value": "subscription-disabled-link"
+              }
+            },
+            {
+              "type": "notVisible",
+              "locator": {
+                "kind": "testId",
+                "value": "subscription-cancel-link"
+              }
+            },
+            {
+              "type": "notVisible",
+              "locator": {
+                "kind": "testId",
+                "value": "subscription-resume-link"
+              }
+            }
+          ],
+          "checkId": "to-be-cursor-not-allowed"
+        },
+        {
+          "title": "to be: 'Subscription info' section is visible",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "visible",
+              "locator": {
+                "kind": "text",
+                "value": "Subscription info"
+              }
+            }
+          ],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: no clickable cancel/resume links; only disabled link is shown",
+          "stagingMode": "read-only",
+          "liveRunPolicy": "judgment-mock-api",
+          "livePolicyAnnotation": "mock-judgment",
+          "expectations": [
+            {
+              "type": "visible",
+              "locator": {
+                "kind": "testId",
+                "value": "subscription-disabled-link"
+              }
+            },
+            {
+              "type": "notVisible",
+              "locator": {
+                "kind": "testId",
+                "value": "subscription-cancel-link"
+              }
+            },
+            {
+              "type": "notVisible",
+              "locator": {
+                "kind": "testId",
+                "value": "subscription-resume-link"
+              }
+            }
+          ],
+          "checkId": "to-be-disabled"
+        },
+        {
+          "title": "to be: subscription history dialog opens",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "executable-interaction",
+          "livePolicyAnnotation": "safe-interaction",
+          "expectations": [],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: dialog closes via Confirm button",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "judgment-interaction-no-confirm",
+          "livePolicyAnnotation": "safe-interaction-no-confirm",
+          "expectations": [],
+          "checkId": "to-be"
+        },
+        {
+          "title": "to be: dialog closes via Escape key",
+          "stagingMode": "interaction",
+          "liveRunPolicy": "executable-interaction",
+          "livePolicyAnnotation": "safe-interaction",
+          "expectations": [],
+          "checkId": "to-be-escape"
+        }
+      ]
+    }
+  ]
+}
