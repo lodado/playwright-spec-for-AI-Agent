@@ -178,7 +178,10 @@ export function runHermes(query, maxTurns, { paths = null, secrets = [], require
   }
 
   const invocation = resolveHermesAgentInvocation();
-  const queryPath = paths?.hermesQuery ?? paths?.hermesAbstractQuery;
+  const queryPath =
+    paths?.hermesQuery ??
+    paths?.hermesAbstractQuery ??
+    paths?.hermesReviewQuery;
   if (queryPath) {
     writeFileSync(queryPath, redactSensitiveText(query, secrets));
   }
@@ -206,7 +209,10 @@ export function runHermes(query, maxTurns, { paths = null, secrets = [], require
     secrets
   );
 
-  const rawPath = paths?.hermesRawOutput ?? paths?.hermesAbstractRawOutput;
+  const rawPath =
+    paths?.hermesRawOutput ??
+    paths?.hermesAbstractRawOutput ??
+    paths?.hermesReviewRawOutput;
   if (rawPath) {
     writeFileSync(rawPath, redactedCombinedOutput);
   }

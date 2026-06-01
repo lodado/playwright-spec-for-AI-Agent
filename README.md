@@ -35,7 +35,7 @@ It turns Playwright specs from deterministic test scripts into AI-readable QA sc
 Annotations (`@qa-scenario`, `@qa-live-policy`, `@qa-fixture`) declare what is safe to verify on live; Hermes handles the rest.
 
 ```
-spec → abstract-ai → judge → slack (optional)
+spec → abstract-ai → judge → review → slack (optional)
 ```
 
 | Command       | What it does                                                                                       |
@@ -44,8 +44,9 @@ spec → abstract-ai → judge → slack (optional)
 | `abstract`    | Re-applies rule abstraction on an existing `{page}-qa-spec.json`                                   |
 | `abstract-ai` | Hermes rewrites expectations for live staging → `{page}-qa-spec-live.json`                         |
 | `judge`       | Hermes logs in, visits `--target-path`, infers scenario, returns `pass` / `fail` / `manual_review` |
+| `review`      | Hermes re-reviews judge output (evidence quality + overly pedantic pass/fail) — no browsing          |
 | `slack`       | Posts the verdict to a Slack webhook on `fail` or `manual_review` (not on `pass`)                  |
-| `nightly`     | Runs `spec` → `abstract-ai` → `judge` → optional `slack` (`--skip-abstract-ai` to skip AI pass)     |
+| `nightly`     | `spec` → `abstract-ai` → `judge` → `review` → optional `slack`                                     |
 
 ---
 
@@ -535,7 +536,25 @@ npx playwright-spec-for-ai-agent spec --page=dashboard
 npx playwright-spec-for-ai-agent abstract-ai --page=dashboard --dry-run   # prompt only
 npx playwright-spec-for-ai-agent abstract-ai --page=dashboard
 npx playwright-spec-for-ai-agent judge --page=dashboard --target-path=/dashboard
+npx playwright-spec-for-ai-agent review --page=dashboard
 ```
+
+---
+
+## Post-judge review (`review`)
+
+After `judge`, Hermes reviews the **judge's results** (no re-browsing). It scores two criteria separately:
+
+| Criterion ID           | Question                                                                 |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `sufficient-evidence`  | Were checks run convincingly, with enough detail to trust pass/fail/skip? |
+| `not-overly-pedantic`  | Did the judge avoid nitpicks (e.g. exact label `세금계산서` vs “template visible”)? |
+
+Each criterion gets `pass` \| `concern` \| `fail`. `overallReview` is `approved` or `flagged` (flagged if any concern/fail).
+
+Input to the reviewer: **Given/When/Then** test plan + judge results as Markdown (not JSON blobs).
+
+Exit code `1` when review is flagged or any criterion is `concern`/`fail` (use `--skip-review` in nightly to omit).
 
 ---
 
@@ -550,7 +569,8 @@ For `--page=billing` and `--output-dir=.qa/{page}`:
 | spec         | `billing-qa-spec.json`, `billing-qa-spec-abstracted.json`, `billing-qa-spec.md`            |
 | abstract-ai  | `billing-qa-spec-live.json`, `billing-qa-spec-live.md`, `billing-qa-abstract-audit.json`   |
 | judge        | `billing-hermes-judgment.json`, `billing-hermes-judgment.md`                               |
-| debug        | `billing-hermes-query.txt`, `billing-hermes-raw-output.txt`, `billing-hermes-abstract-*`   |
+| review       | `billing-hermes-judge-review.json`, `billing-hermes-judge-review.md`                     |
+| debug        | `billing-hermes-query.txt`, `billing-hermes-raw-output.txt`, `billing-hermes-abstract-*`, `billing-hermes-judge-review-*` |
 
 Slug rule: `--page=settings/billing` → file prefix `settings-billing-`.
 

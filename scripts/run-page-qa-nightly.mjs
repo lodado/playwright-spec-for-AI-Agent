@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Orchestrate spec -> abstract-ai -> judge -> (optional slack) for any page.
+ * Orchestrate spec -> abstract-ai -> judge -> review -> (optional slack) for any page.
  *
  * Usage:
  *   npx playwright-spec-for-ai-agent nightly --page=pricing --with-slack
@@ -10,6 +10,7 @@
  *   --target-path= optional when targetPaths / pages.*.targetPath is set
  *   --with-slack         post Slack on fail/manual_review
  *   --skip-abstract-ai   skip Hermes abstract-ai (use rule-abstracted spec only)
+ *   --skip-review        skip post-judge Hermes review step
  */
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -28,12 +29,19 @@ function hasFlag(argv, flag) {
 
 function forwardArgs(argv) {
   return argv.filter(
-    arg => arg !== "--with-slack" && arg !== "--skip-abstract-ai"
+    arg =>
+      arg !== "--with-slack" &&
+      arg !== "--skip-abstract-ai" &&
+      arg !== "--skip-review"
   );
 }
 
 function hasSkipAbstractAi(argv) {
   return argv.includes("--skip-abstract-ai");
+}
+
+function hasSkipReview(argv) {
+  return argv.includes("--skip-review");
 }
 
 function runNode(script, args) {
@@ -71,6 +79,15 @@ async function main() {
     ...rest,
   ]);
   if (judgeExit !== 0) exitCode = judgeExit;
+
+  if (!hasSkipReview(argv)) {
+    const reviewExit = runNode("run-hermes-judge-review.mjs", [
+      `--page=${page}`,
+      `--target-path=${targetPath}`,
+      ...rest,
+    ]);
+    if (reviewExit !== 0) exitCode = reviewExit;
+  }
 
   if (withSlack) {
     const slackExit = runNode("slack-page-qa-report.mjs", [

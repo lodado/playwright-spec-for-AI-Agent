@@ -12,6 +12,7 @@ const COMMANDS = {
   abstract: "abstract-page-qa-spec.mjs",
   "abstract-ai": "run-hermes-spec-abstractor.mjs",
   judge: "run-hermes-page-judge.mjs",
+  review: "run-hermes-judge-review.mjs",
   slack: "slack-page-qa-report.mjs",
   nightly: "run-page-qa-nightly.mjs",
 };
@@ -26,8 +27,9 @@ Commands:
   abstract    Re-apply rule abstraction on existing qa-spec JSON
   abstract-ai Hermes rewrites expectations for live staging (→ qa-spec-live.json)
   judge       Hermes logs into staging, visits the page, and judges live DOM
+  review      Hermes re-reviews judge results (evidence + pedantic pass/fail)
   slack       Post verdict to Slack webhook
-  nightly     spec → abstract-ai → judge → (optional slack)
+  nightly     spec → abstract-ai → judge → review → (optional slack)
 
 Common options:
   --page=<slug>              Page id (required for most commands)
