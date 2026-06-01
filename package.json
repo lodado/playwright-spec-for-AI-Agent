@@ -45,6 +45,8 @@
   ],
   "scripts": {
     "qa:spec": "node bin/playwright-spec-for-ai-agent.mjs spec",
+    "qa:abstract": "node bin/playwright-spec-for-ai-agent.mjs abstract",
+    "qa:abstract-ai": "node bin/playwright-spec-for-ai-agent.mjs abstract-ai",
     "qa:judge": "node bin/playwright-spec-for-ai-agent.mjs judge",
     "qa:slack": "node bin/playwright-spec-for-ai-agent.mjs slack",
     "qa:nightly": "node bin/playwright-spec-for-ai-agent.mjs nightly",
@@ -63,6 +65,7 @@
     }
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "vitest": "^3.2.4"
   },
   "engines": {

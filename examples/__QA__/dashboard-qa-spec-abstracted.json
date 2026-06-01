@@ -1,5 +1,10 @@
 {
   "generatedAt": "2026-06-01T13:46:20.424Z",
   "sourceDirectory": "C:\\Users\\chungheonlee\\Desktop\\programming\\sdui-template\\playwright-spec-for-AI-Agent\\examples",
-  "scenarios": []
+  "scenarios": [],
+  "abstraction": {
+    "rulesVersion": "1.0.0",
+    "appliedAt": "2026-06-01T13:46:20.427Z",
+    "stage": "rules"
+  }
 }

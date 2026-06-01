@@ -35,15 +35,17 @@ It turns Playwright specs from deterministic test scripts into AI-readable QA sc
 Annotations (`@qa-scenario`, `@qa-live-policy`, `@qa-fixture`) declare what is safe to verify on live; Hermes handles the rest.
 
 ```
-spec → judge → slack (optional)
+spec → abstract-ai → judge → slack (optional)
 ```
 
-| Command   | What it does                                                                                       |
-| --------- | -------------------------------------------------------------------------------------------------- |
-| `spec`    | Parses `*.spec.ts` files annotated with `@qa-scenario` into a JSON + Markdown spec                 |
-| `judge`   | Hermes logs in, visits `--target-path`, infers scenario, returns `pass` / `fail` / `manual_review` |
-| `slack`   | Posts the verdict to a Slack webhook on `fail` or `manual_review` (not on `pass`)                  |
-| `nightly` | Runs `spec` → `judge` → optional `slack` in one command                                            |
+| Command       | What it does                                                                                       |
+| ------------- | -------------------------------------------------------------------------------------------------- |
+| `spec`        | Parses `*.spec.ts` → `{page}-qa-spec.json`, rule-abstracted JSON, and Markdown                     |
+| `abstract`    | Re-applies rule abstraction on an existing `{page}-qa-spec.json`                                   |
+| `abstract-ai` | Hermes rewrites expectations for live staging → `{page}-qa-spec-live.json`                         |
+| `judge`       | Hermes logs in, visits `--target-path`, infers scenario, returns `pass` / `fail` / `manual_review` |
+| `slack`       | Posts the verdict to a Slack webhook on `fail` or `manual_review` (not on `pass`)                  |
+| `nightly`     | Runs `spec` → `abstract-ai` → `judge` → optional `slack` (`--skip-abstract-ai` to skip AI pass)     |
 
 ---
 
@@ -520,17 +522,35 @@ You can still copy `scripts/` into your repo and run `node scripts/extract-page-
 
 ---
 
+## Expectation abstraction (deterministic spec → live staging)
+
+Playwright CI uses fixed mock values (e.g. `98점`, `42,835` credits). Live staging data changes. This package abstracts expectations before `judge`:
+
+1. **Rules (`spec` / `abstract`)** — converts numeric literals to regex wildcards or `semantic` intents (`score`, `percent`, `iso-date`). See `scripts/expectation-abstractor.mjs`.
+2. **AI (`abstract-ai`)** — Hermes refines expectations using `specSourceFiles` context. Output: `{page}-qa-spec-live.json`. Validated locally; on failure, falls back to the rule-abstracted spec.
+3. **`judge`** — builds a **Given / When / Then** Markdown test plan from the spec JSON and sends that to Hermes — not a JSON spec blob. Credentials are appended at the end of the prompt. Semantic expectations are judged by **intent**, not exact mock literals.
+
+```bash
+npx playwright-spec-for-ai-agent spec --page=dashboard
+npx playwright-spec-for-ai-agent abstract-ai --page=dashboard --dry-run   # prompt only
+npx playwright-spec-for-ai-agent abstract-ai --page=dashboard
+npx playwright-spec-for-ai-agent judge --page=dashboard --target-path=/dashboard
+```
+
+---
+
 ## Output files
 
 Output directory = `--output-dir` template or `paths.outputDir` in config (default: `src/page/{page}/__QA__/`).
 
 For `--page=billing` and `--output-dir=.qa/{page}`:
 
-| Step  | Files under `.qa/billing/`                                   |
-| ----- | ------------------------------------------------------------ |
-| spec  | `billing-qa-spec.json`, `billing-qa-spec.md`                 |
-| judge | `billing-hermes-judgment.json`, `billing-hermes-judgment.md` |
-| debug | `billing-hermes-query.txt`, `billing-hermes-raw-output.txt`  |
+| Step         | Files under `.qa/billing/`                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| spec         | `billing-qa-spec.json`, `billing-qa-spec-abstracted.json`, `billing-qa-spec.md`            |
+| abstract-ai  | `billing-qa-spec-live.json`, `billing-qa-spec-live.md`, `billing-qa-abstract-audit.json`   |
+| judge        | `billing-hermes-judgment.json`, `billing-hermes-judgment.md`                               |
+| debug        | `billing-hermes-query.txt`, `billing-hermes-raw-output.txt`, `billing-hermes-abstract-*`   |
 
 Slug rule: `--page=settings/billing` → file prefix `settings-billing-`.
 

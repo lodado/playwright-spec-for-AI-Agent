@@ -91,11 +91,20 @@ export function artifactPaths(page, outputDir = resolveOutputDir(page)) {
     outputDir,
     slug,
     specJson: join(outputDir, `${slug}-qa-spec.json`),
+    specAbstractedJson: join(outputDir, `${slug}-qa-spec-abstracted.json`),
+    specLiveJson: join(outputDir, `${slug}-qa-spec-live.json`),
     specMd: join(outputDir, `${slug}-qa-spec.md`),
+    specLiveMd: join(outputDir, `${slug}-qa-spec-live.md`),
+    abstractAuditJson: join(outputDir, `${slug}-qa-abstract-audit.json`),
     hermesJudgmentJson: join(outputDir, `${slug}-hermes-judgment.json`),
     hermesJudgmentMd: join(outputDir, `${slug}-hermes-judgment.md`),
     hermesRawOutput: join(outputDir, `${slug}-hermes-raw-output.txt`),
     hermesQuery: join(outputDir, `${slug}-hermes-query.txt`),
+    hermesAbstractQuery: join(outputDir, `${slug}-hermes-abstract-query.txt`),
+    hermesAbstractRawOutput: join(
+      outputDir,
+      `${slug}-hermes-abstract-raw-output.txt`
+    ),
   };
 }
 

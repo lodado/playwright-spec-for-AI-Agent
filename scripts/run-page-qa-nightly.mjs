@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Orchestrate spec -> judge -> (optional slack) for any page.
+ * Orchestrate spec -> abstract-ai -> judge -> (optional slack) for any page.
  *
  * Usage:
  *   npx playwright-spec-for-ai-agent nightly --page=pricing --with-slack
@@ -8,7 +8,8 @@
  * Flags:
  *   --page=       (required)
  *   --target-path= optional when targetPaths / pages.*.targetPath is set
- *   --with-slack  post Slack on fail/manual_review
+ *   --with-slack         post Slack on fail/manual_review
+ *   --skip-abstract-ai   skip Hermes abstract-ai (use rule-abstracted spec only)
  */
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -26,7 +27,13 @@ function hasFlag(argv, flag) {
 }
 
 function forwardArgs(argv) {
-  return argv.filter(arg => arg !== "--with-slack");
+  return argv.filter(
+    arg => arg !== "--with-slack" && arg !== "--skip-abstract-ai"
+  );
+}
+
+function hasSkipAbstractAi(argv) {
+  return argv.includes("--skip-abstract-ai");
 }
 
 function runNode(script, args) {
@@ -49,6 +56,14 @@ async function main() {
 
   exitCode = runNode("extract-page-e2e-spec.mjs", [`--page=${page}`, ...rest]);
   if (exitCode !== 0) process.exit(exitCode);
+
+  if (!hasSkipAbstractAi(argv)) {
+    const abstractExit = runNode("run-hermes-spec-abstractor.mjs", [
+      `--page=${page}`,
+      ...rest,
+    ]);
+    if (abstractExit !== 0) exitCode = abstractExit;
+  }
 
   const judgeExit = runNode("run-hermes-page-judge.mjs", [
     `--page=${page}`,
