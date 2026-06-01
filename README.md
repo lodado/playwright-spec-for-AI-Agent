@@ -425,7 +425,7 @@ Every `test()` in an annotated file needs a live policy — place it directly ab
 - **`mock-judgment`** — test uses `page.route` mocks; Hermes judges the live equivalent without mocking.
 - **`subscription-mutation` / `auth-mock`** — Hermes records `skip` in `checks[]` (overall status stays `pass` if everything else passes).
 
-Use `mock-judgment` when the original Playwright test depends on `page.route()` or mocked API states. Hermes will not replay the mock. Instead, it judges whether the live page exposes an equivalent user-visible state, CTA, copy, fallback, disabled control, or empty/error UI.
+Use `mock-judgment` when the original Playwright test depends on `page.route()` or mocked API states. Hermes will not replay the mock. Live values are **non-deterministic**. **pass** if the UI reasonably matches intent; **manual_review** if ambiguous; **fail** only if clearly wrong — not because live text/numbers differ from the mock.
 
 Example:
 

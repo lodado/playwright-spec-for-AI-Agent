@@ -17,7 +17,8 @@ const POLICY_WHEN = {
   ],
   "judgment-mock-api": [
     "View the page as a real user (CI used API mocks — do not call page.route or inject mocks on live).",
-    "Compare what you see to the test intent below and in Playwright source.",
+    "Live data will differ from CI mocks; that is expected and non-deterministic.",
+    "Compare what you see to the test **intent** below and in Playwright source — not to exact mock values.",
   ],
   "blocked-subscription-mutation": [
     "Do not run this test on live — it would change subscription or billing.",
@@ -148,7 +149,9 @@ function buildGivenWhenThen(test, scenario) {
   }
 
   if (test.liveRunPolicy === "judgment-mock-api") {
-    given.push("CI ran with mocked APIs; live staging uses real data.");
+    given.push(
+      "CI ran with mocked APIs; live staging uses real data — values are **non-deterministic** and cannot be reproduced exactly."
+    );
   }
 
   const when =
@@ -179,22 +182,27 @@ function buildGivenWhenThen(test, scenario) {
     then.push(
       "After the When steps, the page matches the assertions in the Playwright source below."
     );
-  } else if (
-    test.liveRunPolicy === "judgment-mock-api" ||
-    test.liveRunPolicy === "judgment-interaction-no-confirm"
-  ) {
+  } else if (test.liveRunPolicy === "judgment-interaction-no-confirm") {
     then.push(
-      "The live UI matches the user-visible intent from the Playwright source (not necessarily the mocked CI values)."
+      "The live UI matches the user-visible intent from the Playwright source up to the safe verification point."
+    );
+  } else if (test.liveRunPolicy === "judgment-mock-api") {
+    then.push(
+      "The live UI reasonably matches user-visible **intent** (mock API values from CI are not required on live)."
     );
   }
 
-  if (test.abstractReview) {
+  if (test.liveRunPolicy === "judgment-mock-api") {
     then.push(
-      "Verdict: **pass** if Then holds, **fail** if clearly broken, **manual_review** if ambiguous (prefer manual_review over fail)."
+      "Verdict (mock-api): **pass** if reasonable for intent · **manual_review** if ambiguous · **fail** only if clearly wrong — never fail solely because live text/numbers differ from the mock."
+    );
+  } else if (test.abstractReview) {
+    then.push(
+      "Verdict: **pass** if Then holds · **manual_review** if ambiguous · **fail** only if clearly broken."
     );
   } else {
     then.push(
-      "Verdict: **pass** if Then holds, **fail** if clearly broken, **manual_review** if ambiguous."
+      "Verdict: **pass** if Then holds · **manual_review** if ambiguous · **fail** only if clearly broken."
     );
   }
 
@@ -381,7 +389,7 @@ export function renderJudgeHermesDocument({
     "1. Pick **one** scenario that matches the live account.",
     "2. Run every test in that scenario (each G/W/T block).",
     "3. Also run scenarios marked **always-run**.",
-    "4. On **Then**: semantic expectations match **intent**, not exact CI mock numbers.",
+    "4. On **Then**: mock-api / semantic expectations — **pass** if reasonable for intent, **manual_review** if ambiguous (never fail only because live ≠ mock).",
     ""
   );
 

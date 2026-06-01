@@ -4,7 +4,7 @@ const CRITERION_QUESTIONS = {
   "sufficient-evidence":
     "Were the live QA checks conducted in a generally reasonable way, with enough observational evidence in each check detail to trust the results?",
   "not-overly-pedantic":
-    "Did the judge avoid overly narrow pass/fail calls (e.g. requiring an exact template name like '세금계산서' when the intent was only that a template is visible)?",
+    "For mock-api / non-deterministic values: did the judge pass when reasonable, use manual_review when ambiguous, and avoid failing only because live differed from CI mocks?",
 };
 
 const ALLOWED_VERDICTS = new Set(["pass", "concern", "fail"]);

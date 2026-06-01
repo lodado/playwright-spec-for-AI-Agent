@@ -280,6 +280,8 @@ describe("classifyLiveRunPolicy", () => {
   });
 
   it("describes judgment-mock-api for Hermes discretion", () => {
-    expect(describeLiveRunPolicy("judgment-mock-api")).toMatch(/Hermes judges/);
+    expect(describeLiveRunPolicy("judgment-mock-api")).toMatch(
+      /reasonably matches intent/i,
+    );
   });
 });

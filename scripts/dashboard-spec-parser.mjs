@@ -354,7 +354,7 @@ export function describeLiveRunPolicy(liveRunPolicy) {
     case "judgment-interaction-no-confirm":
       return "UI action where completing verification would be dangerous on live — Hermes replays safe open steps, verifies up to the dangerous point, dismisses with Esc only (never clicks confirm)";
     case "judgment-mock-api":
-      return "Playwright skips (page.route mocks); Hermes judges whether live DOM satisfies test intent without mocking";
+      return "CI uses API mocks (not replayable on live); Hermes passes if live UI reasonably matches intent, manual_review if ambiguous";
     case "blocked-subscription-mutation":
       return "skipped on Playwright; Hermes must not mutate subscription/billing";
     case "blocked-auth-mock":
