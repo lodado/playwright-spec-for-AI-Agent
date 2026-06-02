@@ -435,12 +435,19 @@ export function parseReadOnlyExpectations(body) {
   return expectations;
 }
 
-export {
+import {
   adaptExpectationForLive,
   liveRegexFromLiteral,
   literalExpectedForLive,
   liveTextLocatorForLive,
 } from "./expectation-abstractor.mjs";
+
+export {
+  adaptExpectationForLive,
+  liveRegexFromLiteral,
+  literalExpectedForLive,
+  liveTextLocatorForLive,
+};
 
 function slugify(value) {
   return value
