@@ -19,7 +19,7 @@ import {
   parsePageArg,
   resolveSpecDir,
 } from "./page-qa-paths.mjs";
-import { renderQaSpecMarkdown } from "./qa-spec-markdown.mjs";
+import { renderLiveSpecMarkdown } from "./qa-spec-live-artifact.mjs";
 
 const HERMES_MAX_TURNS_ABSTRACT = 40;
 
@@ -139,7 +139,12 @@ async function main() {
   );
   writeFileSync(
     paths.specLiveMd,
-    renderQaSpecMarkdown(normalized.spec, page, { titleSuffix: " (Live)" })
+    renderLiveSpecMarkdown({
+      spec: normalized.spec,
+      page,
+      specDir,
+      audit: normalized.audit,
+    })
   );
 
   console.log(`Live spec (AI): ${paths.specLiveJson}`);

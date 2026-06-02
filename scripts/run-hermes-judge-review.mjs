@@ -176,17 +176,13 @@ async function main() {
     );
   }
 
-  const testPlanPath = existsSync(paths.specLiveMd)
-    ? paths.specLiveMd
-    : existsSync(paths.specMd)
-      ? paths.specMd
-      : null;
-
-  if (!testPlanPath) {
+  if (!existsSync(paths.specLiveMd)) {
     throw new Error(
-      `Missing qa spec markdown. Run spec --page=${page} first.`
+      `Missing ${paths.slug}-qa-spec-live.md. Run spec --page=${page} first.`
     );
   }
+
+  const testPlanPath = paths.specLiveMd;
 
   const targetPathArg = argv.find(a => a.startsWith("--target-path="));
   const targetPath = targetPathArg?.slice("--target-path=".length) ?? null;

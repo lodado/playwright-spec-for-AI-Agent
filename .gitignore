@@ -1,3 +1,5 @@
 node_modules/
 .env
 *.png
+.qa/
+**/__QA__/

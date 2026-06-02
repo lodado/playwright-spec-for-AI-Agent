@@ -38,15 +38,14 @@ Annotations (`@qa-scenario`, `@qa-live-policy`, `@qa-fixture`) declare what is s
 spec → abstract-ai → judge → review → slack (optional)
 ```
 
-| Command       | What it does                                                                                       |
-| ------------- | -------------------------------------------------------------------------------------------------- |
-| `spec`        | Parses `*.spec.ts` → `{page}-qa-spec.json`, rule-abstracted JSON, and Markdown                     |
-| `abstract`    | Re-applies rule abstraction on an existing `{page}-qa-spec.json`                                   |
-| `abstract-ai` | Hermes rewrites expectations for live staging → `{page}-qa-spec-live.json`                         |
-| `judge`       | Hermes logs in, visits `--target-path`, infers scenario, returns `pass` / `fail` / `manual_review` |
-| `review`      | Hermes re-reviews judge output (evidence quality + overly pedantic pass/fail) — no browsing          |
-| `slack`       | Posts the verdict to a Slack webhook on `fail` or `manual_review` (not on `pass`)                  |
-| `nightly`     | `spec` → `abstract-ai` → `judge` → `review` → optional `slack`                                     |
+| Command       | What it does                                                                                        |
+| ------------- | --------------------------------------------------------------------------------------------------- |
+| `spec`        | Parses `*.spec.ts` → raw JSON, rule-abstracted JSON, `{page}-qa-spec-live.md`                       |
+| `abstract-ai` | Hermes refines live JSON + `{page}-qa-spec-live.md` (optional; `spec` already writes rule-based md) |
+| `judge`       | Hermes logs in, visits `--target-path`, infers scenario, returns `pass` / `fail` / `manual_review`  |
+| `review`      | Hermes re-reviews judge output (evidence quality + overly pedantic pass/fail) — no browsing         |
+| `slack`       | Posts the verdict to a Slack webhook on `fail` or `manual_review` (not on `pass`)                   |
+| `nightly`     | `spec` → `abstract-ai` → `judge` → `review` → optional `slack`                                      |
 
 ---
 
@@ -235,7 +234,8 @@ your-app/
 └── .qa/
     └── billing/              # generated (gitignore this)
         ├── billing-qa-spec.json
-        ├── billing-qa-spec.md
+        ├── billing-qa-spec-live.md
+        ├── billing-qa-judge-plan.md
         ├── billing-hermes-judgment.json
         ├── billing-hermes-judgment.md
         └── billing-hermes-raw-output.txt   # debug only
@@ -527,9 +527,9 @@ You can still copy `scripts/` into your repo and run `node scripts/extract-page-
 
 Playwright CI uses fixed mock values (e.g. `98점`, `42,835` credits). Live staging data changes. This package abstracts expectations before `judge`:
 
-1. **Rules (`spec` / `abstract`)** — converts numeric literals to regex wildcards or `semantic` intents (`score`, `percent`, `iso-date`). See `scripts/expectation-abstractor.mjs`.
-2. **AI (`abstract-ai`)** — Hermes refines expectations using `specSourceFiles` context. Output: `{page}-qa-spec-live.json`. Validated locally; on failure, falls back to the rule-abstracted spec.
-3. **`judge`** — builds a **Given / When / Then** Markdown test plan from the spec JSON and sends that to Hermes — not a JSON spec blob. Credentials are appended at the end of the prompt. Semantic expectations are judged by **intent**, not exact mock literals.
+1. **Rules (`spec`)** — converts numeric literals to regex wildcards or `semantic` intents (`score`, `percent`, `iso-date`). Re-run `spec` to refresh rule abstraction. See `scripts/expectation-abstractor.mjs`.
+2. **AI (`abstract-ai`)** — Hermes refines expectations using `specSourceFiles` context. Output: `{page}-qa-spec-live.json` and `{page}-qa-spec-live.md` (full GWT plan, fixtures, Playwright sources, optional audit table). Validated locally; on failure, falls back to the rule-abstracted spec.
+3. **`judge`** — loads `{page}-qa-spec-live.json` for structure/fixtures and **`{page}-qa-spec-live.md`** for the test plan (prepends session setup only; does not overwrite the live spec markdown). Writes `{page}-qa-judge-plan.md` for debugging. Hermes receives GWT markdown, not raw JSON. Credentials are appended at the end of the prompt.
 
 ```bash
 npx playwright-spec-for-ai-agent spec --page=dashboard
@@ -545,10 +545,10 @@ npx playwright-spec-for-ai-agent review --page=dashboard
 
 After `judge`, Hermes reviews the **judge's results** (no re-browsing). It scores two criteria separately:
 
-| Criterion ID           | Question                                                                 |
-| ---------------------- | ------------------------------------------------------------------------ |
-| `sufficient-evidence`  | Were checks run convincingly, with enough detail to trust pass/fail/skip? |
-| `not-overly-pedantic`  | Did the judge avoid nitpicks (e.g. exact label `세금계산서` vs “template visible”)? |
+| Criterion ID          | Question                                                                            |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| `sufficient-evidence` | Were checks run convincingly, with enough detail to trust pass/fail/skip?           |
+| `not-overly-pedantic` | Did the judge avoid nitpicks (e.g. exact label `세금계산서` vs “template visible”)? |
 
 Each criterion gets `pass` \| `concern` \| `fail`. `overallReview` is `approved` or `flagged` (flagged if any concern/fail).
 
@@ -564,13 +564,13 @@ Output directory = `--output-dir` template or `paths.outputDir` in config (defau
 
 For `--page=billing` and `--output-dir=.qa/{page}`:
 
-| Step         | Files under `.qa/billing/`                                                                 |
-| ------------ | ------------------------------------------------------------------------------------------ |
-| spec         | `billing-qa-spec.json`, `billing-qa-spec-abstracted.json`, `billing-qa-spec.md`            |
-| abstract-ai  | `billing-qa-spec-live.json`, `billing-qa-spec-live.md`, `billing-qa-abstract-audit.json`   |
-| judge        | `billing-hermes-judgment.json`, `billing-hermes-judgment.md`                               |
-| review       | `billing-hermes-judge-review.json`, `billing-hermes-judge-review.md`                     |
-| debug        | `billing-hermes-query.txt`, `billing-hermes-raw-output.txt`, `billing-hermes-abstract-*`, `billing-hermes-judge-review-*` |
+| Step        | Files under `.qa/billing/`                                                                                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| spec        | `billing-qa-spec.json`, `billing-qa-spec-abstracted.json`, `billing-qa-spec-live.md` (rules-only until abstract-ai)                                                             |
+| abstract-ai | updates `billing-qa-spec-live.json` + `.md`; `billing-qa-abstract-audit.json`                                                                                                   |
+| judge       | reads `billing-qa-spec-live.json` + `billing-qa-spec-live.md`; writes `billing-qa-judge-plan.md` (session + plan), `billing-hermes-judgment.json`, `billing-hermes-judgment.md` |
+| review      | `billing-hermes-judge-review.json`, `billing-hermes-judge-review.md`                                                                                                            |
+| debug       | `billing-hermes-query.txt`, `billing-hermes-raw-output.txt`, `billing-hermes-abstract-*`, `billing-hermes-judge-review-*`                                                       |
 
 Slug rule: `--page=settings/billing` → file prefix `settings-billing-`.
 
@@ -667,7 +667,7 @@ Hermes should return:
 | `Missing --page=`                            | Missing page argument            | Add `--page=billing` (after `--` for npm scripts)            |
 | `ENOENT` / empty spec dir                    | Wrong `--spec-dir`               | Check path; use `tests/e2e/{page}` and existing specs        |
 | `Missing staging QA credentials`             | No email/password                | Set `.env` or `STAGING_QA_*` env vars                        |
-| `Missing {page}-qa-spec.md`                  | spec step not run                | Run `npx playwright-spec-for-ai-agent spec --page=...` first |
+| `Missing {page}-qa-spec-live.md`             | spec step not run                | Run `npx playwright-spec-for-ai-agent spec --page=...` first |
 | `QA fixture missing on disk`                 | `@qa-fixture` path wrong         | Commit file under repo; check repo-relative path             |
 | `npx playwright-spec-for-ai-agent` not found | Package not on npm yet           | Use `npx github:lodado/playwright-spec-for-AI-Agent`         |
 | `Hermes did not return a JSON decision`      | Hermes exited without JSON       | Check `{page}-hermes-raw-output.txt`                         |

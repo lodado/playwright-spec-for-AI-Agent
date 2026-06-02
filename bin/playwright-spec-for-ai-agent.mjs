@@ -9,7 +9,6 @@ const SCRIPTS_DIR = join(PACKAGE_ROOT, "scripts");
 
 const COMMANDS = {
   spec: "extract-page-e2e-spec.mjs",
-  abstract: "abstract-page-qa-spec.mjs",
   "abstract-ai": "run-hermes-spec-abstractor.mjs",
   judge: "run-hermes-page-judge.mjs",
   review: "run-hermes-judge-review.mjs",
@@ -23,9 +22,8 @@ Usage:
   npx playwright-spec-for-ai-agent <command> [options]
 
 Commands:
-  spec        Parse @qa-scenario specs → JSON + Markdown + rule-abstracted JSON
-  abstract    Re-apply rule abstraction on existing qa-spec JSON
-  abstract-ai Hermes rewrites expectations for live staging (→ qa-spec-live.json)
+  spec        Parse @qa-scenario specs → JSON, rule-abstracted JSON, qa-spec-live.md
+  abstract-ai Hermes refines live spec (→ qa-spec-live.json + .md)
   judge       Hermes logs into staging, visits the page, and judges live DOM
   review      Hermes re-reviews judge results (evidence + pedantic pass/fail)
   slack       Post verdict to Slack webhook

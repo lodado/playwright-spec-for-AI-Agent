@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildJudgeBrowseDocument,
   renderFriendlyQaSpecMarkdown,
   renderJudgeHermesDocument,
 } from "../qa-spec-judge-document.mjs";
@@ -37,7 +38,7 @@ const sampleSpec = {
 };
 
 describe("renderJudgeHermesDocument", () => {
-  it("uses plain language instead of JSON spec blobs", () => {
+  it("uses compact GWT without JSON blobs or lecture text", () => {
     const doc = renderJudgeHermesDocument({
       page: "dashboard",
       spec: sampleSpec,
@@ -54,10 +55,12 @@ describe("renderJudgeHermesDocument", () => {
     expect(doc).toContain("**Given:**");
     expect(doc).toContain("**When:**");
     expect(doc).toContain("**Then:**");
-    expect(doc).toContain("data-testid=\"health-score\"");
+    expect(doc).toContain('[data-testid="health-score"]');
     expect(doc).toContain("numeric health score");
+    expect(doc).toContain('mock:"98점"');
     expect(doc).not.toContain('"specDefinition"');
-    expect(doc).not.toContain('"liveRunPolicy"');
+    expect(doc).not.toContain("non-deterministic");
+    expect(doc).not.toContain("How to use this plan");
   });
 });
 
@@ -85,7 +88,6 @@ describe("buildBrowseHermesQuery", () => {
       },
     });
 
-    expect(query).toContain("QA test plan");
     expect(query).toContain("shows health score");
     expect(query).not.toContain('"scenarios"');
     expect(query).not.toContain("specDefinition");
@@ -97,13 +99,45 @@ describe("renderFriendlyQaSpecMarkdown", () => {
   it("omits login section for saved spec files", () => {
     const md = renderFriendlyQaSpecMarkdown(sampleSpec, "dashboard");
     expect(md).toContain("Dashboard QA spec");
-    expect(md).toContain("Given / When / Then");
-    expect(md).not.toContain("Signed in as:");
+    expect(md).not.toContain("login:");
+    expect(md).not.toContain("non-deterministic");
+  });
+
+  it("includes Playwright sources when provided", () => {
+    const md = renderFriendlyQaSpecMarkdown(sampleSpec, "dashboard", {
+      specSourceFiles: {
+        "dashboard-active.spec.ts": 'test("x", async () => {});',
+      },
+    });
+    expect(md).toContain("## Playwright");
+    expect(md).toContain("dashboard-active.spec.ts");
+  });
+});
+
+describe("buildJudgeBrowseDocument", () => {
+  it("prepends compact session header to spec-live markdown", () => {
+    const liveBody = renderFriendlyQaSpecMarkdown(sampleSpec, "dashboard");
+    const { document, planSource } = buildJudgeBrowseDocument({
+      page: "dashboard",
+      spec: sampleSpec,
+      specLiveMarkdown: liveBody,
+      planSource: "spec-live.md",
+      stagingLogin: {
+        loginUrl: "https://staging.example/login",
+        email: "qa@example.com",
+        targetUrl: "https://staging.example/dashboard",
+      },
+      alwaysRunScenarioIds: [],
+    });
+
+    expect(planSource).toBe("spec-live.md");
+    expect(document).toContain("login:");
+    expect(document).toContain("shows health score");
   });
 });
 
 describe("Given-When-Then for blocked policies", () => {
-  it("marks When as do-not-run and Then as skip", () => {
+  it("marks When as skip and Then as skip", () => {
     const spec = {
       scenarios: [
         {
@@ -129,7 +163,7 @@ describe("Given-When-Then for blocked policies", () => {
       specSourceFiles: {},
     });
 
-    expect(doc).toContain("Do not run this test on live");
-    expect(doc).toContain("Record **skip**");
+    expect(doc).toContain("Skip on live");
+    expect(doc).toContain("- skip");
   });
 });

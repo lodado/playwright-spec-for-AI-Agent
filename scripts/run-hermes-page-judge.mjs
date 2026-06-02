@@ -6,7 +6,7 @@
  *   npx playwright-spec-for-ai-agent judge --page=pricing --target-path=/pricing
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runHermes } from "./hermes-runner.mjs";
 import { resolveSpecForJudge } from "./resolve-spec-for-judge.mjs";
@@ -17,67 +17,20 @@ import {
 } from "./staging-qa-config.mjs";
 import { resolveStagingQaConfig } from "./staging-qa-prompt.mjs";
 import { listAlwaysRunScenarios } from "./dashboard-spec-parser.mjs";
-import { renderJudgeHermesDocument } from "./qa-spec-judge-document.mjs";
+import { buildJudgeBrowseDocument } from "./qa-spec-judge-document.mjs";
+import {
+  buildUploadFixturesPayload,
+  loadSpecSourceFiles,
+} from "./qa-spec-artifacts.mjs";
 import {
   artifactPaths,
   ensureProjectConfig,
-  listAnnotatedSpecFiles,
   parsePageArg,
   parseTargetPathArg,
   resolveSpecDir,
 } from "./page-qa-paths.mjs";
-import {
-  getProjectConfig,
-  mergeUploadFixtures,
-  resolveDefaultUploadFixtures,
-  resolveFixturePaths,
-} from "./hermes-qa-project-config.mjs";
 
 const HERMES_MAX_TURNS_BROWSE = 150;
-
-function loadSpecSourceFiles(specDir) {
-  const files = listAnnotatedSpecFiles(specDir);
-  const result = {};
-  for (const file of files) {
-    result[file] = readFileSync(join(specDir, file), "utf8");
-  }
-  return result;
-}
-
-function buildUploadFixturesPayload(specDefinition, page) {
-  const projectRoot = getProjectConfig().root;
-  const configDefaults = resolveDefaultUploadFixtures(page);
-  const resolvedDefaults = resolveFixturePaths(configDefaults, projectRoot);
-  const byCheckId = {};
-
-  for (const scenario of specDefinition?.scenarios ?? []) {
-    const scenarioDefaults = mergeUploadFixtures(
-      configDefaults,
-      scenario.fixtures ?? {}
-    );
-    for (const test of scenario.tests ?? []) {
-      const merged = mergeUploadFixtures(scenarioDefaults, test.fixtures ?? {});
-      if (Object.keys(merged).length === 0) continue;
-      byCheckId[test.checkId] = resolveFixturePaths(merged, projectRoot);
-    }
-  }
-
-  const allPaths = new Set([
-    ...Object.values(resolvedDefaults),
-    ...Object.values(byCheckId).flatMap(entry => Object.values(entry)),
-  ]);
-  for (const absPath of allPaths) {
-    if (!existsSync(absPath)) {
-      console.warn(`QA fixture missing on disk: ${absPath}`);
-    }
-  }
-
-  return {
-    projectRoot,
-    defaults: resolvedDefaults,
-    byCheckId,
-  };
-}
 
 export function buildBrowseHermesQuery({
   judgeDocument,
@@ -229,26 +182,35 @@ async function runBrowseJudge(page, targetPath, paths, config) {
     scenario => scenario.scenarioId
   );
 
-  const judgeDocument = renderJudgeHermesDocument({
+  const savedPlanMarkdown = existsSync(paths.specLiveMd)
+    ? readFileSync(paths.specLiveMd, "utf8")
+    : null;
+  const savedPlanSource = savedPlanMarkdown ? "spec-live.md" : null;
+
+  const { document: judgeDocument, planSource } = buildJudgeBrowseDocument({
     page,
     spec: specDefinition,
+    specLiveMarkdown: savedPlanMarkdown,
+    planSource: savedPlanSource,
     stagingLogin: {
       loginUrl: stagingLogin.loginUrl,
       email: stagingLogin.email,
       targetUrl: stagingLogin.targetUrl,
-    },
-    accountContext: {
-      expectedPlan: config.expectedPlan || null,
-      expectedSubscriptionStatus: config.expectedSubscriptionStatus || null,
-      accountNotes: config.accountNotes || null,
     },
     alwaysRunScenarioIds,
     uploadFixtures,
     specSourceFiles,
   });
 
-  const specMarkdownPath = paths.specLiveMd ?? paths.specMd;
-  writeFileSync(specMarkdownPath, judgeDocument);
+  writeFileSync(paths.specJudgePlanMd, judgeDocument);
+
+  if (planSource === "generated-from-json") {
+    console.warn(
+      `No ${paths.slug}-qa-spec-live.md — generated judge plan from JSON. Run abstract-ai --page=${page} for a stable live spec markdown.`
+    );
+  } else {
+    console.log(`Judge test plan source: ${planSource} (+ session header)`);
+  }
 
   const raw = runHermes(
     buildBrowseHermesQuery({
