@@ -1,10 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildHermesAgentArgs,
   extractHermesFinalResponseText,
   extractJsonFromHermesOutput,
   prepareHermesJsonParseSurface,
   unwrapHermesEnvelope,
 } from "../hermes-runner.mjs";
+
+describe("buildHermesAgentArgs", () => {
+  it("passes disabled_toolsets as a separate argv (Fire comma-safe)", () => {
+    const args = buildHermesAgentArgs("test query", 3, {
+      disabledToolsets: "browser,web,terminal",
+    });
+    const idx = args.indexOf("--disabled_toolsets");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe("browser,web,terminal");
+    expect(args.some((a) => a.startsWith("--disabled_toolsets="))).toBe(false);
+  });
+});
 
 describe("extractHermesFinalResponseText", () => {
   it("pulls JSON from FINAL RESPONSE block after banners", () => {

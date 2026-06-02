@@ -80,8 +80,9 @@ export function buildHermesAgentArgs(
     `--model=${model}`,
   ];
   if (baseUrl) args.push(`--base_url=${baseUrl}`);
+  // Fire treats commas in `--disabled_toolsets=a,b` as a tuple; pass a single string argv.
   if (disabledToolsets) {
-    args.push(`--disabled_toolsets=${disabledToolsets}`);
+    args.push("--disabled_toolsets", disabledToolsets);
   }
   if (verbose) args.push("--verbose");
   return args;
