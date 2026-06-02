@@ -9,11 +9,15 @@ const POLICY_WHEN = {
   "blocked-unknown": "Skip on live.",
 };
 
-function pageLabel(page) {
+export function pageLabelFromSlug(page) {
   return page
     .split("/")
     .map(segment => segment.charAt(0).toUpperCase() + segment.slice(1))
     .join(" ");
+}
+
+function pageLabel(page) {
+  return pageLabelFromSlug(page);
 }
 
 function formatLocator(locator) {
@@ -244,9 +248,10 @@ export function renderJudgeSessionHeader({
   return `${lines.join("\n")}\n`;
 }
 
-function renderJudgeScenarioBody(
+/** GWT scenario/test blocks only (no uploads or Playwright sources). */
+export function renderGwtPlanFromSpec(
   spec,
-  { alwaysRunScenarioIds = [], uploadFixtures = null, specSourceFiles = {} } = {}
+  { alwaysRunScenarioIds = [] } = {}
 ) {
   const alwaysRunSet = new Set(alwaysRunScenarioIds);
   const lines = [];
@@ -259,10 +264,24 @@ function renderJudgeScenarioBody(
     );
   }
 
-  lines.push(...renderUploadFixtures(uploadFixtures));
-  lines.push(...renderPlaywrightSources(specSourceFiles));
-
   return `${lines.join("\n")}\n`;
+}
+
+export function renderLiveSpecAppendices({
+  uploadFixtures = null,
+  specSourceFiles = {},
+} = {}) {
+  return [
+    ...renderUploadFixtures(uploadFixtures),
+    ...renderPlaywrightSources(specSourceFiles),
+  ].join("");
+}
+
+function renderJudgeScenarioBody(
+  spec,
+  { alwaysRunScenarioIds = [], uploadFixtures = null, specSourceFiles = {} } = {}
+) {
+  return `${renderGwtPlanFromSpec(spec, { alwaysRunScenarioIds })}${renderLiveSpecAppendices({ uploadFixtures, specSourceFiles })}`;
 }
 
 export function renderAbstractAuditAppendix(audit) {

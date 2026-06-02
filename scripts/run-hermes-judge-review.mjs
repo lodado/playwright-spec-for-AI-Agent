@@ -20,7 +20,7 @@ import {
   parsePageArg,
 } from "./page-qa-paths.mjs";
 
-const HERMES_MAX_TURNS_REVIEW = 40;
+const HERMES_MAX_TURNS_REVIEW = 6;
 
 function readText(path) {
   if (!existsSync(path)) return null;
@@ -178,7 +178,7 @@ async function main() {
 
   if (!existsSync(paths.specLiveMd)) {
     throw new Error(
-      `Missing ${paths.slug}-qa-spec-live.md. Run spec --page=${page} first.`
+      `Missing ${paths.slug}-qa-spec-live.md. Run abstract-ai --page=${page} first.`
     );
   }
 
@@ -206,6 +206,7 @@ async function main() {
       hermesReviewRawOutput: paths.hermesReviewRawOutput,
     },
     requiredKeys: ["criteria", "overallReview"],
+    mode: "text-only",
   });
 
   const review = normalizeJudgeReview(raw, judgment);

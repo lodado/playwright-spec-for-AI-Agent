@@ -14,11 +14,9 @@ import { abstractSpec } from "./expectation-abstractor.mjs";
 import {
   artifactPaths,
   ensureProjectConfig,
-  formatSpecDirLabel,
   parsePageArg,
   resolveSpecDir,
 } from "./page-qa-paths.mjs";
-import { renderLiveSpecMarkdown } from "./qa-spec-live-artifact.mjs";
 
 function pageLabel(page) {
   return page
@@ -32,24 +30,15 @@ async function main() {
   await ensureProjectConfig(argv);
   const page = parsePageArg(argv);
   const specDir = resolveSpecDir(page);
-  const {
-    outputDir,
-    specJson: jsonPath,
-    specAbstractedJson,
-    specLiveMd,
-  } = artifactPaths(page);
+  const { specJson: jsonPath, specAbstractedJson } = artifactPaths(page);
 
-  mkdirSync(outputDir, { recursive: true });
+  mkdirSync(artifactPaths(page).outputDir, { recursive: true });
 
   const spec = parseSpecDirectory(specDir);
   const abstracted = abstractSpec(spec);
 
   writeFileSync(jsonPath, `${JSON.stringify(spec, null, 2)}\n`);
   writeFileSync(specAbstractedJson, `${JSON.stringify(abstracted, null, 2)}\n`);
-  writeFileSync(
-    specLiveMd,
-    renderLiveSpecMarkdown({ spec: abstracted, page, specDir })
-  );
 
   const scenarioIds = [...new Set(spec.scenarios.map(s => s.scenarioId))];
   const liveScenarios = spec.scenarios.filter(s => !s.liveSkip);
@@ -61,7 +50,7 @@ async function main() {
 
   console.log(`${label(page)} QA spec written: ${jsonPath}`);
   console.log(`${label(page)} rule-abstracted spec: ${specAbstractedJson}`);
-  console.log(`${label(page)} live spec markdown: ${specLiveMd}`);
+  console.log(`  (run abstract-ai --page=${page} for qa-spec-live.json + .md)`);
   for (const line of summary) console.log(`  - ${line}`);
   if (skipCount > 0) {
     console.log(`  (${skipCount} scenario(s) skipped via @qa-live-skip)`);

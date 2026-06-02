@@ -7,6 +7,11 @@ export const REQUIRED_HERMES_AGENT_BIN = "hermes-agent";
 export const HERMES_QA_COMMAND =
   process.env.HERMES_QA_COMMAND?.trim() || REQUIRED_HERMES_AGENT_BIN;
 
+/** Disable browsing/terminal for abstract-ai and review (JSON-in, JSON-out). */
+export const HERMES_QA_TEXT_ONLY_DISABLED_TOOLSETS =
+  process.env.HERMES_QA_DISABLED_TOOLSETS?.trim() ||
+  "browser,web,terminal,execute_code,delegate_task";
+
 export function resolveHermesAgentInvocation() {
   const installRoot = join(homedir(), ".hermes", "hermes-agent");
   const localPython = join(installRoot, "venv", "bin", "python");
@@ -57,7 +62,11 @@ export function readHermesModelConfig() {
   };
 }
 
-export function buildHermesAgentArgs(query, maxTurns) {
+export function buildHermesAgentArgs(
+  query,
+  maxTurns,
+  { disabledToolsets = null, verbose = false } = {}
+) {
   const { model, baseUrl } = readHermesModelConfig();
   if (!model) {
     throw new Error(
@@ -71,36 +80,95 @@ export function buildHermesAgentArgs(query, maxTurns) {
     `--model=${model}`,
   ];
   if (baseUrl) args.push(`--base_url=${baseUrl}`);
+  if (disabledToolsets) {
+    args.push(`--disabled_toolsets=${disabledToolsets}`);
+  }
+  if (verbose) args.push("--verbose");
   return args;
 }
 
-export function extractJsonFromHermesOutput(output, { requiredKeys = ["status"], rawOutputPath = null } = {}) {
+/**
+ * Prefer the model's final answer block over Hermes startup banners.
+ */
+export function extractHermesFinalResponseText(output) {
+  const text = output ?? "";
+  const finalBlock = text.match(
+    /🎯\s*FINAL RESPONSE:\s*\n-+\s*\n([\s\S]*?)(?:\n={3,}|\n📋 CONVERSATION SUMMARY|\n--- stderr ---|$)/i
+  );
+  if (finalBlock?.[1]?.trim()) {
+    return finalBlock[1].trim();
+  }
+
+  const altBlock = text.match(
+    /FINAL RESPONSE:\s*\n-+\s*\n([\s\S]*?)(?:\n={3,}|\n📋 CONVERSATION SUMMARY|$)/i
+  );
+  if (altBlock?.[1]?.trim()) {
+    return altBlock[1].trim();
+  }
+
+  return text;
+}
+
+export function unwrapHermesEnvelope(parsed) {
+  if (!parsed || typeof parsed !== "object") return parsed;
+
+  if (typeof parsed.result === "string") {
+    const trimmed = parsed.result.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return parsed;
+      }
+    }
+  }
+
+  if (parsed.result && typeof parsed.result === "object") {
+    return parsed.result;
+  }
+
+  return parsed;
+}
+
+export function prepareHermesJsonParseSurface(stdout, stderr = "") {
+  const combined = [stdout, stderr].filter(Boolean).join("\n");
+  const final = extractHermesFinalResponseText(combined);
+  return final !== combined ? `${final}\n\n${combined}` : combined;
+}
+
+export function extractJsonFromHermesOutput(
+  output,
+  { requiredKeys = ["status"], rawOutputPath = null } = {}
+) {
+  const surface = extractHermesFinalResponseText(output);
   const candidates = [];
 
-  for (const match of output.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+  for (const match of surface.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
     candidates.push(match[1]);
   }
 
-  for (let start = 0; start < output.length; start += 1) {
-    if (output[start] !== "{") continue;
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    for (let index = start; index < output.length; index += 1) {
-      const char = output[index];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (char === "\\") escaped = true;
-        else if (char === '"') inString = false;
-        continue;
-      }
-      if (char === '"') inString = true;
-      else if (char === "{") depth += 1;
-      else if (char === "}") {
-        depth -= 1;
-        if (depth === 0) {
-          candidates.push(output.slice(start, index + 1));
-          break;
+  for (const source of [surface, output]) {
+    for (let start = 0; start < source.length; start += 1) {
+      if (source[start] !== "{") continue;
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let index = start; index < source.length; index += 1) {
+        const char = source[index];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (char === "\\") escaped = true;
+          else if (char === '"') inString = false;
+          continue;
+        }
+        if (char === '"') inString = true;
+        else if (char === "{") depth += 1;
+        else if (char === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            candidates.push(source.slice(start, index + 1));
+            break;
+          }
         }
       }
     }
@@ -110,7 +178,7 @@ export function extractJsonFromHermesOutput(output, { requiredKeys = ["status"],
 
   for (const candidate of candidates.reverse()) {
     try {
-      const parsed = JSON.parse(candidate);
+      const parsed = unwrapHermesEnvelope(JSON.parse(candidate));
       if (
         parsed &&
         typeof parsed === "object" &&
@@ -125,7 +193,7 @@ export function extractJsonFromHermesOutput(output, { requiredKeys = ["status"],
 
   const artifactHint = rawOutputPath ? ` See raw output: ${rawOutputPath}` : "";
   throw new Error(
-    `Hermes did not return valid JSON (required keys: ${keys.join(", ")}).${artifactHint} Preview: ${output.slice(0, 2_000)}`
+    `Hermes did not return valid JSON (required keys: ${keys.join(", ")}).${artifactHint} Preview: ${surface.slice(0, 2_000)}`
   );
 }
 
@@ -170,12 +238,29 @@ function throwIfHermesAuthRejected(output, rawOutputPath = null) {
   );
 }
 
-export function runHermes(query, maxTurns, { paths = null, secrets = [], requiredKeys = ["status"] } = {}) {
+/**
+ * @param {"browse"|"text-only"} [options.mode]
+ *   text-only — disable browser/terminal toolsets (abstract-ai, review)
+ *   browse — full toolsets (judge)
+ */
+export function runHermes(
+  query,
+  maxTurns,
+  {
+    paths = null,
+    secrets = [],
+    requiredKeys = ["status"],
+    mode = "browse",
+  } = {}
+) {
   if (HERMES_QA_COMMAND !== REQUIRED_HERMES_AGENT_BIN) {
     throw new Error(
       `Hermes command must be exactly ${REQUIRED_HERMES_AGENT_BIN}. Got: ${JSON.stringify(HERMES_QA_COMMAND)}`
     );
   }
+
+  const disabledToolsets =
+    mode === "text-only" ? HERMES_QA_TEXT_ONLY_DISABLED_TOOLSETS : null;
 
   const invocation = resolveHermesAgentInvocation();
   const queryPath =
@@ -188,7 +273,10 @@ export function runHermes(query, maxTurns, { paths = null, secrets = [], require
 
   const result = spawnSync(
     invocation.command,
-    [...invocation.baseArgs, ...buildHermesAgentArgs(query, maxTurns)],
+    [
+      ...invocation.baseArgs,
+      ...buildHermesAgentArgs(query, maxTurns, { disabledToolsets }),
+    ],
     {
       shell: false,
       encoding: "utf8",
@@ -225,8 +313,12 @@ export function runHermes(query, maxTurns, { paths = null, secrets = [], require
     );
   }
 
-  const redactedStdout = redactSensitiveText(result.stdout, secrets);
-  return extractJsonFromHermesOutput(redactedStdout, {
+  const parseSurface = redactSensitiveText(
+    prepareHermesJsonParseSurface(result.stdout, result.stderr),
+    secrets
+  );
+
+  return extractJsonFromHermesOutput(parseSurface, {
     requiredKeys,
     rawOutputPath: rawPath,
   });

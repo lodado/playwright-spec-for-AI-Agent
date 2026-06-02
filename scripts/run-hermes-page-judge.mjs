@@ -222,6 +222,7 @@ async function runBrowseJudge(page, targetPath, paths, config) {
     paths,
     secrets: [config.email, config.password],
     requiredKeys: ["status"],
+    mode: "browse",
   });
   return normalizeBrowseDecision(raw);
 }

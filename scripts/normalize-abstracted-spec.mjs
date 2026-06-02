@@ -12,6 +12,38 @@ function collectCheckIds(spec) {
   return ids;
 }
 
+function collectTestTitles(spec) {
+  const titles = [];
+  for (const scenario of spec?.scenarios ?? []) {
+    for (const test of scenario.tests ?? []) {
+      if (test.title) titles.push(test.title);
+    }
+  }
+  return titles;
+}
+
+function validateLivePlan(livePlan, spec) {
+  const errors = [];
+  const text = typeof livePlan === "string" ? livePlan.trim() : "";
+
+  if (!text) {
+    errors.push("Missing livePlan markdown");
+    return errors;
+  }
+
+  if (!/\*\*Given:\*\*/.test(text) || !/\*\*When:\*\*/.test(text) || !/\*\*Then:\*\*/.test(text)) {
+    errors.push("livePlan must use **Given:** / **When:** / **Then:** sections per test");
+  }
+
+  for (const title of collectTestTitles(spec)) {
+    if (!text.includes(title)) {
+      errors.push(`livePlan missing test title: ${title}`);
+    }
+  }
+
+  return errors;
+}
+
 function collectStructureFingerprint(spec) {
   return (spec?.scenarios ?? []).map(scenario => ({
     scenarioId: scenario.scenarioId,
@@ -67,14 +99,24 @@ export function normalizeAbstractAiResult(inputSpec, raw) {
     }
   }
 
+  const livePlanErrors = validateLivePlan(raw.livePlan, outputSpec);
+  errors.push(...livePlanErrors);
+
   if (errors.length > 0) {
-    return { ok: false, errors, spec: inputSpec, changes: raw.changes ?? [] };
+    return {
+      ok: false,
+      errors,
+      spec: inputSpec,
+      changes: raw.changes ?? [],
+      livePlan: null,
+    };
   }
 
   const model = process.env.HERMES_INFERENCE_MODEL?.trim() || null;
 
   return {
     ok: true,
+    livePlan: raw.livePlan.trim(),
     spec: {
       ...outputSpec,
       abstraction: {

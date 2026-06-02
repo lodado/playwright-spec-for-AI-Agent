@@ -22,8 +22,24 @@ const baseSpec = {
   ],
 };
 
+const sampleLivePlan = [
+  "## Active",
+  "",
+  "id:`ACTIVE` file:`x.spec.ts`",
+  "",
+  "### 1. shows score",
+  "",
+  "**Given:**",
+  "- `ACTIVE`",
+  "**When:**",
+  "- View page; judge by intent (mock-api).",
+  "**Then:**",
+  "- score visible",
+  "",
+].join("\n");
+
 describe("normalizeAbstractAiResult", () => {
-  it("accepts valid AI output with matching structure", () => {
+  it("accepts valid AI output with matching structure and livePlan", () => {
     const result = normalizeAbstractAiResult(baseSpec, {
       spec: {
         ...baseSpec,
@@ -40,6 +56,7 @@ describe("normalizeAbstractAiResult", () => {
           },
         ],
       },
+      livePlan: sampleLivePlan,
       changes: [
         {
           checkId: "t1",
@@ -51,9 +68,21 @@ describe("normalizeAbstractAiResult", () => {
     });
 
     expect(result.ok).toBe(true);
+    expect(result.livePlan).toContain("shows score");
     expect(result.spec?.scenarios[0].tests[0].liveIntent).toBe(
-      "User sees a score"
+      "User sees a score",
     );
+  });
+
+  it("rejects when livePlan is missing a test title", () => {
+    const result = normalizeAbstractAiResult(baseSpec, {
+      spec: baseSpec,
+      livePlan: "**Given:**\n- x\n**When:**\n- y\n**Then:**\n- z",
+      changes: [],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors?.some((e) => /missing test title/.test(e))).toBe(true);
   });
 
   it("rejects when liveRunPolicy changes", () => {
@@ -71,11 +100,12 @@ describe("normalizeAbstractAiResult", () => {
           },
         ],
       },
+      livePlan: sampleLivePlan,
       changes: [],
     });
 
     expect(result.ok).toBe(false);
-    expect(result.errors?.some(e => /liveRunPolicy/.test(e))).toBe(true);
+    expect(result.errors?.some((e) => /liveRunPolicy/.test(e))).toBe(true);
   });
 
   it("rejects when all expectations are removed", () => {
@@ -93,6 +123,7 @@ describe("normalizeAbstractAiResult", () => {
           },
         ],
       },
+      livePlan: sampleLivePlan,
       changes: [],
     });
 

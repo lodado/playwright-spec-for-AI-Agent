@@ -22,8 +22,8 @@ Usage:
   npx playwright-spec-for-ai-agent <command> [options]
 
 Commands:
-  spec        Parse @qa-scenario specs → JSON, rule-abstracted JSON, qa-spec-live.md
-  abstract-ai Hermes refines live spec (→ qa-spec-live.json + .md)
+  spec        Parse @qa-scenario specs → raw + rule-abstracted JSON
+  abstract-ai Hermes refines JSON + Given/When/Then livePlan → qa-spec-live.json/.md
   judge       Hermes logs into staging, visits the page, and judges live DOM
   review      Hermes re-reviews judge results (evidence + pedantic pass/fail)
   slack       Post verdict to Slack webhook

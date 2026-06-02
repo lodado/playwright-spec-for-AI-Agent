@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Hermes AI pass — rewrites expectations for non-deterministic live staging.
+ * Hermes AI pass — refines expectations + compact Given/When/Then livePlan.
  *
  * Usage:
  *   npx playwright-spec-for-ai-agent abstract-ai --page=dashboard
@@ -12,63 +12,81 @@ import { fileURLToPath } from "node:url";
 import { ABSTRACTION_RULES_VERSION } from "./expectation-abstractor.mjs";
 import { runHermes } from "./hermes-runner.mjs";
 import { normalizeAbstractAiResult } from "./normalize-abstracted-spec.mjs";
+import { loadSpecSourceFiles } from "./qa-spec-artifacts.mjs";
+import { renderLiveSpecMarkdown } from "./qa-spec-live-artifact.mjs";
 import {
   artifactPaths,
   ensureProjectConfig,
-  listAnnotatedSpecFiles,
   parsePageArg,
   resolveSpecDir,
 } from "./page-qa-paths.mjs";
-import { renderLiveSpecMarkdown } from "./qa-spec-live-artifact.mjs";
 
-const HERMES_MAX_TURNS_ABSTRACT = 40;
+const HERMES_MAX_TURNS_ABSTRACT = 6;
 
 function hasFlag(argv, flag) {
   return argv.includes(flag);
 }
 
-function loadSpecSourceFiles(specDir) {
-  const files = listAnnotatedSpecFiles(specDir);
-  const result = {};
-  for (const file of files) {
-    result[file] = readFileSync(resolve(specDir, file), "utf8");
-  }
-  return result;
-}
-
 function buildAbstractHermesQuery(payload) {
   return [
-    "You are a QA spec abstractor. Do NOT browse the web or log into staging.",
+    "You are a QA spec abstractor. CRITICAL: do not use any tools (no browser, terminal, files).",
+    "Your final message must be ONLY one raw JSON object — no markdown fences, no prose before or after.",
     "",
     "## Your task",
-    "Rewrite expectations in specDefinition so they work on non-deterministic live staging data.",
-    "Mock-specific numbers, dates, usernames, and order IDs must become semantic intents.",
+    "1. Rewrite expectations in specDefinition for non-deterministic live staging (semantic intents, not mock literals).",
+    "2. Write livePlan: compact Given/When/Then markdown for Hermes judge (one block per test).",
     "",
     "## Immutable (do not change)",
     "- scenarios[].scenarioId, label, sourceFile, liveSkip, alwaysRun",
     "- tests[].title, checkId, stagingMode, liveRunPolicy, livePolicyAnnotation, fixtures",
     "",
-    "## You MAY change",
+    "## You MAY change in spec JSON",
     "- tests[].expectations[]",
-    "- tests[].liveIntent (short sentence)",
-    "- tests[].abstractReview (boolean — true when live judgment should prefer manual_review if ambiguous)",
+    "- tests[].liveIntent (short Given-oriented phrase)",
+    "- tests[].abstractReview (boolean)",
     "",
-    "## Rules",
+    "## spec JSON rules",
     "1. Replace exact mock literals with semantic intents and constraints.",
-    "2. Keep locators (testId, role) unless the locator value is mock-only text.",
-    "3. For judgment-mock-api tests: describe user-visible outcome, not API response JSON.",
-    "4. If rules already produced regex or semantic expectations, refine intent only — never tighten back to exact literals.",
-    "5. confidence low → set abstractReview: true on that test.",
+    "2. Keep locators (testId, role) unless mock-only text.",
+    "3. judgment-mock-api: user-visible outcome, not API JSON.",
+    "4. Do not tighten regex/semantic back to exact literals.",
+    "5. confidence low → abstractReview: true.",
     "6. Never change liveRunPolicy or remove blocked tests.",
     "7. Never remove all expectations from a test that had expectations.",
     "",
+    "## livePlan format (required)",
+    "Markdown only. No credentials. No lecture text.",
+    "Per scenario: `## {label}` then line `id:\\`{scenarioId}\\` file:\\`{sourceFile}\\`` plus `always-run` if applicable.",
+    "Per test: `### N. {exact title}` then:",
+    "**Given:**",
+    "- bullets: scenario id, file, liveIntent, fixtures if any",
+    "**When:**",
+    "- one line from liveRunPolicy (e.g. inspect only; safe UI steps; mock-api intent; or skip)",
+    "**Then:**",
+    "- bullets: what must hold (from refined expectations); blocked → `- skip`",
+    "Include every test title from specDefinition exactly once.",
+    "",
     "## Response format",
     "Return ONLY a raw JSON object — no prose, no markdown fences.",
-    'Fields: { "spec": <full spec object>, "changes": [ { "checkId", "field", "before", "after", "reason", "confidence": "high"|"medium"|"low" } ] }',
+    'Fields: { "spec": <full spec object>, "livePlan": "<markdown string>", "changes": [ { "checkId", "field", "before", "after", "reason", "confidence": "high"|"medium"|"low" } ] }',
     "",
     "## Payload",
     JSON.stringify(payload, null, 2),
   ].join("\n");
+}
+
+function writeLiveArtifacts({ paths, spec, page, specDir, audit, gwtBody }) {
+  writeFileSync(paths.specLiveJson, `${JSON.stringify(spec, null, 2)}\n`);
+  writeFileSync(
+    paths.specLiveMd,
+    renderLiveSpecMarkdown({
+      spec,
+      page,
+      specDir,
+      audit,
+      gwtBody,
+    })
+  );
 }
 
 async function main() {
@@ -115,39 +133,44 @@ async function main() {
       hermesAbstractQuery: paths.hermesAbstractQuery,
       hermesAbstractRawOutput: paths.hermesAbstractRawOutput,
     },
-    requiredKeys: ["spec"],
+    requiredKeys: ["spec", "livePlan"],
+    mode: "text-only",
   });
 
   const normalized = normalizeAbstractAiResult(inputSpec, raw);
 
-  writeFileSync(paths.abstractAuditJson, `${JSON.stringify(normalized.audit ?? { errors: normalized.errors }, null, 2)}\n`);
+  writeFileSync(
+    paths.abstractAuditJson,
+    `${JSON.stringify(normalized.audit ?? { errors: normalized.errors }, null, 2)}\n`
+  );
 
   if (!normalized.ok) {
     console.error("Hermes abstract-ai validation failed:");
     for (const err of normalized.errors ?? []) console.error(`  - ${err}`);
-    writeFileSync(
-      paths.specLiveJson,
-      `${JSON.stringify(inputSpec, null, 2)}\n`
-    );
-    console.warn(`Fell back to input spec: ${paths.specLiveJson}`);
-    process.exit(1);
-  }
-
-  writeFileSync(
-    paths.specLiveJson,
-    `${JSON.stringify(normalized.spec, null, 2)}\n`
-  );
-  writeFileSync(
-    paths.specLiveMd,
-    renderLiveSpecMarkdown({
-      spec: normalized.spec,
+    writeLiveArtifacts({
+      paths,
+      spec: inputSpec,
       page,
       specDir,
       audit: normalized.audit,
-    })
-  );
+      gwtBody: null,
+    });
+    console.warn(`Fell back to input spec: ${paths.specLiveJson}`);
+    console.warn(`Fell back to rule-based GWT: ${paths.specLiveMd}`);
+    process.exit(1);
+  }
+
+  writeLiveArtifacts({
+    paths,
+    spec: normalized.spec,
+    page,
+    specDir,
+    audit: normalized.audit,
+    gwtBody: normalized.livePlan,
+  });
 
   console.log(`Live spec (AI): ${paths.specLiveJson}`);
+  console.log(`Live plan (GWT): ${paths.specLiveMd}`);
   console.log(`Abstract audit: ${paths.abstractAuditJson}`);
   console.log(`Changes: ${normalized.audit?.changeCount ?? 0}`);
 }
