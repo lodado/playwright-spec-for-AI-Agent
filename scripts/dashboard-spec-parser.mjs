@@ -354,7 +354,7 @@ export function describeLiveRunPolicy(liveRunPolicy) {
     case "judgment-interaction-no-confirm":
       return "UI action where completing verification would be dangerous on live — Hermes replays safe open steps, verifies up to the dangerous point, dismisses with Esc only (never clicks confirm)";
     case "judgment-mock-api":
-      return "Playwright skips (page.route mocks); Hermes judges whether live DOM satisfies test intent without mocking";
+      return "CI uses API mocks (not replayable on live); Hermes passes if live UI reasonably matches intent, manual_review if ambiguous";
     case "blocked-subscription-mutation":
       return "skipped on Playwright; Hermes must not mutate subscription/billing";
     case "blocked-auth-mock":
@@ -435,112 +435,12 @@ export function parseReadOnlyExpectations(body) {
   return expectations;
 }
 
-const CREDIT_REMAINING_LIVE_PATTERN = "^Credit [\\d,]+$";
-
-function escapeRegex(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function hasDigit(value) {
-  return /\d/.test(value);
-}
-
-export function liveRegexFromLiteral(value) {
-  return value
-    .split(/(\d[\d,]*)/g)
-    .map(part => {
-      if (/^\d[\d,]*$/.test(part)) return "[\\d,]+";
-      return escapeRegex(part);
-    })
-    .join("");
-}
-
-export function literalExpectedForLive(value) {
-  if (value.includes("${")) {
-    return {
-      kind: "regex",
-      pattern: CREDIT_REMAINING_LIVE_PATTERN,
-      liveNote: "mock template value; live uses numeric wildcard matching",
-    };
-  }
-
-  if (!hasDigit(value)) {
-    return { kind: "literal", value };
-  }
-
-  return {
-    kind: "regex",
-    pattern: liveRegexFromLiteral(value),
-    liveNote: "mock numeric fixture; live uses digit wildcard matching",
-  };
-}
-
-export function liveTextLocatorForLive(value) {
-  // Adapt this regex to match your app's username/plan label copy pattern.
-  if (/user is on .* plan/.test(value)) {
-    return {
-      kind: "text",
-      value: { kind: "regex", pattern: "plan" },
-      liveNote: "mock username/plan label; live only checks plan title copy",
-    };
-  }
-
-  if (!hasDigit(value)) {
-    return { kind: "text", value };
-  }
-
-  return {
-    kind: "text",
-    value: { kind: "regex", pattern: liveRegexFromLiteral(value) },
-    liveNote: "mock numeric text; live uses digit wildcard matching",
-  };
-}
-
-export function adaptExpectationForLive(expectation, _testTitle, scenarioId) {
-  if (expectation.type === "containText" && expectation.expected) {
-    if (expectation.expected.kind === "literal") {
-      const adapted = literalExpectedForLive(expectation.expected.value);
-      if (adapted.kind === "regex") {
-        return {
-          ...expectation,
-          expected: {
-            kind: "regex",
-            pattern: adapted.pattern,
-          },
-          liveNote: adapted.liveNote,
-        };
-      }
-    }
-
-    if (expectation.expected.kind === "template") {
-      return {
-        ...expectation,
-        expected: { kind: "regex", pattern: CREDIT_REMAINING_LIVE_PATTERN },
-        liveNote: "mock dynamic credit; live uses numeric wildcard matching",
-      };
-    }
-  }
-
-  if (
-    expectation.type === "visible" &&
-    expectation.locator.kind === "text" &&
-    typeof expectation.locator.value === "string"
-  ) {
-    const adaptedLocator = liveTextLocatorForLive(expectation.locator.value);
-    if (adaptedLocator.liveNote) {
-      return {
-        ...expectation,
-        locator: {
-          kind: adaptedLocator.kind,
-          value: adaptedLocator.value,
-        },
-        liveNote: adaptedLocator.liveNote,
-      };
-    }
-  }
-
-  return expectation;
-}
+export {
+  adaptExpectationForLive,
+  liveRegexFromLiteral,
+  literalExpectedForLive,
+  liveTextLocatorForLive,
+} from "./expectation-abstractor.mjs";
 
 function slugify(value) {
   return value
