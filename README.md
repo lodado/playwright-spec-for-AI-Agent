@@ -363,18 +363,16 @@ Add file-level and test-level annotations to your existing Playwright specs.
 // @qa-scenario: ACTIVE          — which account state this file covers
 // @qa-live-skip: true           — exclude this file from live Hermes runs
 // @qa-always-run: true          — run regardless of live account state (e.g. BVA tests)
-// @qa-fixture: avatar=tests/fixtures/qa-avatar.png  — default upload file for this spec file
 ```
 
 ### Upload fixtures (`@qa-fixture`)
 
 For tests that call `setInputFiles`, declare which file Hermes should upload on live staging.
+Place `@qa-fixture` directly above `test()` or the enclosing `test.describe` block.
+Do not put `@qa-fixture` in the file header/top-level comment area.
 
 ```ts
-// File-level default (applies to all tests in this spec unless overridden)
-// @qa-fixture: avatar=tests/fixtures/qa-avatar.png
-
-// Per-test override (place directly above the test or test.describe)
+// Place directly above the test or test.describe
 // @qa-fixture: avatar=tests/fixtures/other.png
 test("uploads avatar", async ({ page }) => {
   await page
@@ -383,7 +381,7 @@ test("uploads avatar", async ({ page }) => {
 });
 ```
 
-**Resolution order** (later wins): config root `fixtures` → `staging.fixtures` → `pages.<page>.fixtures` → file-level `@qa-fixture` → describe `@qa-fixture` → test `@qa-fixture`.
+**Resolution order** (later wins): config root `fixtures` → `staging.fixtures` → `pages.<page>.fixtures` → describe `@qa-fixture` → test `@qa-fixture`.
 
 Paths are **repo-relative**. During `judge`, paths are resolved to absolute paths and sent to Hermes as `uploadFixtures.defaults` and `uploadFixtures.byCheckId` (keyed by each test's `checkId` in the spec JSON).
 
