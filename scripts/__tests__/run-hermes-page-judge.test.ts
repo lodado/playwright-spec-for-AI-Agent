@@ -77,5 +77,8 @@ describe("buildBrowseHermesQuery", () => {
     expect(query).toContain("## Annotation guide");
     expect(query).toContain("`mock-judgment` -> `judgment-mock-api`");
     expect(query).toContain("If `blocked-*`, mark `skip`.");
+    expect(query).toContain(
+      "Value mismatch alone (e.g., `0` vs `8`) is not a failure",
+    );
   });
 });

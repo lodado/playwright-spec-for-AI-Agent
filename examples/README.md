@@ -1,6 +1,7 @@
 # Examples
 
 - `sample-spec.ts` — minimal Playwright spec with `@qa-scenario` / `@qa-live-policy` annotations.
+- `ocr-fixture-upload-example.ts` — `@qa-fixture` (PDF) file-level + test-level override example for upload flows.
 
 Generated QA artifacts belong in **your app's** output directory (e.g. `.qa/{page}/`), not in this package repo:
 
