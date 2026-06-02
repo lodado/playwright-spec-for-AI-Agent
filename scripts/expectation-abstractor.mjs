@@ -229,7 +229,10 @@ export function adaptExpectationForLive(expectation, testTitle, _scenarioId) {
     }
 
     if (expectation.expected.kind === "regex") {
-      const upgraded = upgradeRegexExpectedToSemantic(expectation.expected, context);
+      const upgraded = upgradeRegexExpectedToSemantic(
+        expectation.expected,
+        context
+      );
       if (upgraded) {
         return {
           ...expectation,

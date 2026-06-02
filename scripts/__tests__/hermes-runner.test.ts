@@ -8,14 +8,11 @@ import {
 } from "../hermes-runner.mjs";
 
 describe("buildHermesAgentArgs", () => {
-  it("passes disabled_toolsets as a separate argv (Fire comma-safe)", () => {
+  it("quotes disabled_toolsets so Fire keeps a comma-separated string", () => {
     const args = buildHermesAgentArgs("test query", 3, {
       disabledToolsets: "browser,web,terminal",
     });
-    const idx = args.indexOf("--disabled_toolsets");
-    expect(idx).toBeGreaterThanOrEqual(0);
-    expect(args[idx + 1]).toBe("browser,web,terminal");
-    expect(args.some((a) => a.startsWith("--disabled_toolsets="))).toBe(false);
+    expect(args).toContain('--disabled_toolsets="browser,web,terminal"');
   });
 });
 
@@ -43,6 +40,21 @@ describe("extractJsonFromHermesOutput", () => {
     });
     expect(parsed.spec).toEqual({});
     expect(parsed.livePlan).toContain("Given");
+  });
+
+  it("accepts requiredKeyGroups (testUpdates OR spec + livePlan)", () => {
+    const patches = `{"testUpdates":[],"livePlan":"### 1. t\\n**Given:**\\n- a\\n**When:**\\n- b\\n**Then:**\\n- c"}`;
+    expect(
+      extractJsonFromHermesOutput(patches, {
+        requiredKeyGroups: [
+          ["livePlan", "testUpdates"],
+          ["livePlan", "spec"],
+        ],
+      }),
+    ).toMatchObject({
+      testUpdates: [],
+      livePlan: expect.stringContaining("Given"),
+    });
   });
 
   it("unwraps envelope result string", () => {

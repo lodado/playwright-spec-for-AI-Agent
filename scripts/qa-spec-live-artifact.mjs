@@ -4,27 +4,22 @@ import {
   renderGwtPlanFromSpec,
   renderLiveSpecAppendices,
 } from "./qa-spec-judge-document.mjs";
-import {
-  buildUploadFixturesPayload,
-  loadSpecSourceFiles,
-} from "./qa-spec-artifacts.mjs";
+import { buildUploadFixturesPayload } from "./qa-spec-artifacts.mjs";
 
 function pageLabel(page) {
   return pageLabelFromSlug(page);
 }
 
 /**
- * `{page}-qa-spec-live.md` — written only by `abstract-ai`.
- * @param {string|null} gwtBody — Hermes `livePlan` (Given/When/Then); falls back to rule render from spec JSON.
+ * `{page}-qa-spec-live.md` — written only by `abstract-ai` (GWT + optional fixture list).
+ * Playwright sources are omitted; judge uses JSON spec + this plan.
  */
 export function renderLiveSpecMarkdown({
   spec,
   page,
-  specDir,
   audit = null,
   gwtBody = null,
 }) {
-  const specSourceFiles = loadSpecSourceFiles(specDir);
   const uploadFixtures = buildUploadFixturesPayload(spec, page);
   const alwaysRunScenarioIds = (spec.scenarios ?? [])
     .filter(s => s.alwaysRun)
@@ -35,7 +30,7 @@ export function renderLiveSpecMarkdown({
     renderGwtPlanFromSpec(spec, { alwaysRunScenarioIds }).trim();
   const appendices = renderLiveSpecAppendices({
     uploadFixtures,
-    specSourceFiles,
+    specSourceFiles: {},
   }).trim();
 
   const parts = [`# ${pageLabel(page)} QA spec (Live)`, "", gwt];

@@ -23,7 +23,7 @@ Usage:
 
 Commands:
   spec        Parse @qa-scenario specs → raw + rule-abstracted JSON
-  abstract-ai Hermes refines JSON + Given/When/Then livePlan → qa-spec-live.json/.md
+  abstract-ai Hermes writes Given/When/Then livePlan → qa-spec-live.json/.md
   judge       Hermes logs into staging, visits the page, and judges live DOM
   review      Hermes re-reviews judge results (evidence + pedantic pass/fail)
   slack       Post verdict to Slack webhook

@@ -2,9 +2,9 @@ const CRITERION_IDS = ["sufficient-evidence", "not-overly-pedantic"];
 
 const CRITERION_QUESTIONS = {
   "sufficient-evidence":
-    "Were the live QA checks conducted in a generally reasonable way, with enough observational evidence in each check detail to trust the results?",
+    "Did the judge validate live screen state with enough concrete evidence in each check detail to trust the results?",
   "not-overly-pedantic":
-    "For mock-api / non-deterministic values: did the judge pass when reasonable, use manual_review when ambiguous, and avoid failing only because live differed from CI mocks?",
+    "Did the judge avoid pedantic failures and handle unavailable live account states with justified skip/manual_review decisions?",
 };
 
 const ALLOWED_VERDICTS = new Set(["pass", "concern", "fail"]);

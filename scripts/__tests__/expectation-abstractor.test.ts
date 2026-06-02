@@ -66,7 +66,7 @@ describe("adaptExpectationForLive", () => {
         expected: { kind: "literal", value: "Credit 0" },
       },
       "shows Credit 0 when remaining_credits is 0",
-      "CREDIT_BVA"
+      "CREDIT_BVA",
     );
 
     expect(adapted.expected).toMatchObject({
@@ -83,7 +83,7 @@ describe("adaptExpectationForLive", () => {
         expected: { kind: "regex", pattern: "[\\d,]+" },
       },
       "shows health score on dashboard",
-      "ACTIVE"
+      "ACTIVE",
     );
 
     expect(adapted.expected).toMatchObject({
@@ -140,7 +140,7 @@ describe("abstractExpectation", () => {
         testTitle: "remaining credits display",
         scenarioId: "ACTIVE",
         locator: { kind: "testId", value: "credit-remaining" },
-      }
+      },
     );
 
     expect(result.expected).toMatchObject({

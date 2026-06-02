@@ -10,7 +10,7 @@ export const HERMES_QA_COMMAND =
 /** Disable browsing/terminal for abstract-ai and review (JSON-in, JSON-out). */
 export const HERMES_QA_TEXT_ONLY_DISABLED_TOOLSETS =
   process.env.HERMES_QA_DISABLED_TOOLSETS?.trim() ||
-  "browser,web,terminal,execute_code,delegate_task";
+  "browser,web,terminal";
 
 export function resolveHermesAgentInvocation() {
   const installRoot = join(homedir(), ".hermes", "hermes-agent");
@@ -80,9 +80,9 @@ export function buildHermesAgentArgs(
     `--model=${model}`,
   ];
   if (baseUrl) args.push(`--base_url=${baseUrl}`);
-  // Fire treats commas in `--disabled_toolsets=a,b` as a tuple; pass a single string argv.
+  // Fire splits on commas unless the value is quoted: --disabled_toolsets="a,b,c"
   if (disabledToolsets) {
-    args.push("--disabled_toolsets", disabledToolsets);
+    args.push(`--disabled_toolsets="${disabledToolsets}"`);
   }
   if (verbose) args.push("--verbose");
   return args;
@@ -137,9 +137,18 @@ export function prepareHermesJsonParseSurface(stdout, stderr = "") {
   return final !== combined ? `${final}\n\n${combined}` : combined;
 }
 
+function matchesRequiredKeys(parsed, keys) {
+  return keys.every(key => key in parsed);
+}
+
 export function extractJsonFromHermesOutput(
   output,
-  { requiredKeys = ["status"], rawOutputPath = null } = {}
+  {
+    requiredKeys = ["status"],
+    /** If set, any group that matches wins (e.g. [["livePlan","testUpdates"],["livePlan","spec"]]). */
+    requiredKeyGroups = null,
+    rawOutputPath = null,
+  } = {}
 ) {
   const surface = extractHermesFinalResponseText(output);
   const candidates = [];
@@ -176,25 +185,29 @@ export function extractJsonFromHermesOutput(
   }
 
   const keys = Array.isArray(requiredKeys) ? requiredKeys : [requiredKeys];
+  const groups = Array.isArray(requiredKeyGroups) ? requiredKeyGroups : null;
 
   for (const candidate of candidates.reverse()) {
     try {
       const parsed = unwrapHermesEnvelope(JSON.parse(candidate));
-      if (
-        parsed &&
-        typeof parsed === "object" &&
-        keys.every(key => key in parsed)
-      ) {
-        return parsed;
-      }
+      if (!parsed || typeof parsed !== "object") continue;
+
+      const ok = groups
+        ? groups.some(group => matchesRequiredKeys(parsed, group))
+        : matchesRequiredKeys(parsed, keys);
+
+      if (ok) return parsed;
     } catch {
       // Keep scanning.
     }
   }
 
+  const keyHint = groups
+    ? groups.map(g => g.join("+")).join(" OR ")
+    : keys.join(", ");
   const artifactHint = rawOutputPath ? ` See raw output: ${rawOutputPath}` : "";
   throw new Error(
-    `Hermes did not return valid JSON (required keys: ${keys.join(", ")}).${artifactHint} Preview: ${surface.slice(0, 2_000)}`
+    `Hermes did not return valid JSON (required: ${keyHint}).${artifactHint} Preview: ${surface.slice(0, 2_000)}`
   );
 }
 
@@ -251,6 +264,7 @@ export function runHermes(
     paths = null,
     secrets = [],
     requiredKeys = ["status"],
+    requiredKeyGroups = null,
     mode = "browse",
   } = {}
 ) {
@@ -321,6 +335,7 @@ export function runHermes(
 
   return extractJsonFromHermesOutput(parseSurface, {
     requiredKeys,
+    requiredKeyGroups,
     rawOutputPath: rawPath,
   });
 }

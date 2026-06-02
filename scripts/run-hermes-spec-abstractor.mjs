@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Hermes AI pass — refines expectations + compact Given/When/Then livePlan.
+ * Hermes AI pass — writes Given/When/Then livePlan for the judge.
  *
  * Usage:
  *   npx playwright-spec-for-ai-agent abstract-ai --page=dashboard
@@ -10,18 +10,17 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ABSTRACTION_RULES_VERSION } from "./expectation-abstractor.mjs";
+import { buildGwtPromptSpec } from "./abstract-ai-payload.mjs";
 import { runHermes } from "./hermes-runner.mjs";
 import { normalizeAbstractAiResult } from "./normalize-abstracted-spec.mjs";
-import { loadSpecSourceFiles } from "./qa-spec-artifacts.mjs";
 import { renderLiveSpecMarkdown } from "./qa-spec-live-artifact.mjs";
 import {
   artifactPaths,
   ensureProjectConfig,
   parsePageArg,
-  resolveSpecDir,
 } from "./page-qa-paths.mjs";
 
-const HERMES_MAX_TURNS_ABSTRACT = 6;
+const HERMES_MAX_TURNS_ABSTRACT = 2;
 
 function hasFlag(argv, flag) {
   return argv.includes(flag);
@@ -29,61 +28,42 @@ function hasFlag(argv, flag) {
 
 function buildAbstractHermesQuery(payload) {
   return [
-    "You are a QA spec abstractor. CRITICAL: do not use any tools (no browser, terminal, files).",
-    "Your final message must be ONLY one raw JSON object — no markdown fences, no prose before or after.",
+    "You are a QA spec writer for live staging. CRITICAL: do not use any tools.",
+    "Your final message must be ONLY one raw JSON object — no markdown fences, no prose.",
     "",
-    "## Your task",
-    "1. Rewrite expectations in specDefinition for non-deterministic live staging (semantic intents, not mock literals).",
-    "2. Write livePlan: compact Given/When/Then markdown for Hermes judge (one block per test).",
+    "## Task",
+    "Write livePlan: Given/When/Then markdown for Hermes judge — one block per test in specDefinition.",
+    "Each test includes testAnnotations (Playwright @qa-live-policy and derived liveRunPolicy). Use them in **When** (how to run on live) and **Then** (what counts as pass).",
+    "Use semantic intents (not mock literals like dev-user, 42,835, exact Korean copy from mocks).",
+    "mock-judgment / judgment-mock-api: judge intent only, no exact mock API replay.",
+    "blocked-* / qaLiveSkip: Then should say skip on live.",
+    "safe-interaction*: describe safe UI steps; never confirm destructive actions on live.",
+    "fileAnnotations.qaAlwaysRun: include scenario even if account state differs.",
+    "Include every test title exactly once.",
     "",
-    "## Immutable (do not change)",
-    "- scenarios[].scenarioId, label, sourceFile, liveSkip, alwaysRun",
-    "- tests[].title, checkId, stagingMode, liveRunPolicy, livePolicyAnnotation, fixtures",
+    "## livePlan format",
+    "Plain markdown. Per test, e.g.:",
+    "### {scenarioId} — {title}",
+    "Given ...",
+    "When ...",
+    "Then ...",
     "",
-    "## You MAY change in spec JSON",
-    "- tests[].expectations[]",
-    "- tests[].liveIntent (short Given-oriented phrase)",
-    "- tests[].abstractReview (boolean)",
-    "",
-    "## spec JSON rules",
-    "1. Replace exact mock literals with semantic intents and constraints.",
-    "2. Keep locators (testId, role) unless mock-only text.",
-    "3. judgment-mock-api: user-visible outcome, not API JSON.",
-    "4. Do not tighten regex/semantic back to exact literals.",
-    "5. confidence low → abstractReview: true.",
-    "6. Never change liveRunPolicy or remove blocked tests.",
-    "7. Never remove all expectations from a test that had expectations.",
-    "",
-    "## livePlan format (required)",
-    "Markdown only. No credentials. No lecture text.",
-    "Per scenario: `## {label}` then line `id:\\`{scenarioId}\\` file:\\`{sourceFile}\\`` plus `always-run` if applicable.",
-    "Per test: `### N. {exact title}` then:",
-    "**Given:**",
-    "- bullets: scenario id, file, liveIntent, fixtures if any",
-    "**When:**",
-    "- one line from liveRunPolicy (e.g. inspect only; safe UI steps; mock-api intent; or skip)",
-    "**Then:**",
-    "- bullets: what must hold (from refined expectations); blocked → `- skip`",
-    "Include every test title from specDefinition exactly once.",
-    "",
-    "## Response format",
-    "Return ONLY a raw JSON object — no prose, no markdown fences.",
-    'Fields: { "spec": <full spec object>, "livePlan": "<markdown string>", "changes": [ { "checkId", "field", "before", "after", "reason", "confidence": "high"|"medium"|"low" } ] }',
+    "## Response",
+    '{ "livePlan": "<markdown string>" }',
     "",
     "## Payload",
     JSON.stringify(payload, null, 2),
   ].join("\n");
 }
 
-function writeLiveArtifacts({ paths, spec, page, specDir, audit, gwtBody }) {
+function writeLiveArtifacts({ paths, spec, page, gwtBody }) {
   writeFileSync(paths.specLiveJson, `${JSON.stringify(spec, null, 2)}\n`);
   writeFileSync(
     paths.specLiveMd,
     renderLiveSpecMarkdown({
       spec,
       page,
-      specDir,
-      audit,
+      audit: null,
       gwtBody,
     })
   );
@@ -109,15 +89,12 @@ async function main() {
   }
 
   const inputSpec = JSON.parse(readFileSync(inputPath, "utf8"));
-  const specDir = resolveSpecDir(page);
-  const specSourceFiles = loadSpecSourceFiles(specDir);
 
   const payload = {
-    task: "abstract-qa-spec",
+    task: "abstract-qa-spec-gwt",
     page,
     rulesVersion: ABSTRACTION_RULES_VERSION,
-    specDefinition: inputSpec,
-    specSourceFiles,
+    specDefinition: buildGwtPromptSpec(inputSpec),
   };
 
   const query = buildAbstractHermesQuery(payload);
@@ -125,6 +102,7 @@ async function main() {
   if (dryRun) {
     writeFileSync(paths.hermesAbstractQuery, query);
     console.log(`Dry run — query written: ${paths.hermesAbstractQuery}`);
+    console.log(`Query size: ~${Math.round(query.length / 4)} tokens (est.)`);
     return;
   }
 
@@ -133,7 +111,7 @@ async function main() {
       hermesAbstractQuery: paths.hermesAbstractQuery,
       hermesAbstractRawOutput: paths.hermesAbstractRawOutput,
     },
-    requiredKeys: ["spec", "livePlan"],
+    requiredKeys: ["livePlan"],
     mode: "text-only",
   });
 
@@ -141,38 +119,23 @@ async function main() {
 
   writeFileSync(
     paths.abstractAuditJson,
-    `${JSON.stringify(normalized.audit ?? { errors: normalized.errors }, null, 2)}\n`
+    `${JSON.stringify(normalized.audit, null, 2)}\n`
   );
-
-  if (!normalized.ok) {
-    console.error("Hermes abstract-ai validation failed:");
-    for (const err of normalized.errors ?? []) console.error(`  - ${err}`);
-    writeLiveArtifacts({
-      paths,
-      spec: inputSpec,
-      page,
-      specDir,
-      audit: normalized.audit,
-      gwtBody: null,
-    });
-    console.warn(`Fell back to input spec: ${paths.specLiveJson}`);
-    console.warn(`Fell back to rule-based GWT: ${paths.specLiveMd}`);
-    process.exit(1);
-  }
 
   writeLiveArtifacts({
     paths,
     spec: normalized.spec,
     page,
-    specDir,
-    audit: normalized.audit,
     gwtBody: normalized.livePlan,
   });
 
-  console.log(`Live spec (AI): ${paths.specLiveJson}`);
+  console.log(`Live spec: ${paths.specLiveJson}`);
   console.log(`Live plan (GWT): ${paths.specLiveMd}`);
-  console.log(`Abstract audit: ${paths.abstractAuditJson}`);
-  console.log(`Changes: ${normalized.audit?.changeCount ?? 0}`);
+  if (normalized.livePlan) {
+    console.log(`GWT length: ${normalized.livePlan.length} chars`);
+  } else {
+    console.warn("No livePlan in response — qa-spec-live.md uses rule-based GWT");
+  }
 }
 
 const isDirectRun =

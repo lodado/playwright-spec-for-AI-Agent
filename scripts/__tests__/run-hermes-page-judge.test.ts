@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizeBrowseDecision } from "../run-hermes-page-judge.mjs";
+import {
+  buildBrowseHermesQuery,
+  normalizeBrowseDecision,
+} from "../run-hermes-page-judge.mjs";
 
 describe("normalizeBrowseDecision", () => {
   it("passes when checks are all pass", () => {
@@ -56,5 +59,23 @@ describe("normalizeBrowseDecision", () => {
     expect(normalizeBrowseDecision({ checks: [] }).status).toBe(
       "manual_review",
     );
+  });
+});
+
+describe("buildBrowseHermesQuery", () => {
+  it("includes annotation guide in judge prompt", () => {
+    const query = buildBrowseHermesQuery({
+      judgeDocument: "## Plan\n\n### 1. test",
+      stagingLogin: {
+        loginUrl: "https://example.com/login",
+        email: "qa@example.com",
+        password: "pw",
+        targetUrl: "https://example.com/dashboard",
+      },
+    });
+
+    expect(query).toContain("## Annotation guide");
+    expect(query).toContain("`mock-judgment` -> `judgment-mock-api`");
+    expect(query).toContain("If `blocked-*`, mark `skip`.");
   });
 });
