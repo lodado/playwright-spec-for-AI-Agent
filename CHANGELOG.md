@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.4.1...v0.4.2) (2026-06-06)
+
+
+### Bug Fixes
+
+* **ci:** ensure hermes-runner tests pass without local Hermes config ([82de29f](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/82de29f62e3796228b8b13cbd940435359f2f7da))
+
 ## [0.4.1](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.4.0...v0.4.1) (2026-06-06)
 
 
