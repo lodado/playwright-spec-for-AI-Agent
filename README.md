@@ -174,9 +174,6 @@ export default {
   staging: {
     expectedSubscriptionStatus: "INACTIVE"
   },
-  fixtures: {
-    avatar: "tests/fixtures/qa-avatar.png"
-  },
   targetPaths: {
     billing: "/settings/billing",
     dashboard: "/dashboard"
