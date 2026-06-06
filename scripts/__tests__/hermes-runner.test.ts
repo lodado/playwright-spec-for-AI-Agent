@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildHermesAgentArgs,
   extractHermesFinalResponseText,
@@ -8,11 +8,18 @@ import {
 } from "../hermes-runner.mjs";
 
 describe("buildHermesAgentArgs", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("quotes disabled_toolsets so Fire keeps a comma-separated string", () => {
+    vi.stubEnv("HERMES_INFERENCE_MODEL", "test-model");
+
     const args = buildHermesAgentArgs("test query", 3, {
       disabledToolsets: "browser,web,terminal",
     });
     expect(args).toContain('--disabled_toolsets="browser,web,terminal"');
+    expect(args).toContain("--model=test-model");
   });
 });
 
