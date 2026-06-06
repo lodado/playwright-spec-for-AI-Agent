@@ -53,23 +53,23 @@ The CLI:
 spec -> abstract-ai -> judge -> review -> slack (optional)
 ```
 
-| Command | Purpose |
-| --- | --- |
-| `spec` | Parse `*.spec.ts` files into QA scenario JSON. |
-| `abstract-ai` | Ask Hermes to write a live Given/When/Then plan. |
-| `judge` | Ask Hermes to inspect staging and judge the scenario. |
-| `review` | Ask Hermes to review judgment quality without browsing. |
-| `slack` | Send fail/manual-review verdicts to Slack. |
-| `nightly` | Run the full pipeline. |
+| Command       | Purpose                                                 |
+| ------------- | ------------------------------------------------------- |
+| `spec`        | Parse `*.spec.ts` files into QA scenario JSON.          |
+| `abstract-ai` | Ask Hermes to write a live Given/When/Then plan.        |
+| `judge`       | Ask Hermes to inspect staging and judge the scenario.   |
+| `review`      | Ask Hermes to review judgment quality without browsing. |
+| `slack`       | Send fail/manual-review verdicts to Slack.              |
+| `nightly`     | Run the full pipeline.                                  |
 
 ## Recommended workflow
 
-| Stage | Check | Purpose |
-| --- | --- | --- |
-| PR | Mocked Playwright E2E | Stable UI regression checks. |
-| PR / Nightly | API contract tests | Prevent mock/API drift. |
-| Nightly | `playwright-spec-for-ai-agent nightly` | AI-assisted live staging judgment. |
-| Release | Selected live scenarios | Human or AI-assisted smoke validation. |
+| Stage        | Check                                  | Purpose                                |
+| ------------ | -------------------------------------- | -------------------------------------- |
+| PR           | Mocked Playwright E2E                  | Stable UI regression checks.           |
+| PR / Nightly | API contract tests                     | Prevent mock/API drift.                |
+| Nightly      | `playwright-spec-for-ai-agent nightly` | AI-assisted live staging judgment.     |
+| Release      | Selected live scenarios                | Human or AI-assisted smoke validation. |
 
 ```text
 Mocked E2E = stable UI-state verification
@@ -84,17 +84,17 @@ Run from your app repo root, where Playwright specs live.
 AI agent install prompt:
 
 ```text
-Install and wire up github:lodado/playwright-spec-for-AI-Agent in this app repo.
+Install and wire up playwright-spec-for-ai-agent in this app repo.
 
 Reference README:
-https://github.com/lodado/playwright-spec-for-AI-Agent/blob/main/README.md
+https://www.npmjs.com/package/playwright-spec-for-ai-agent
 
 Use the README above as the source of truth for install steps, config shape, annotations, live policies, and safety rules.
 
 Tasks:
 1. Check where Playwright specs live and identify one page to start with.
-2. Add playwright-spec-for-ai-agent as a dev dependency from GitHub:
-   npm install -D github:lodado/playwright-spec-for-AI-Agent
+2. Add playwright-spec-for-ai-agent as a dev dependency:
+   npm install -D playwright-spec-for-ai-agent
 3. Add package scripts for qa:spec, qa:judge, qa:slack, and qa:nightly.
 4. Create playwright-spec-for-ai-agent.config.mjs with this app's specDir, outputDir, and targetPaths.
 5. Add STAGING_QA_EMAIL, STAGING_QA_PASSWORD, and STAGING_QA_BASE_URL to the env setup or document them for CI secrets.
@@ -104,12 +104,6 @@ Tasks:
 
 Do not run destructive staging flows. Use safe-interaction-no-confirm, subscription-mutation, auth-mock, or skip when needed.
 ```
-
-```bash
-npx github:lodado/playwright-spec-for-AI-Agent spec --page=dashboard
-```
-
-After npm publishing:
 
 ```bash
 npx playwright-spec-for-ai-agent spec --page=dashboard
@@ -169,15 +163,15 @@ Example:
 export default {
   paths: {
     specDir: "tests/e2e/{page}",
-    outputDir: ".qa/{page}"
+    outputDir: ".qa/{page}",
   },
   staging: {
-    expectedSubscriptionStatus: "INACTIVE"
+    expectedSubscriptionStatus: "INACTIVE",
   },
   targetPaths: {
     billing: "/settings/billing",
-    dashboard: "/dashboard"
-  }
+    dashboard: "/dashboard",
+  },
 };
 ```
 
@@ -197,14 +191,14 @@ Add annotations directly inside Playwright spec files.
 
 Supported annotations:
 
-| Annotation | Scope | Purpose |
-| --- | --- | --- |
-| `// @qa-page: billing` | File | Optional page id override. |
-| `// @qa-scenario: ACTIVE` | File | Required QA scenario id or intent label. |
-| `// @qa-live-skip: true` | File | Skip this scenario in live QA. |
-| `// @qa-always-run: true` | File | Keep the scenario eligible even when default filtering would skip it. |
-| `// @qa-fixture: avatar=tests/fixtures/qa-avatar.png` | `test` | Name a fixture file used by this specific test. Add it above each test that needs the fixture. |
-| `// @qa-live-policy: readonly` | `test` or `describe` | Tell live QA how safely this test can be judged. Add it above each test; use `describe` only when every child test shares the same policy. |
+| Annotation                                            | Scope                | Purpose                                                                                                                                    |
+| ----------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `// @qa-page: billing`                                | File                 | Optional page id override.                                                                                                                 |
+| `// @qa-scenario: ACTIVE`                             | File                 | Required QA scenario id or intent label.                                                                                                   |
+| `// @qa-live-skip: true`                              | File                 | Skip this scenario in live QA.                                                                                                             |
+| `// @qa-always-run: true`                             | File                 | Keep the scenario eligible even when default filtering would skip it.                                                                      |
+| `// @qa-fixture: avatar=tests/fixtures/qa-avatar.png` | `test`               | Name a fixture file used by this specific test. Add it above each test that needs the fixture.                                             |
+| `// @qa-live-policy: readonly`                        | `test` or `describe` | Tell live QA how safely this test can be judged. Add it above each test; use `describe` only when every child test shares the same policy. |
 
 File-level annotations should be placed at the top of the spec file, before imports:
 
@@ -219,15 +213,15 @@ import { expect, test } from "@playwright/test";
 
 Supported `@qa-live-policy` values:
 
-| Value | Meaning |
-| --- | --- |
-| `readonly` | Safe read-only verification. |
-| `safe-interaction` | Safe interaction is allowed. |
-| `safe-interaction-no-confirm` | Interaction is allowed, but final confirmation/destructive submit should not be clicked. |
-| `mock-judgment` | Original test depends on mocked API state; Hermes should judge whether live UI reasonably matches intent. |
-| `subscription-mutation` | Subscription or billing mutation; block live execution and treat as unsafe for staging automation. |
-| `auth-mock` | Auth is mocked in the Playwright test; block direct live execution. |
-| `skip` | Explicitly skip live QA for this test. |
+| Value                         | Meaning                                                                                                   |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `readonly`                    | Safe read-only verification.                                                                              |
+| `safe-interaction`            | Safe interaction is allowed.                                                                              |
+| `safe-interaction-no-confirm` | Interaction is allowed, but final confirmation/destructive submit should not be clicked.                  |
+| `mock-judgment`               | Original test depends on mocked API state; Hermes should judge whether live UI reasonably matches intent. |
+| `subscription-mutation`       | Subscription or billing mutation; block live execution and treat as unsafe for staging automation.        |
+| `auth-mock`                   | Auth is mocked in the Playwright test; block direct live execution.                                       |
+| `skip`                        | Explicitly skip live QA for this test.                                                                    |
 
 Minimal annotation:
 
@@ -277,7 +271,9 @@ test.describe("Billing cancellation", () => {
     await page.getByRole("button", { name: "Cancel subscription" }).click();
 
     await expect(page.getByRole("dialog")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Confirm cancellation" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Confirm cancellation" }),
+    ).toBeVisible();
   });
 });
 ```
