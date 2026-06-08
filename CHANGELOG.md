@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.4.2...v0.5.0) (2026-06-08)
+
+
+### Features
+
+* resolve judge target from config pageUrl with interactive override ([b1202c2](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/b1202c28b80c44999825dabd9e64027f04ae5ae5))
+
 ## [0.4.2](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.4.1...v0.4.2) (2026-06-06)
 
 
