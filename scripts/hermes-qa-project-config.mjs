@@ -329,6 +329,73 @@ export function resolveTargetPathForPage(page) {
   return targetPath;
 }
 
+export function resolvePageUrlForPage(page) {
+  const pageConfig = getPageConfig(page);
+  const pageUrl = pageConfig.pageUrl;
+  return pageUrl ? String(pageUrl) : null;
+}
+
+/**
+ * @param {string[]} [argv]
+ * @returns {{ targetPath: string | null, pageUrl: string | null }}
+ */
+export function resolveJudgeTarget(argv = [], page) {
+  const cliArg = argv.find(arg => arg.startsWith("--target-path="));
+  if (cliArg) {
+    return {
+      targetPath: cliArg.slice("--target-path=".length).trim(),
+      pageUrl: null,
+    };
+  }
+
+  const pageUrl = resolvePageUrlForPage(page);
+  if (pageUrl) {
+    return { targetPath: null, pageUrl };
+  }
+
+  const targetPath = resolveTargetPathForPage(page);
+  if (!targetPath) {
+    return { targetPath: null, pageUrl: null };
+  }
+
+  return { targetPath, pageUrl: null };
+}
+
+/**
+ * Merge staging URL defaults from project config (does not override CLI/env).
+ * @param {Record<string, string>} config
+ * @param {string[]} [argv]
+ */
+export function applyStagingUrlDefaults(config, argv = []) {
+  const project = getProjectConfig();
+  const global = project.staging ?? {};
+
+  const hasCli = prefix =>
+    argv.some(arg => arg.startsWith(prefix));
+
+  if (
+    !hasCli("--base-url=") &&
+    !process.env.STAGING_QA_BASE_URL &&
+    global.baseUrl
+  ) {
+    config.baseUrl = String(global.baseUrl);
+  }
+  if (
+    !hasCli("--login-path=") &&
+    !process.env.STAGING_QA_LOGIN_PATH &&
+    global.loginPath
+  ) {
+    config.loginPath = String(global.loginPath);
+  }
+  if (
+    !hasCli("--dashboard-path=") &&
+    !process.env.STAGING_QA_DASHBOARD_PATH &&
+    global.dashboardPath
+  ) {
+    config.dashboardPath = String(global.dashboardPath);
+  }
+}
+
 /**
  * Merge staging account defaults from hermes-qa.config (does not override CLI/env).
  * @param {Record<string, string>} config

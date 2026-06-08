@@ -13,6 +13,8 @@ import { resolveSpecForJudge } from "./resolve-spec-for-judge.mjs";
 import {
   buildHermesStagingLogin,
   assertStagingQaCredentials,
+  buildJudgeTargetUrl,
+  displayPathForJudgeTarget,
   redactEmail,
 } from "./staging-qa-config.mjs";
 import { resolveStagingQaConfig } from "./staging-qa-prompt.mjs";
@@ -26,7 +28,7 @@ import {
   artifactPaths,
   ensureProjectConfig,
   parsePageArg,
-  parseTargetPathArg,
+  resolveJudgeTarget,
   resolveSpecDir,
 } from "./page-qa-paths.mjs";
 
@@ -182,7 +184,7 @@ function renderMarkdown(decision, page, targetPath) {
   ].join("\n");
 }
 
-async function runBrowseJudge(page, targetPath, paths, config) {
+async function runBrowseJudge(page, target, paths, config) {
   const resolved = resolveSpecForJudge(paths);
   if (!resolved) {
     throw new Error(
@@ -191,7 +193,8 @@ async function runBrowseJudge(page, targetPath, paths, config) {
   }
 
   const stagingLogin = buildHermesStagingLogin(config);
-  stagingLogin.targetUrl = new URL(targetPath, config.baseUrl).toString();
+  stagingLogin.targetUrl = buildJudgeTargetUrl(target, config.baseUrl);
+  const targetPath = displayPathForJudgeTarget(target);
 
   const specDir = resolveSpecDir(page);
   const specSourceFiles = loadSpecSourceFiles(specDir);
@@ -251,19 +254,31 @@ async function main() {
   const argv = process.argv.slice(2);
   await ensureProjectConfig(argv);
   const page = parsePageArg(argv);
-  const targetPath = parseTargetPathArg(argv, page);
   const paths = artifactPaths(page);
 
   mkdirSync(paths.outputDir, { recursive: true });
 
-  const config = await resolveStagingQaConfig(argv, {
+  const judgeTarget = resolveJudgeTarget(argv, page);
+  if (!judgeTarget.pageUrl && !judgeTarget.targetPath) {
+    console.error(
+      [
+        `Missing target for page "${page}".`,
+        `Set pages.${page}.pageUrl, pages.${page}.targetPath, or targetPaths.${page} in playwright-spec-for-ai-agent.config.*,`,
+        `or pass --target-path=/${page}`,
+      ].join(" ")
+    );
+    process.exit(1);
+  }
+
+  const { config, target } = await resolveStagingQaConfig(argv, {
     stepLabel: `${page} Hermes judge`,
-    targetPath,
+    target: judgeTarget,
     page,
   });
   assertStagingQaCredentials(config);
 
-  const decision = await runBrowseJudge(page, targetPath, paths, config);
+  const targetPath = displayPathForJudgeTarget(target);
+  const decision = await runBrowseJudge(page, target, paths, config);
 
   writeFileSync(
     paths.hermesJudgmentJson,

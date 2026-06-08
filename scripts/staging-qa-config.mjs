@@ -111,6 +111,66 @@ export function buildStagingUrls(config) {
   };
 }
 
+/**
+ * @param {{ targetPath?: string | null, pageUrl?: string | null }} target
+ */
+export function buildJudgeTargetUrl(target, baseUrl) {
+  if (target?.pageUrl) {
+    return String(target.pageUrl);
+  }
+  const path = target?.targetPath ?? "";
+  return new URL(path, baseUrl).toString();
+}
+
+/**
+ * @param {string} input
+ * @returns {{ targetPath: string, pageUrl: string } | null}
+ */
+export function parseTargetInput(input, baseUrl) {
+  const trimmed = String(input ?? "").trim();
+  if (!trimmed) return null;
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    const url = new URL(trimmed);
+    return {
+      pageUrl: url.toString(),
+      targetPath: `${url.pathname}${url.search}${url.hash}`,
+    };
+  }
+
+  const path = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return {
+    targetPath: path,
+    pageUrl: new URL(path, baseUrl).toString(),
+  };
+}
+
+export function displayPathForJudgeTarget(target) {
+  if (target?.pageUrl) {
+    const url = new URL(target.pageUrl);
+    return `${url.pathname}${url.search}${url.hash}` || "/";
+  }
+  return target?.targetPath ?? "/";
+}
+
+/**
+ * Apply interactive target confirmation (Y keeps config/CLI target; n uses custom input).
+ * @param {{ targetPath?: string | null, pageUrl?: string | null } | null} initialTarget
+ * @param {{ confirmed?: boolean, customInput?: string }} [choice]
+ * @returns {{ targetPath: string, pageUrl: string } | { targetPath: string | null, pageUrl: string | null } | null}
+ */
+export function resolveFinalJudgeTarget(
+  initialTarget,
+  baseUrl,
+  { confirmed = true, customInput = "" } = {}
+) {
+  const base = initialTarget ?? { targetPath: null, pageUrl: null };
+  if (confirmed) {
+    return base;
+  }
+  return parseTargetInput(customInput, baseUrl);
+}
+
 export function buildPersistedAccountContext(config) {
   const urls = buildStagingUrls(config);
   return {

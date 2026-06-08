@@ -1,10 +1,15 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { applyStagingAccountDefaults } from "./hermes-qa-project-config.mjs";
+import {
+  applyStagingAccountDefaults,
+  applyStagingUrlDefaults,
+} from "./hermes-qa-project-config.mjs";
 import {
   assertStagingQaCredentials,
+  buildJudgeTargetUrl,
   parseStagingQaArgs,
   redactEmail,
+  resolveFinalJudgeTarget,
 } from "./staging-qa-config.mjs";
 
 const NON_INTERACTIVE_FLAGS = new Set(["--non-interactive", "--yes", "-y"]);
@@ -93,11 +98,11 @@ async function promptConfirm(question, defaultYes = true) {
 
 /**
  * @param {ReturnType<typeof parseStagingQaArgs>} config
- * @param {{ stepLabel?: string, targetPath?: string | null }} [options]
+ * @param {{ stepLabel?: string, target?: { targetPath?: string | null, pageUrl?: string | null } | null }} [options]
  */
 export async function promptRunConfig(
   config,
-  { stepLabel = "Hermes judge", targetPath = null } = {}
+  { stepLabel = "Hermes judge", target = null } = {}
 ) {
   output.write(`\n--- Page QA: ${stepLabel} ---\n\n`);
 
@@ -141,35 +146,48 @@ export async function promptRunConfig(
 
   assertStagingQaCredentials(config);
 
-  const targetUrl = new URL(
-    targetPath ?? config.dashboardPath,
-    config.baseUrl
-  ).toString();
+  let resolvedTarget = target ?? {
+    targetPath: config.dashboardPath,
+    pageUrl: null,
+  };
+  let targetUrl = buildJudgeTargetUrl(resolvedTarget, config.baseUrl);
+
   const proceed = await promptConfirm(`Proceed with ${targetUrl}?`, true);
   if (!proceed) {
-    output.write("Aborted.\n");
-    process.exit(0);
+    const customInput = await promptLine("Target page URL or path");
+    const parsed = resolveFinalJudgeTarget(resolvedTarget, config.baseUrl, {
+      confirmed: false,
+      customInput,
+    });
+    if (!parsed) {
+      output.write("Aborted.\n");
+      process.exit(0);
+    }
+    resolvedTarget = parsed;
+    targetUrl = buildJudgeTargetUrl(resolvedTarget, config.baseUrl);
+    output.write(`Using target: ${targetUrl}\n`);
   }
 
-  return config;
+  return { config, target: resolvedTarget };
 }
 
 /**
  * @param {string[]} [argv]
- * @param {{ stepLabel?: string, targetPath?: string | null, page?: string | null }} [options]
+ * @param {{ stepLabel?: string, target?: { targetPath?: string | null, pageUrl?: string | null } | null, page?: string | null }} [options]
  */
 export async function resolveStagingQaConfig(
   argv = process.argv.slice(2),
-  { stepLabel, targetPath = null, page = null } = {}
+  { stepLabel, target = null, page = null } = {}
 ) {
   const config = parseStagingQaArgs(argv);
   if (page) {
     applyStagingAccountDefaults(config, page);
+    applyStagingUrlDefaults(config, argv);
   }
   if (!shouldPromptInteractively(argv)) {
     assertStagingQaCredentials(config);
-    return config;
+    return { config, target };
   }
 
-  return promptRunConfig(config, { stepLabel, targetPath });
+  return promptRunConfig(config, { stepLabel, target });
 }

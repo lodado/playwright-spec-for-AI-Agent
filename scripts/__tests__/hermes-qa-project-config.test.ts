@@ -4,17 +4,20 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   applyPathTemplate,
+  applyStagingUrlDefaults,
   loadProjectConfig,
   mergeUploadFixtures,
   resetProjectConfigForTests,
   resolveDefaultUploadFixtures,
   resolveFixturePaths,
+  resolveJudgeTarget,
 } from "../hermes-qa-project-config.mjs";
 import {
   parseTargetPathArg,
   resolveOutputDir,
   resolveSpecDir,
 } from "../page-qa-paths.mjs";
+import { DEFAULT_BASE_URL } from "../staging-qa-config.mjs";
 
 afterEach(() => {
   resetProjectConfigForTests();
@@ -32,6 +35,51 @@ describe("applyPathTemplate", () => {
 });
 
 describe("loadProjectConfig", () => {
+  it("resolves pageUrl and staging baseUrl from config file", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hermes-qa-url-"));
+    const configPath = join(root, "hermes-qa.config.mjs");
+    writeFileSync(
+      configPath,
+      `export default {
+        staging: {
+          baseUrl: "https://staging.example.com",
+          loginPath: "/sign-in",
+        },
+        pages: {
+          home: {
+            pageUrl: "https://staging.example.com/ko",
+          },
+          billing: {
+            targetPath: "/settings/billing",
+          },
+        },
+      };
+`,
+    );
+
+    const previousCwd = process.cwd();
+    process.chdir(root);
+    try {
+      await loadProjectConfig([`--config=${configPath}`]);
+      expect(resolveJudgeTarget([], "home")).toEqual({
+        targetPath: null,
+        pageUrl: "https://staging.example.com/ko",
+      });
+      expect(parseTargetPathArg([], "home")).toBe("/ko");
+      expect(resolveJudgeTarget([], "billing")).toEqual({
+        targetPath: "/settings/billing",
+        pageUrl: null,
+      });
+
+      const config = { baseUrl: DEFAULT_BASE_URL, loginPath: "/login" };
+      applyStagingUrlDefaults(config, []);
+      expect(config.baseUrl).toBe("https://staging.example.com");
+      expect(config.loginPath).toBe("/sign-in");
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
   it("loads paths and per-page overrides from config file", async () => {
     const root = mkdtempSync(join(tmpdir(), "hermes-qa-config-"));
     const configPath = join(root, "hermes-qa.config.mjs");

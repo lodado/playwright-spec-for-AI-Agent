@@ -3,6 +3,7 @@ import { join, relative } from "node:path";
 import {
   getProjectConfig,
   loadProjectConfig,
+  resolveJudgeTarget,
   resolveOutputDirForPage,
   resolveSpecDirForPage,
   resolveTargetPathForPage,
@@ -36,24 +37,31 @@ export function parsePageArg(argv, { required = true } = {}) {
 }
 
 export function parseTargetPathArg(argv, page) {
-  const targetPathArg = argv.find(arg => arg.startsWith("--target-path="));
-  if (targetPathArg) {
-    return targetPathArg.slice("--target-path=".length).trim();
+  const target = resolveJudgeTarget(argv, page);
+  if (target.pageUrl) {
+    try {
+      const url = new URL(target.pageUrl);
+      return `${url.pathname}${url.search}${url.hash}` || "/";
+    } catch {
+      return target.pageUrl;
+    }
   }
 
-  const defaultPath = resolveTargetPathForPage(page);
-  if (!defaultPath) {
-    console.error(
-      [
-        `Missing --target-path= for page "${page}".`,
-        `Set pages.${page}.targetPath or targetPaths.${page} in playwright-spec-for-ai-agent.config.*,`,
-        `or pass --target-path=/${page}`,
-      ].join(" ")
-    );
-    process.exit(1);
+  if (target.targetPath) {
+    return target.targetPath;
   }
-  return defaultPath;
+
+  console.error(
+    [
+      `Missing --target-path= for page "${page}".`,
+      `Set pages.${page}.pageUrl, pages.${page}.targetPath, or targetPaths.${page} in playwright-spec-for-ai-agent.config.*,`,
+      `or pass --target-path=/${page}`,
+    ].join(" ")
+  );
+  process.exit(1);
 }
+
+export { resolveJudgeTarget };
 
 export function resolvePageQaDir(page) {
   return resolveOutputDirForPage(page);

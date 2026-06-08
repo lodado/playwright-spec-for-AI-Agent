@@ -96,8 +96,8 @@ Tasks:
 2. Add playwright-spec-for-ai-agent as a dev dependency:
    npm install -D playwright-spec-for-ai-agent
 3. Add package scripts for qa:spec, qa:judge, qa:slack, and qa:nightly.
-4. Create playwright-spec-for-ai-agent.config.mjs with this app's specDir, outputDir, and targetPaths.
-5. Add STAGING_QA_EMAIL, STAGING_QA_PASSWORD, and STAGING_QA_BASE_URL to the env setup or document them for CI secrets.
+4. Create playwright-spec-for-ai-agent.config.mjs with this app's specDir, staging.baseUrl, and per-page pageUrl or targetPath.
+5. Add STAGING_QA_EMAIL and STAGING_QA_PASSWORD to the env setup or document them for CI secrets (base URL can live in config instead of STAGING_QA_BASE_URL).
 6. Add file-level @qa-page and @qa-scenario annotations at the top of the first spec file.
 7. Add @qa-live-policy above each test, and @qa-fixture above each test that uses a fixture file.
 8. Run qa:spec for the selected page and show me the generated QA artifact paths.
@@ -139,9 +139,11 @@ Run a page pipeline:
 ```bash
 npx playwright-spec-for-ai-agent spec --page=pricing
 npx playwright-spec-for-ai-agent abstract-ai --page=pricing
-npx playwright-spec-for-ai-agent judge --page=pricing --target-path=/pricing
+npx playwright-spec-for-ai-agent judge --page=pricing
 npx playwright-spec-for-ai-agent review --page=pricing
 ```
+
+When `pages.pricing.targetPath` (or `pageUrl`) is set in config, `judge` does not need `--target-path`. Override with `--target-path=/custom` when needed.
 
 Run nightly with Slack:
 
@@ -154,7 +156,7 @@ npx playwright-spec-for-ai-agent nightly --page=pricing --with-slack --non-inter
 Copy the example config into your app repo:
 
 ```bash
-cp playwright-spec-for-ai-agent.config.example.mjs playwright-spec-for-ai-agent.config.mjs
+cp node_modules/playwright-spec-for-ai-agent/playwright-spec-for-ai-agent.config.example.mjs playwright-spec-for-ai-agent.config.mjs
 ```
 
 Example:
@@ -163,27 +165,58 @@ Example:
 export default {
   paths: {
     specDir: "tests/e2e/{page}",
-    outputDir: ".qa/{page}",
   },
   staging: {
+    baseUrl: "https://staging.your-app.com",
+    loginPath: "/login",
     expectedSubscriptionStatus: "INACTIVE",
+    expectedPlan: "BASIC",
+    accountNotes: "QA account on staging — do not mutate billing",
   },
-  targetPaths: {
-    billing: "/settings/billing",
-    dashboard: "/dashboard",
+  pages: {
+    dashboard: {
+      pageUrl: "https://staging.your-app.com/dashboard",
+      expectedSubscriptionStatus: "ACTIVE",
+    },
+    billing: {
+      targetPath: "/settings/billing",
+    },
   },
 };
 ```
+
+| Field                                     | Purpose                                                           |
+| ----------------------------------------- | ----------------------------------------------------------------- |
+| `paths.specDir`                           | Where Playwright specs for `{page}` live.                         |
+| `staging.baseUrl`                         | Staging origin used by `judge` (unless env/CLI overrides).        |
+| `staging.loginPath`                       | Login path relative to `baseUrl`.                                 |
+| `staging.expectedSubscriptionStatus`      | Default `@qa-scenario` expectation for Hermes.                    |
+| `pages.{page}.pageUrl`                    | Full URL Hermes opens for that page (highest priority after CLI). |
+| `pages.{page}.targetPath`                 | Path joined with `staging.baseUrl` when `pageUrl` is not set.     |
+| `pages.{page}.expectedSubscriptionStatus` | Per-page override of staging account expectations.                |
+
+Legacy `targetPaths.{page}` still works; prefer `pages.{page}.targetPath` or `pageUrl` for new configs.
+
+Output artifacts default to `src/page/{page}/__QA__/`. Override with `paths.outputDir`, `pages.{page}.outputDir`, or `--output-dir=`.
 
 Set staging credentials with environment variables:
 
 ```bash
 STAGING_QA_EMAIL=qa@your-company.com
 STAGING_QA_PASSWORD=your-staging-password
-STAGING_QA_BASE_URL=https://staging.your-app.com
 ```
 
+`STAGING_QA_BASE_URL` and `--base-url=` still override `staging.baseUrl` when set.
+
 Prefer environment variables or CI secrets over `--password=...`, because shell history can leak CLI flags.
+
+### Interactive `judge`
+
+When stdin is a TTY and `CI` is not set, `judge` prompts for credentials and target confirmation before browsing.
+
+If config already defines the target URL, the prompt shows that URL. Answer **Y** to proceed, or **n** to enter a different full URL or path (for example `/ko` or `https://staging.your-app.com/ko`).
+
+Use `--non-interactive`, `--yes`, or `-y` to skip prompts (required for CI and `nightly`).
 
 ## Annotations
 
