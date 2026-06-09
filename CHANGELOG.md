@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.6.0...v0.7.0) (2026-06-09)
+
+
+### Features
+
+* enhance live QA test handling with new filtering and reporting functions ([1f226f5](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/1f226f5740d6b5216802658d75088d0bf545a289))
+
 ## [0.6.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.5.0...v0.6.0) (2026-06-09)
 
 
