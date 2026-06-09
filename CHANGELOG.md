@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.5.0...v0.6.0) (2026-06-09)
+
+
+### Features
+
+* abstract-qa 문구 수정 ([0ab43a7](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/0ab43a714a846f55d704cc212ff277bad2bd33c6))
+
 ## [0.5.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.4.2...v0.5.0) (2026-06-08)
 
 

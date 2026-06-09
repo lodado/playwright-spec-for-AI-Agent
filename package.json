@@ -1,6 +1,6 @@
 {
   "name": "playwright-spec-for-ai-agent",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "AI-assisted live staging QA layer for Playwright test suites. Parses @qa-scenario annotations from *.spec.ts into structured QA scenarios, then uses Hermes Agent to log into staging, visit target pages, and judge live DOM against test intent — returning pass, fail, manual_review, or skip without running Playwright against staging or mutating billing state.",
   "type": "module",
   "license": "MIT",
