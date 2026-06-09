@@ -17,6 +17,12 @@ import {
   parsePageArg,
   resolveSpecDir,
 } from "./page-qa-paths.mjs";
+import {
+  collectLiveSkippedEntries,
+  countLiveSpecTests,
+  filterSpecForLiveJson,
+  printLiveSkippedTable,
+} from "./spec-live-filter.mjs";
 
 function pageLabel(page) {
   return page
@@ -34,27 +40,30 @@ async function main() {
 
   mkdirSync(artifactPaths(page).outputDir, { recursive: true });
 
-  const spec = parseSpecDirectory(specDir);
+  const parsedSpec = parseSpecDirectory(specDir);
+  const skippedEntries = collectLiveSkippedEntries(parsedSpec);
+  const spec = filterSpecForLiveJson(parsedSpec);
   const abstracted = abstractSpec(spec);
 
   writeFileSync(jsonPath, `${JSON.stringify(spec, null, 2)}\n`);
   writeFileSync(specAbstractedJson, `${JSON.stringify(abstracted, null, 2)}\n`);
 
-  const scenarioIds = [...new Set(spec.scenarios.map(s => s.scenarioId))];
-  const liveScenarios = spec.scenarios.filter(s => !s.liveSkip);
-  const skipCount = spec.scenarios.length - liveScenarios.length;
+  const includedTests = countLiveSpecTests(spec);
+  const parsedTests = countLiveSpecTests(parsedSpec);
 
+  const scenarioIds = [...new Set(spec.scenarios.map(s => s.scenarioId))];
   const summary = scenarioIds.map(scenarioId =>
     formatScenarioCoverageSummary(spec, scenarioId)
   );
 
   console.log(`${label(page)} QA spec written: ${jsonPath}`);
   console.log(`${label(page)} rule-abstracted spec: ${specAbstractedJson}`);
+  console.log(
+    `  Live QA tests in JSON: ${includedTests} included, ${skippedEntries.length} skipped (${parsedTests} parsed total)`
+  );
   console.log(`  (run abstract-ai --page=${page} for qa-spec-live.json + .md)`);
   for (const line of summary) console.log(`  - ${line}`);
-  if (skipCount > 0) {
-    console.log(`  (${skipCount} scenario(s) skipped via @qa-live-skip)`);
-  }
+  printLiveSkippedTable(skippedEntries);
 }
 
 function label(page) {
