@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildJudgeBrowseDocument,
+  collectUniqueUploadFixtures,
   renderFriendlyQaSpecMarkdown,
   renderJudgeHermesDocument,
 } from "../qa-spec-judge-document.mjs";
@@ -133,6 +134,53 @@ describe("buildJudgeBrowseDocument", () => {
     expect(planSource).toBe("spec-live.md");
     expect(document).toContain("login:");
     expect(document).toContain("shows health score");
+  });
+});
+
+describe("collectUniqueUploadFixtures", () => {
+  it("dedupes by absolute path across defaults and byCheckId", () => {
+    const sharedPath = "/repo/fixtures/upload.pdf";
+    const otherPath = "/repo/fixtures/invoice.pdf";
+
+    const unique = collectUniqueUploadFixtures({
+      defaults: { workspace_pdf: sharedPath },
+      byCheckId: {
+        "to-be-3": { workspace_pdf: sharedPath },
+        "to-be-post-tasks": { pdf: otherPath },
+        "to-be-20": { pdf: otherPath },
+      },
+    });
+
+    expect(unique).toEqual([
+      { name: "workspace_pdf", absPath: sharedPath },
+      { name: "pdf", absPath: otherPath },
+    ]);
+  });
+});
+
+describe("renderJudgeHermesDocument uploads", () => {
+  it("renders unique fixture paths only once in Uploads section", () => {
+    const sharedPath = "/repo/fixtures/upload.pdf";
+
+    const doc = renderJudgeHermesDocument({
+      page: "workspace",
+      spec: sampleSpec,
+      includeSession: false,
+      alwaysRunScenarioIds: [],
+      specSourceFiles: {},
+      uploadFixtures: {
+        defaults: {},
+        byCheckId: {
+          "to-be-a": { workspace_pdf: sharedPath },
+          "to-be-b": { workspace_pdf: sharedPath },
+        },
+      },
+    });
+
+    expect(doc).toContain("## Uploads");
+    expect(doc).toContain("- workspace_pdf: `/repo/fixtures/upload.pdf`");
+    expect(doc.match(/upload\.pdf/g)).toHaveLength(1);
+    expect(doc).not.toContain("to-be-a/");
   });
 });
 

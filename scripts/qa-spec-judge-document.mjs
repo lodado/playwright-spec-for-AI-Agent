@@ -182,23 +182,40 @@ function renderScenarioBlock(scenario, { alwaysRun }) {
   return lines;
 }
 
-function renderUploadFixtures(uploadFixtures) {
+/** Dedupe fixture paths for markdown (defaults first, then byCheckId). */
+export function collectUniqueUploadFixtures(uploadFixtures) {
   if (!uploadFixtures) return [];
 
-  const lines = ["## Uploads", ""];
-  const defaults = uploadFixtures.defaults ?? {};
+  const seenPaths = new Set();
+  const unique = [];
 
-  for (const [name, absPath] of Object.entries(defaults)) {
-    lines.push(`- ${name}: \`${absPath}\``);
+  const addEntry = (name, absPath) => {
+    if (!absPath || seenPaths.has(absPath)) return;
+    seenPaths.add(absPath);
+    unique.push({ name, absPath });
+  };
+
+  for (const [name, absPath] of Object.entries(uploadFixtures.defaults ?? {})) {
+    addEntry(name, absPath);
   }
 
-  const byCheckId = uploadFixtures.byCheckId ?? {};
-  for (const [checkId, files] of Object.entries(byCheckId)) {
+  for (const files of Object.values(uploadFixtures.byCheckId ?? {})) {
     for (const [name, absPath] of Object.entries(files)) {
-      lines.push(`- ${checkId}/${name}: \`${absPath}\``);
+      addEntry(name, absPath);
     }
   }
 
+  return unique;
+}
+
+function renderUploadFixtures(uploadFixtures) {
+  const unique = collectUniqueUploadFixtures(uploadFixtures);
+  if (unique.length === 0) return [];
+
+  const lines = ["## Uploads", ""];
+  for (const { name, absPath } of unique) {
+    lines.push(`- ${name}: \`${absPath}\``);
+  }
   lines.push("");
   return lines;
 }
