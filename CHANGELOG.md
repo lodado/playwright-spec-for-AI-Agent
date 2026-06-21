@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.7.0...v0.8.0) (2026-06-21)
+
+
+### Features
+
+* login flag option 추가 ([c06ec8f](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/c06ec8f9c79fbee308a87cfbfaad6742362f6ba5))
+
 ## [0.7.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.6.0...v0.7.0) (2026-06-09)
 
 
