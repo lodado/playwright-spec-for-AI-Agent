@@ -37,6 +37,7 @@ Common options:
   --spec-dir=<template>      Spec dir, supports {page} and {root}
   --output-dir=<template>    Output dir, supports {page} and {root}
   --email= / --password=     Staging credentials (or env vars)
+  --auth-required=false      Skip login for public/no-auth target pages
   --non-interactive          Skip prompts (CI)
 
 Examples:

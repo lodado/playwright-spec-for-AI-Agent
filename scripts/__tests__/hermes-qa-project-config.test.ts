@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   applyPathTemplate,
+  applyStagingAccountDefaults,
   applyStagingUrlDefaults,
   loadProjectConfig,
   mergeUploadFixtures,
@@ -75,6 +76,36 @@ describe("loadProjectConfig", () => {
       applyStagingUrlDefaults(config, []);
       expect(config.baseUrl).toBe("https://staging.example.com");
       expect(config.loginPath).toBe("/sign-in");
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it("applies page authRequired overrides from config file", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hermes-qa-auth-"));
+    const configPath = join(root, "hermes-qa.config.mjs");
+    writeFileSync(
+      configPath,
+      `export default {
+        staging: {
+          authRequired: true,
+        },
+        pages: {
+          pricing: {
+            authRequired: false,
+          },
+        },
+      };
+`,
+    );
+
+    const previousCwd = process.cwd();
+    process.chdir(root);
+    try {
+      await loadProjectConfig([`--config=${configPath}`]);
+      const config = {};
+      applyStagingAccountDefaults(config, "pricing");
+      expect(config.authRequired).toBe(false);
     } finally {
       process.chdir(previousCwd);
     }

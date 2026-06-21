@@ -29,6 +29,7 @@ export const DEFAULT_TARGET_PATHS = {
 };
 
 export const DEFAULT_STAGING_ACCOUNT = {
+  authRequired: true,
   expectedPlan: "",
   expectedSubscriptionStatus: "",
   accountNotes: "",
@@ -406,6 +407,12 @@ export function applyStagingAccountDefaults(config, page) {
   const pageConfig = getPageConfig(page);
   const global = project.staging ?? DEFAULT_STAGING_ACCOUNT;
 
+  if (config.authRequired === undefined) {
+    config.authRequired =
+      pageConfig.authRequired ??
+      global.authRequired ??
+      DEFAULT_STAGING_ACCOUNT.authRequired;
+  }
   if (!config.expectedPlan) {
     config.expectedPlan =
       pageConfig.expectedPlan ?? global.expectedPlan ?? "";

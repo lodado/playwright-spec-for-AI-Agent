@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertStagingQaCredentials,
+  buildHermesStagingLogin,
   buildJudgeTargetUrl,
   displayPathForJudgeTarget,
+  isAuthRequired,
+  parseStagingQaArgs,
   parseTargetInput,
   resolveFinalJudgeTarget,
 } from "../staging-qa-config.mjs";
@@ -74,5 +78,41 @@ describe("resolveFinalJudgeTarget", () => {
         confirmed: true,
       }),
     ).toBe(target);
+  });
+});
+
+describe("authRequired", () => {
+  it("parses --auth-required=false", () => {
+    const config = parseStagingQaArgs(["--auth-required=false"]);
+
+    expect(isAuthRequired(config)).toBe(false);
+  });
+
+  it("does not require credentials when authRequired is false", () => {
+    expect(() =>
+      assertStagingQaCredentials({
+        authRequired: false,
+        email: "",
+        password: "",
+      }),
+    ).not.toThrow();
+  });
+
+  it("omits credentials from the staging login payload when auth is disabled", () => {
+    const payload = buildHermesStagingLogin({
+      authRequired: false,
+      email: "qa@example.com",
+      password: "secret",
+      baseUrl: "https://staging.example.com",
+      loginPath: "/login",
+      dashboardPath: "/dashboard",
+    });
+
+    expect(payload).toMatchObject({
+      authRequired: false,
+      email: "",
+      password: "",
+      loginUrl: "https://staging.example.com/login",
+    });
   });
 });

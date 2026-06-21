@@ -97,7 +97,7 @@ Tasks:
    npm install -D playwright-spec-for-ai-agent
 3. Add package scripts for qa:spec, qa:judge, qa:slack, and qa:nightly.
 4. Create playwright-spec-for-ai-agent.config.mjs with this app's specDir, staging.baseUrl, and per-page pageUrl or targetPath.
-5. Add STAGING_QA_EMAIL and STAGING_QA_PASSWORD to the env setup or document them for CI secrets (base URL can live in config instead of STAGING_QA_BASE_URL).
+5. Add STAGING_QA_EMAIL and STAGING_QA_PASSWORD to the env setup or document them for CI secrets when the page requires login (base URL can live in config instead of STAGING_QA_BASE_URL).
 6. Add file-level @qa-page and @qa-scenario annotations at the top of the first spec file.
 7. Add @qa-live-policy above each test, and @qa-fixture above each test that uses a fixture file.
 8. Run qa:spec for the selected page and show me the generated QA artifact paths.
@@ -169,6 +169,7 @@ export default {
   staging: {
     baseUrl: "https://staging.your-app.com",
     loginPath: "/login",
+    authRequired: true,
     expectedSubscriptionStatus: "INACTIVE",
     expectedPlan: "BASIC",
     accountNotes: "QA account on staging — do not mutate billing",
@@ -181,6 +182,10 @@ export default {
     billing: {
       targetPath: "/settings/billing",
     },
+    pricing: {
+      targetPath: "/pricing",
+      authRequired: false,
+    },
   },
 };
 ```
@@ -190,9 +195,11 @@ export default {
 | `paths.specDir`                           | Where Playwright specs for `{page}` live.                         |
 | `staging.baseUrl`                         | Staging origin used by `judge` (unless env/CLI overrides).        |
 | `staging.loginPath`                       | Login path relative to `baseUrl`.                                 |
+| `staging.authRequired`                    | Set `false` when pages can be judged without logging in.          |
 | `staging.expectedSubscriptionStatus`      | Default `@qa-scenario` expectation for Hermes.                    |
 | `pages.{page}.pageUrl`                    | Full URL Hermes opens for that page (highest priority after CLI). |
 | `pages.{page}.targetPath`                 | Path joined with `staging.baseUrl` when `pageUrl` is not set.     |
+| `pages.{page}.authRequired`               | Per-page override for public or no-login pages.                   |
 | `pages.{page}.expectedSubscriptionStatus` | Per-page override of staging account expectations.                |
 
 Legacy `targetPaths.{page}` still works; prefer `pages.{page}.targetPath` or `pageUrl` for new configs.
@@ -209,6 +216,63 @@ STAGING_QA_PASSWORD=your-staging-password
 `STAGING_QA_BASE_URL` and `--base-url=` still override `staging.baseUrl` when set.
 
 Prefer environment variables or CI secrets over `--password=...`, because shell history can leak CLI flags.
+
+### Login fields
+
+When `authRequired` is `true` (the default), Hermes receives `loginPath`, `STAGING_QA_EMAIL`, and `STAGING_QA_PASSWORD`, then logs in through the browser before judging the target page. Make the login form easy to identify with normal accessible markup plus stable QA attributes:
+
+```html
+<label for="qa-login-email">Email</label>
+<input
+  id="qa-login-email"
+  data-qa="login-email"
+  name="email"
+  type="email"
+  autocomplete="username"
+/>
+
+<label for="qa-login-password">Password</label>
+<input
+  id="qa-login-password"
+  data-qa="login-password"
+  name="password"
+  type="password"
+  autocomplete="current-password"
+/>
+
+<button type="submit">Log in</button>
+```
+
+The important tags are the email input (`type="email"`, `name="email"`, `autocomplete="username"`, optional `data-qa="login-email"`), the password input (`type="password"`, `name="password"`, `autocomplete="current-password"`, optional `data-qa="login-password"`), and a visible submit button. The library does not require a hard-coded selector, but these attributes make agent login much more reliable.
+
+If the target page does not require login, set `authRequired` to `false` and do not send staging credentials:
+
+```js
+export default {
+  staging: {
+    baseUrl: "https://staging.your-app.com",
+    authRequired: false,
+  },
+  pages: {
+    pricing: {
+      targetPath: "/pricing",
+      authRequired: false,
+    },
+  },
+};
+```
+
+You can also pass it for a single run:
+
+```bash
+npx playwright-spec-for-ai-agent judge --page=pricing --auth-required=false
+```
+
+Or in CI:
+
+```bash
+STAGING_QA_AUTH_REQUIRED=false npx playwright-spec-for-ai-agent judge --page=pricing --non-interactive
+```
 
 ### Interactive `judge`
 
@@ -340,7 +404,7 @@ Common output files:
 - Node.js 20+
 - Playwright specs in the app repo
 - Hermes Agent installed and configured
-- Staging credentials for `judge` and `nightly`
+- Staging credentials for `judge` and `nightly` when `authRequired` is not `false`
 
 Install Hermes Agent:
 

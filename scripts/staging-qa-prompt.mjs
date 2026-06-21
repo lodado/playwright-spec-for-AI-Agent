@@ -7,6 +7,7 @@ import {
 import {
   assertStagingQaCredentials,
   buildJudgeTargetUrl,
+  isAuthRequired,
   parseStagingQaArgs,
   redactEmail,
   resolveFinalJudgeTarget,
@@ -106,28 +107,32 @@ export async function promptRunConfig(
 ) {
   output.write(`\n--- Page QA: ${stepLabel} ---\n\n`);
 
-  if (config.email) {
-    const keepEmail = await promptConfirm(
-      `Use email ${redactEmail(config.email)}?`,
-      true
-    );
-    if (!keepEmail) {
+  if (isAuthRequired(config)) {
+    if (config.email) {
+      const keepEmail = await promptConfirm(
+        `Use email ${redactEmail(config.email)}?`,
+        true
+      );
+      if (!keepEmail) {
+        config.email = await promptLine("Staging email");
+      }
+    } else {
       config.email = await promptLine("Staging email");
     }
-  } else {
-    config.email = await promptLine("Staging email");
-  }
 
-  if (config.password) {
-    const keepPassword = await promptConfirm(
-      "Use STAGING_QA_PASSWORD from env?",
-      true
-    );
-    if (!keepPassword) {
+    if (config.password) {
+      const keepPassword = await promptConfirm(
+        "Use STAGING_QA_PASSWORD from env?",
+        true
+      );
+      if (!keepPassword) {
+        config.password = await promptHidden("Staging password: ");
+      }
+    } else {
       config.password = await promptHidden("Staging password: ");
     }
   } else {
-    config.password = await promptHidden("Staging password: ");
+    output.write("Login disabled for this run (authRequired=false).\n");
   }
 
   if (!config.expectedSubscriptionStatus) {

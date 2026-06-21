@@ -5,6 +5,11 @@ const DEFAULT_DASHBOARD_PATH = "/dashboard";
 const CLI_FLAGS = [
   ["--email=", "STAGING_QA_EMAIL", "Staging QA account email"],
   ["--password=", "STAGING_QA_PASSWORD", "Staging QA account password"],
+  [
+    "--auth-required=",
+    "STAGING_QA_AUTH_REQUIRED",
+    "Whether staging requires login before judging",
+  ],
   ["--base-url=", "STAGING_QA_BASE_URL", "Staging origin"],
   ["--login-path=", "STAGING_QA_LOGIN_PATH", "Login path"],
   ["--dashboard-path=", "STAGING_QA_DASHBOARD_PATH", "Dashboard path"],
@@ -29,6 +34,18 @@ function envKeyForFlag(flagPrefix) {
   return CLI_FLAGS.find(([flag]) => flag === flagPrefix)?.[1];
 }
 
+export function parseBooleanFlag(value) {
+  if (value === undefined || value === null || value === "") return undefined;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  return undefined;
+}
+
+export function isAuthRequired(config) {
+  return config.authRequired !== false;
+}
+
 export function redactEmail(value) {
   if (!value) return "";
   return `${value.slice(0, 2)}***${value.slice(-2)}`;
@@ -38,6 +55,7 @@ export function parseStagingQaArgs(argv = process.argv.slice(2)) {
   const config = {
     email: process.env.STAGING_QA_EMAIL ?? "",
     password: process.env.STAGING_QA_PASSWORD ?? "",
+    authRequired: parseBooleanFlag(process.env.STAGING_QA_AUTH_REQUIRED),
     baseUrl: process.env.STAGING_QA_BASE_URL ?? DEFAULT_BASE_URL,
     loginPath: process.env.STAGING_QA_LOGIN_PATH ?? DEFAULT_LOGIN_PATH,
     dashboardPath:
@@ -66,6 +84,9 @@ export function parseStagingQaArgs(argv = process.argv.slice(2)) {
       case "STAGING_QA_PASSWORD":
         config.password = value;
         break;
+      case "STAGING_QA_AUTH_REQUIRED":
+        config.authRequired = parseBooleanFlag(value);
+        break;
       case "STAGING_QA_BASE_URL":
         config.baseUrl = value;
         break;
@@ -93,6 +114,7 @@ export function parseStagingQaArgs(argv = process.argv.slice(2)) {
 }
 
 export function assertStagingQaCredentials(config) {
+  if (!isAuthRequired(config)) return;
   if (!config.email || !config.password) {
     throw new Error(
       [
@@ -174,6 +196,7 @@ export function resolveFinalJudgeTarget(
 export function buildPersistedAccountContext(config) {
   const urls = buildStagingUrls(config);
   return {
+    authRequired: isAuthRequired(config),
     email: redactEmail(config.email),
     loginUrl: urls.loginUrl,
     dashboardUrl: urls.dashboardUrl,
@@ -195,8 +218,17 @@ export function buildHermesJudgeInstructions(config) {
     "Never downgrade deterministic Playwright failures to pass.",
     "Treat ambiguous visual concerns as manual_review.",
     "Do not suggest or perform state-changing actions.",
-    "Use stagingLogin credentials only if your tools require staging authentication.",
   ];
+
+  if (isAuthRequired(config)) {
+    instructions.push(
+      "Use stagingLogin credentials only if your tools require staging authentication."
+    );
+  } else {
+    instructions.push(
+      "This target does not require login. Open stagingLogin.targetUrl directly and do not look for credentials."
+    );
+  }
 
   if (hasExplicitAccountExpectations(config)) {
     instructions.push(
@@ -216,16 +248,19 @@ export function buildHermesJudgeInstructions(config) {
 
 export function buildHermesStagingLogin(config) {
   const urls = buildStagingUrls(config);
+  const authRequired = isAuthRequired(config);
   return {
-    email: config.email,
-    password: config.password,
+    authRequired,
+    email: authRequired ? config.email : "",
+    password: authRequired ? config.password : "",
     loginUrl: urls.loginUrl,
     dashboardUrl: urls.dashboardUrl,
     expectedPlan: config.expectedPlan || null,
     expectedSubscriptionStatus: config.expectedSubscriptionStatus || null,
     accountNotes: config.accountNotes || null,
-    usage:
-      "Use only for staging authentication context or diagnosing login failures. Do not mutate subscription or billing state.",
+    usage: authRequired
+      ? "Use only for staging authentication context or diagnosing login failures. Do not mutate subscription or billing state."
+      : "No login is required for this target. Open the target URL directly.",
   };
 }
 
@@ -250,6 +285,7 @@ Interactive mode:
 Examples:
   STAGING_QA_EMAIL='qa@example.com' STAGING_QA_PASSWORD='secret!' npx playwright-spec-for-ai-agent judge --page=dashboard
   npx playwright-spec-for-ai-agent judge --page=dashboard --email='qa@example.com' --password='secret!'
+  npx playwright-spec-for-ai-agent judge --page=pricing --auth-required=false
 `);
 }
 

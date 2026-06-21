@@ -18,6 +18,7 @@ export default {
   staging: {
     baseUrl: "https://staging.example.com",
     loginPath: "/login",
+    authRequired: true,
     expectedSubscriptionStatus: "INACTIVE",
     expectedPlan: "BASIC",
     accountNotes: "QA account on staging — do not mutate billing",
@@ -30,6 +31,7 @@ export default {
     },
     pricing: {
       targetPath: "/pricing",
+      authRequired: false,
     },
   },
 };

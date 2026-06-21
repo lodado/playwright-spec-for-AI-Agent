@@ -81,4 +81,21 @@ describe("buildBrowseHermesQuery", () => {
       "Value mismatch alone (e.g., `0` vs `8`) is not a failure",
     );
   });
+
+  it("instructs Hermes to skip login when auth is disabled", () => {
+    const query = buildBrowseHermesQuery({
+      judgeDocument: "## Plan\n\n### 1. public page",
+      stagingLogin: {
+        authRequired: false,
+        loginUrl: "https://example.com/login",
+        email: "",
+        password: "",
+        targetUrl: "https://example.com/pricing",
+      },
+    });
+
+    expect(query).toContain("Open the target page directly without logging in");
+    expect(query).toContain("Login required: false");
+    expect(query).not.toContain("Password:");
+  });
 });

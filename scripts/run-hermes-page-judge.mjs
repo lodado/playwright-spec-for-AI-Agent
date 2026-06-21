@@ -38,11 +38,32 @@ export function buildBrowseHermesQuery({
   judgeDocument,
   stagingLogin,
 }) {
+  const authRequired = stagingLogin.authRequired !== false;
+  const accessInstruction = authRequired
+    ? "Follow the **QA test plan** below. Log in, open the target page, run the tests that apply to this account, and report results."
+    : "Follow the **QA test plan** below. Open the target page directly without logging in, run the tests that apply, and report results.";
+  const sessionLines = authRequired
+    ? [
+        "## Session credentials",
+        "",
+        `Login URL: ${stagingLogin.loginUrl}`,
+        `Email: ${stagingLogin.email}`,
+        `Password: ${stagingLogin.password}`,
+        `Target URL: ${stagingLogin.targetUrl}`,
+      ]
+    : [
+        "## Session access",
+        "",
+        "Login required: false",
+        "Open the target URL directly. Do not search for email or password fields.",
+        `Target URL: ${stagingLogin.targetUrl}`,
+      ];
+
   return [
     "You are a QA judge for a live staging environment.",
     "",
     "## Your task",
-    "Follow the **QA test plan** below. Log in, open the target page, run the tests that apply to this account, and report results.",
+    accessInstruction,
     "The test plan uses **Given / When / Then** — not JSON. Use the exact test **titles** from the plan in your verdict `checks[].item` field.",
     "",
     "## Rules",
@@ -88,12 +109,7 @@ export function buildBrowseHermesQuery({
     "",
     "---",
     "",
-    "## Session credentials",
-    "",
-    `Login URL: ${stagingLogin.loginUrl}`,
-    `Email: ${stagingLogin.email}`,
-    `Password: ${stagingLogin.password}`,
-    `Target URL: ${stagingLogin.targetUrl}`,
+    ...sessionLines,
   ].join("\n");
 }
 
