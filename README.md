@@ -1,10 +1,40 @@
+<div align="center">
+
 # playwright-spec-for-AI-Agent
 
-AI-assisted live staging QA for web apps that already have Playwright specs.
+**AI-assisted live staging QA for web apps that already have Playwright specs.**
+
+[![npm version](https://img.shields.io/npm/v/playwright-spec-for-ai-agent?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/playwright-spec-for-ai-agent)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
+[![Playwright](https://img.shields.io/badge/Playwright-%3E%3D1.40-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)](https://playwright.dev)
+[![GitHub stars](https://img.shields.io/github/stars/lodado/playwright-spec-for-AI-Agent?style=for-the-badge&logo=github)](https://github.com/lodado/playwright-spec-for-AI-Agent/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/lodado/playwright-spec-for-AI-Agent?style=for-the-badge&logo=github)](https://github.com/lodado/playwright-spec-for-AI-Agent/issues)
+
+<br />
+
+[![Playwright](https://img.shields.io/badge/%23Playwright-2EAD33?style=flat-square)](https://github.com/topics/playwright)
+[![Test Automation](https://img.shields.io/badge/%23TestAutomation-0A66C2?style=flat-square)](https://github.com/topics/test-automation)
+[![Software Testing](https://img.shields.io/badge/%23SoftwareTesting-6E40C9?style=flat-square)](https://github.com/topics/software-testing)
+[![Quality Assurance](https://img.shields.io/badge/%23QualityAssurance-2EA44F?style=flat-square)](https://github.com/topics/quality-assurance)
+[![AI Agent](https://img.shields.io/badge/%23AIAgent-FF6F00?style=flat-square)](https://github.com/topics/ai-agent)
+[![AI Engineering](https://img.shields.io/badge/%23AIEngineering-E91E63?style=flat-square)](https://github.com/topics/ai-engineering)
+
+<br />
+
+[Quick start](#quick-start) · [Configuration](#configuration) · [Annotations](#annotations) · [npm package](https://www.npmjs.com/package/playwright-spec-for-ai-agent) · [Report issue](https://github.com/lodado/playwright-spec-for-AI-Agent/issues)
+
+</div>
+
+---
 
 This tool reads Playwright `*.spec.ts` files, extracts `@qa-scenario` intent, turns it into structured QA scenarios, and uses [Hermes Agent](https://github.com/NousResearch/hermes-agent) to validate the same intent against a staging page.
 
 Hermes Agent is used here as the adapter layer for multiple agents. The CLI keeps the project-specific QA flow stable, while Hermes handles agent execution, browser access, model calls, and judgment/review steps through its agent adapters.
+
+```text
+spec → abstract-ai → judge → review → slack (optional)
+```
 
 ## Table of Contents
 
