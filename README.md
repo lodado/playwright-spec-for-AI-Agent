@@ -68,7 +68,11 @@ test.describe("Dashboard - Active subscription", () => {
 
   // @qa-live-policy: mock-judgment
   test("shows health score on dashboard", async ({ page }) => {
+    await expect(page.getByTestId("health-score")).toBeVisible();
     await expect(page.getByTestId("health-score")).toContainText("98 pts");
+    await expect(page.getByTestId("health-score-label")).toHaveText(
+      "Excellent",
+    );
   });
 });
 ```
@@ -92,12 +96,12 @@ Then the current plan name is visible to the user
 
 ### ACTIVE — shows health score on dashboard
 
-Given the health widget uses mocked API data in CI (`98 pts` in Playwright)  
+Given the health widget is backed by mocked API data in CI (`98 pts`, label `Excellent`)  
 When I view the health-score area in read-only mode  
-Then a numeric score with its unit is shown — intent matters, not the exact mock value
+Then a numeric score with its unit and a readable status label are shown — exact mock values are not required; if the widget is loading, empty, or shows only qualitative copy without a score, treat as ambiguous
 ```
 
-Mock literals from CI (`98 pts`, etc.) become **intent-based Then** lines so Hermes judges staging like a human QA reviewer, not a strict assertion replay.
+Mock literals from CI (`98 pts`, `Excellent`, etc.) become **intent-based Then** lines. When live staging is unclear — not clearly broken, but not clearly good either — Hermes returns `manual_review` instead of forcing pass or fail.
 
 #### ③ Judge verdict — `{page}-hermes-judgment.md`
 
@@ -106,34 +110,35 @@ Hermes logs into staging, opens the target page, runs applicable checks from the
 ```markdown
 # Hermes QA Judgment — dashboard
 
-- Status: **pass**
+- Status: **manual_review**
 - Mode: `browse`
 - Page: `/dashboard`
 - Source: hermes-agent
 
 ## Summary
 
-2 checks passed for ACTIVE account on staging.
+1 check passed, 1 needs human review for ACTIVE account on staging.
 
 ## Checks
 
-| Result | Item                                   | Detail                                                                   |
-| ------ | -------------------------------------- | ------------------------------------------------------------------------ |
-| pass   | shows the user plan name in the header | Header shows plan label "Pro".                                           |
-| pass   | shows health score on dashboard        | Score widget shows "82 pts" — numeric score with unit, intent satisfied. |
+| Result        | Item                                   | Detail                                                                                                                         |
+| ------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| pass          | shows the user plan name in the header | Header shows plan label "Pro".                                                                                                 |
+| manual_review | shows health score on dashboard        | Widget is visible but shows label "Good" with no numeric score; cannot confirm score intent without account-specific baseline. |
 
 ## Evidence
 
 - Logged in as qa@example.com
 - Target: /dashboard
 - Matched scenario: ACTIVE
+- Screenshot: health-score widget shows qualitative label only
 
 ## Recommended action
 
-none
+Confirm whether ACTIVE staging accounts should display a numeric health score, or if a label-only state is acceptable.
 ```
 
-When copy or mock data differs but intent still holds, Hermes may mark a row `manual_review` instead of `fail`.
+The first check is a straightforward readonly pass. The second stays out of `fail` because the widget is present and plausible — but Hermes escalates when mock-backed intent cannot be confirmed with enough confidence.
 
 ---
 
