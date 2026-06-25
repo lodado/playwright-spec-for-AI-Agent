@@ -36,6 +36,107 @@ Hermes Agent is used here as the adapter layer for multiple agents. The CLI keep
 spec → abstract-ai → judge → review → slack (optional)
 ```
 
+### End-to-end example
+
+> **One annotated Playwright spec** → structured live plan → Hermes browses staging and returns a verdict.
+
+<table>
+<tr>
+  <td align="center"><strong>① spec</strong><br/><code>*.spec.ts</code></td>
+  <td align="center">→</td>
+  <td align="center"><strong>② abstract-ai</strong><br/><code>{page}-qa-spec-live.md</code></td>
+  <td align="center">→</td>
+  <td align="center"><strong>③ judge</strong><br/><code>{page}-hermes-judgment.md</code></td>
+</tr>
+</table>
+
+#### ① Playwright spec — intent, fixture, live policy
+
+The CLI reads annotations and assertions; it does **not** run Playwright against staging.
+
+```ts
+// @qa-page: dashboard
+// @qa-scenario: ACTIVE
+
+import { expect, test } from "@playwright/test";
+
+test.describe("Dashboard - Active subscription", () => {
+  // @qa-live-policy: readonly
+  test("shows the user plan name in the header", async ({ page }) => {
+    await expect(page.getByTestId("plan-name")).toBeVisible();
+  });
+
+  // @qa-live-policy: mock-judgment
+  test("shows health score on dashboard", async ({ page }) => {
+    await expect(page.getByTestId("health-score")).toContainText("98 pts");
+  });
+});
+```
+
+#### ② Abstracted live plan — `{page}-qa-spec-live.md`
+
+`abstract-ai` rewrites the spec into **staging-ready QA scenarios** — short user stories Hermes can follow without replaying brittle Playwright selectors or mock literals.
+
+```markdown
+# Dashboard QA spec (Live)
+
+## Scenario: Active subscriber on dashboard
+
+An account with an **active paid subscription** is logged in. Pick checks that match this account state on staging.
+
+### ACTIVE — shows the user plan name in the header
+
+Given the user has an active subscription and is on `/dashboard`  
+When I inspect the page header without mutating anything  
+Then the current plan name is visible to the user
+
+### ACTIVE — shows health score on dashboard
+
+Given the health widget uses mocked API data in CI (`98 pts` in Playwright)  
+When I view the health-score area in read-only mode  
+Then a numeric score with its unit is shown — intent matters, not the exact mock value
+```
+
+Mock literals from CI (`98 pts`, etc.) become **intent-based Then** lines so Hermes judges staging like a human QA reviewer, not a strict assertion replay.
+
+#### ③ Judge verdict — `{page}-hermes-judgment.md`
+
+Hermes logs into staging, opens the target page, runs applicable checks from the plan, and writes a markdown report.
+
+```markdown
+# Hermes QA Judgment — dashboard
+
+- Status: **pass**
+- Mode: `browse`
+- Page: `/dashboard`
+- Source: hermes-agent
+
+## Summary
+
+2 checks passed for ACTIVE account on staging.
+
+## Checks
+
+| Result | Item                                   | Detail                                                                   |
+| ------ | -------------------------------------- | ------------------------------------------------------------------------ |
+| pass   | shows the user plan name in the header | Header shows plan label "Pro".                                           |
+| pass   | shows health score on dashboard        | Score widget shows "82 pts" — numeric score with unit, intent satisfied. |
+
+## Evidence
+
+- Logged in as qa@example.com
+- Target: /dashboard
+- Matched scenario: ACTIVE
+
+## Recommended action
+
+none
+```
+
+When copy or mock data differs but intent still holds, Hermes may mark a row `manual_review` instead of `fail`.
+
+---
+
 ## Table of Contents
 
 - [Why this exists](#why-this-exists)
