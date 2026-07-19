@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.8.0...v0.9.0) (2026-07-19)
+
+
+### Features
+
+* boot Hermes stateless per QA run ([0c8272e](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/0c8272e7331b242cd16f0a0f1cbe54e5ceacd81d))
+* boot Hermes stateless per QA run ([ebc9ee4](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/ebc9ee464b32737043e420745f154550c7ac004d))
+
 ## [0.8.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.7.0...v0.8.0) (2026-06-21)
 
 
