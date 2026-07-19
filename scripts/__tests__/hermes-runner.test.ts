@@ -1,8 +1,12 @@
+import { existsSync, readdirSync } from "node:fs";
+import { basename } from "node:path";
+import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildHermesAgentArgs,
   extractHermesFinalResponseText,
   extractJsonFromHermesOutput,
+  prepareEphemeralHermesHome,
   prepareHermesJsonParseSurface,
   unwrapHermesEnvelope,
 } from "../hermes-runner.mjs";
@@ -20,6 +24,26 @@ describe("buildHermesAgentArgs", () => {
     });
     expect(args).toContain('--disabled_toolsets="browser,web,terminal"');
     expect(args).toContain("--model=test-model");
+  });
+});
+
+describe("prepareEphemeralHermesHome", () => {
+  it("boots stateless: fresh temp home with no memories/sessions carried over", () => {
+    const { path, cleanup } = prepareEphemeralHermesHome();
+    try {
+      expect(existsSync(path)).toBe(true);
+      expect(path.startsWith(tmpdir())).toBe(true);
+      expect(basename(path)).toMatch(/^hermes-qa-home-/);
+
+      // The whole point: no learned state seeded into the run.
+      const entries = readdirSync(path);
+      expect(entries).not.toContain("memories");
+      expect(entries).not.toContain("sessions");
+      expect(entries).not.toContain("state.db");
+    } finally {
+      cleanup();
+    }
+    expect(existsSync(path)).toBe(false);
   });
 });
 
