@@ -1,5 +1,12 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -11,6 +18,37 @@ export const HERMES_QA_COMMAND =
 export const HERMES_QA_TEXT_ONLY_DISABLED_TOOLSETS =
   process.env.HERMES_QA_DISABLED_TOOLSETS?.trim() ||
   "browser,web,terminal";
+
+/**
+ * Hermes memory toolset, disabled on every QA run so the agent cannot write
+ * long-term memory that would carry into a later run — QA judgments must boot
+ * fresh each time, never learned from prior runs.
+ */
+export const HERMES_QA_STATELESS_DISABLED_TOOLSETS = "memory";
+
+/** Boot-critical files copied into the ephemeral home. Never memories/sessions. */
+const HERMES_HOME_BOOT_FILES = ["auth.json", "config.yaml", ".env", "SOUL.md"];
+
+/**
+ * Seed a throwaway HERMES_HOME so every Hermes run boots stateless: empty
+ * memories/ and sessions/, so nothing from one QA run leaks into the next.
+ * Only boot-critical, non-learned files (auth, model config, persona) are
+ * copied from the real ~/.hermes. Returns the path plus cleanup() to delete it.
+ */
+export function prepareEphemeralHermesHome() {
+  const realHome = join(homedir(), ".hermes");
+  const path = mkdtempSync(join(tmpdir(), "hermes-qa-home-"));
+  for (const name of HERMES_HOME_BOOT_FILES) {
+    const src = join(realHome, name);
+    if (existsSync(src)) cpSync(src, join(path, name));
+  }
+  return {
+    path,
+    cleanup() {
+      rmSync(path, { recursive: true, force: true });
+    },
+  };
+}
 
 export function resolveHermesAgentInvocation() {
   const installRoot = join(homedir(), ".hermes", "hermes-agent");
@@ -274,8 +312,12 @@ export function runHermes(
     );
   }
 
-  const disabledToolsets =
-    mode === "text-only" ? HERMES_QA_TEXT_ONLY_DISABLED_TOOLSETS : null;
+  const disabledToolsets = [
+    mode === "text-only" ? HERMES_QA_TEXT_ONLY_DISABLED_TOOLSETS : null,
+    HERMES_QA_STATELESS_DISABLED_TOOLSETS,
+  ]
+    .filter(Boolean)
+    .join(",");
 
   const invocation = resolveHermesAgentInvocation();
   const queryPath =
@@ -286,18 +328,27 @@ export function runHermes(
     writeFileSync(queryPath, redactSensitiveText(query, secrets));
   }
 
-  const result = spawnSync(
-    invocation.command,
-    [
-      ...invocation.baseArgs,
-      ...buildHermesAgentArgs(query, maxTurns, { disabledToolsets }),
-    ],
-    {
-      shell: false,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024 * 10,
-    }
-  );
+  // Fresh HERMES_HOME per run: empty memories/ and sessions/ so nothing learned
+  // in one QA run carries into the next. Torn down as soon as Hermes exits.
+  const hermesHome = prepareEphemeralHermesHome();
+  let result;
+  try {
+    result = spawnSync(
+      invocation.command,
+      [
+        ...invocation.baseArgs,
+        ...buildHermesAgentArgs(query, maxTurns, { disabledToolsets }),
+      ],
+      {
+        shell: false,
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024 * 10,
+        env: { ...process.env, HERMES_HOME: hermesHome.path },
+      }
+    );
+  } finally {
+    hermesHome.cleanup();
+  }
 
   if (result.error) throw result.error;
 
