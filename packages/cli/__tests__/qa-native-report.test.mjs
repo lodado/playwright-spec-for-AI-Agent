@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -27,6 +27,8 @@ afterEach(() => {
 describe("qa-native repository report", () => {
   it("writes suggestion-only remediation artifacts from persisted evidence and judgment", async () => {
     const fixture = persistedFailedRun();
+    const workingCopy = "export function Dashboard() { return <h1>Uncommitted replacement</h1>; }\n";
+    writeFileSync(join(fixture.cwd, "src", "Dashboard.jsx"), workingCopy);
     expect(await dispatch(fixture.cwd)).toBe(0);
 
     const reportDirectory = completedReportDirectory(fixture.runDirectory);
@@ -39,11 +41,16 @@ describe("qa-native repository report", () => {
     })).toMatchObject({
       patchEligibility: "SUGGESTION_ONLY",
       locations: [expect.objectContaining({ path: "src/Dashboard.jsx" })],
+      repositoryRevision: fixture.revision,
     });
+    const codeContext = readJson(join(reportDirectory, files.find((file) => file.startsWith("code-context-"))));
+    expect(codeContext.snippets[0].text).toContain("Welcome Dashboard");
+    expect(codeContext.snippets[0].text).not.toContain("Uncommitted replacement");
     const markdown = readFileSync(join(reportDirectory, files.find((file) => file.endsWith(".md"))), "utf8");
     expect(markdown).toContain("src/Dashboard.jsx");
     expect(markdown).toContain("SUGGESTION_ONLY");
     expect(readJson(join(reportDirectory, "run.json"))).toEqual({ schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "report", type: "COMPLETED" });
+    expect(readFileSync(join(fixture.cwd, "src", "Dashboard.jsx"), "utf8")).toBe(workingCopy);
   });
 
   it("rejects wrong evidence keys and keeps report output immutable", async () => {
@@ -60,10 +67,38 @@ describe("qa-native repository report", () => {
     expect(await dispatch(fixture.cwd)).toBe(1);
     expect(readdirSync(directory).sort()).toEqual(before);
   });
+
+  it("requires a completed unambiguous judgment set unless a result is selected explicitly", async () => {
+    const incomplete = persistedFailedRun();
+    rmSync(join(incomplete.judgmentDirectory, "run.json"));
+    expect(await dispatch(incomplete.cwd)).toBe(1);
+    expect(existsSync(join(incomplete.runDirectory, "reports"))).toBe(false);
+
+    const multiple = persistedFailedRun();
+    const secondDirectory = createExclusiveQaDirectory(".qa/runs/run-1/judgments/judge-second", { cwd: multiple.cwd });
+    writePrivateJsonExclusive(".qa/runs/run-1/judgments/judge-second/judge-result-fail.json", multiple.judgment, { cwd: multiple.cwd });
+    writePrivateJsonExclusive(".qa/runs/run-1/judgments/judge-second/run.json", { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "judge", type: "COMPLETED" }, { cwd: multiple.cwd });
+    expect(await dispatch(multiple.cwd)).toBe(1);
+    expect(existsSync(join(multiple.runDirectory, "reports"))).toBe(false);
+    expect(await dispatch(multiple.cwd, { judgment: "judgments/judge-second/judge-result-fail.json" })).toBe(0);
+    expect(existsSync(secondDirectory)).toBe(true);
+
+    const duplicate = persistedFailedRun();
+    writePrivateJsonExclusive(".qa/runs/run-1/judgments/judge-fixture/judge-result-duplicate.json", duplicate.judgment, { cwd: duplicate.cwd });
+    expect(await dispatch(duplicate.cwd)).toBe(1);
+    expect(existsSync(join(duplicate.runDirectory, "reports"))).toBe(false);
+
+    const linked = persistedFailedRun();
+    symlinkSync(linked.judgmentDirectory, join(linked.runDirectory, "judgments", "linked"));
+    expect(await dispatch(linked.cwd)).toBe(1);
+    expect(existsSync(join(linked.runDirectory, "reports"))).toBe(false);
+  });
 });
 
-async function dispatch(cwd, { key = integrityKey, stderr = vi.fn() } = {}) {
-  return runQaNative(["report", "--run-dir=.qa/runs/run-1", "--repository-root=."], {
+async function dispatch(cwd, { key = integrityKey, stderr = vi.fn(), judgment } = {}) {
+  const args = ["report", "--run-dir=.qa/runs/run-1", "--repository-root=."];
+  if (judgment) args.push(`--judgment=${judgment}`);
+  return runQaNative(args, {
     cwd,
     env: { QA_NATIVE_INTEGRITY_KEY: key.toString("base64") },
     handlers: { report: reportQaNative },
@@ -80,6 +115,7 @@ function persistedFailedRun() {
   execFileSync("git", ["init", "-q"], { cwd });
   execFileSync("git", ["add", "src/Dashboard.jsx"], { cwd });
   execFileSync("git", ["-c", "user.name=QA", "-c", "user.email=qa@example.test", "commit", "-qm", "fixture"], { cwd });
+  const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
 
   const runDirectory = createExclusiveQaDirectory(".qa/runs/run-1", { cwd });
   const qaIr = compilePlaywrightSpec({ source: source(), sourcePath: "dashboard.spec.ts" }).qaIr;
@@ -113,10 +149,10 @@ function persistedFailedRun() {
   writePrivateJsonExclusive(".qa/runs/run-1/qa-ir.json", qaIr, { cwd });
   writeEvidenceArchive({ directory: join(runDirectory, "evidence"), bundles: [bundle], manifest, readBlob: store.readBlob, integrityKey });
   writePrivateJsonExclusive(".qa/runs/run-1/run.json", { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "execute", type: "COMPLETED" }, { cwd });
-  createExclusiveQaDirectory(".qa/runs/run-1/judgments/judge-fixture", { cwd });
+  const judgmentDirectory = createExclusiveQaDirectory(".qa/runs/run-1/judgments/judge-fixture", { cwd });
   writePrivateJsonExclusive(".qa/runs/run-1/judgments/judge-fixture/judge-result-fail.json", judgment, { cwd });
   writePrivateJsonExclusive(".qa/runs/run-1/judgments/judge-fixture/run.json", { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "judge", type: "COMPLETED" }, { cwd });
-  return { cwd, runDirectory };
+  return { cwd, runDirectory, judgmentDirectory, judgment, revision };
 }
 
 function source() {

@@ -1,5 +1,5 @@
-import { readdirSync, rmSync } from "node:fs";
-import { join, relative } from "node:path";
+import { readdirSync, realpathSync, rmSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { RUNTIME_OUTCOME_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
 import { readEvidenceArchive } from "../evidence/index.mjs";
@@ -16,20 +16,24 @@ export async function reportQaNative({ runDirectory, repositoryRoot, revision, j
   const qaIr = readPrivateJson(relative(cwd, join(runDirectory, "qa-ir.json")), { cwd });
   validateContract("QaIrDocument", qaIr);
   const archive = readEvidenceArchive({ directory: join(runDirectory, "evidence"), integrityKey });
-  const snapshot = createLocalRepositorySnapshot({ root: repositoryRoot, revision });
-  const results = readJudgeResults({ runDirectory, judgmentPath, cwd }).filter((result) => ["FAIL", "MANUAL_REVIEW"].includes(result.verdict));
-  if (results.length === 0) throw new Error("QA report has no failing judgments");
+  const judgments = readJudgeResults({ runDirectory, judgmentPath, cwd }).map((result) => {
+    const bundle = archive.bundles.find((candidate) => candidate.bundleId === result.evidenceBundleId);
+    if (!bundle) throw new Error("QA judgment evidence is missing");
+    validateContract("JudgeResult", result, { qaIr, evidenceBundle: bundle });
+    return { result, bundle };
+  });
+  if (judgmentPath === undefined) assertCompleteJudgmentSet(judgments, archive.bundles);
+  const selected = judgments.filter(({ result }) => ["FAIL", "MANUAL_REVIEW"].includes(result.verdict));
+  if (selected.length === 0) throw new Error("QA report has no failing judgments");
 
-  const reportHash = shortHash({ results: results.map((result) => result.resultId), repositoryRevision: snapshot.revision });
+  const snapshot = createLocalRepositorySnapshot({ root: repositoryRoot, revision });
+  const reportHash = shortHash({ results: selected.map(({ result }) => result.resultId), repositoryRevision: snapshot.revision });
   const reportDirectory = join(runDirectory, "reports", `report-${reportHash}`);
   let created = false;
   try {
     createExclusiveQaDirectory(relative(cwd, reportDirectory), { cwd });
     created = true;
-    for (const result of results) {
-      const bundle = archive.bundles.find((candidate) => candidate.bundleId === result.evidenceBundleId);
-      if (!bundle) throw new Error("QA judgment evidence is missing");
-      validateContract("JudgeResult", result, { qaIr, evidenceBundle: bundle });
+    for (const { result, bundle } of selected) {
       const diagnosis = diagnoseFailure({ qaIr, judgeResult: result, evidenceBundle: bundle });
       const codeContext = locateCode({ snapshot, diagnosis, judgeResult: result, qaIr, evidenceBundle: bundle });
       const recommendation = recommendRepair({ diagnosis, codeContext, qaIr, judgeResult: result, evidenceBundle: bundle });
@@ -48,18 +52,54 @@ export async function reportQaNative({ runDirectory, repositoryRoot, revision, j
 }
 
 function readJudgeResults({ runDirectory, judgmentPath, cwd }) {
-  const paths = judgmentPath === undefined ? discoverJudgeResults(runDirectory) : [judgmentPath];
-  return paths.map((path) => readPrivateJson(relative(cwd, path), { cwd }));
+  const paths = judgmentPath === undefined ? discoverJudgeResults(runDirectory, cwd) : completedJudgmentFile(judgmentPath, cwd);
+  return paths.map((path) => readPrivateJson(privateRelative(cwd, path), { cwd }));
 }
 
-function discoverJudgeResults(runDirectory) {
+function discoverJudgeResults(runDirectory, cwd) {
   const root = join(runDirectory, "judgments");
-  return readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .flatMap((entry) => readdirSync(join(root, entry.name), { withFileTypes: true })
-      .filter((file) => file.isFile() && file.name.startsWith("judge-result-") && file.name.endsWith(".json"))
-      .map((file) => join(root, entry.name, file.name)))
+  const entries = readdirSync(root, { withFileTypes: true });
+  if (entries.some((entry) => !entry.isDirectory())) throw new Error("judgment storage contains an unexpected entry");
+  const directories = entries;
+  if (directories.length !== 1) throw new Error("an explicit judgment path is required");
+  const directory = join(root, directories[0].name);
+  assertCompletedJudgment(directory, cwd);
+  const files = readdirSync(directory, { withFileTypes: true });
+  if (files.some((file) => !file.isFile() || (file.name !== "run.json" && !(file.name.startsWith("judge-result-") && file.name.endsWith(".json"))))) {
+    throw new Error("judgment set contains an unexpected entry");
+  }
+  return files
+      .filter((file) => file.name.startsWith("judge-result-"))
+      .map((file) => join(directory, file.name))
     .sort();
+}
+
+function assertCompleteJudgmentSet(judgments, bundles) {
+  const expected = new Set(bundles.map((bundle) => bundle.bundleId));
+  const actual = judgments.map(({ result }) => result.evidenceBundleId);
+  const resultIds = judgments.map(({ result }) => result.resultId);
+  if (new Set(resultIds).size !== resultIds.length || new Set(actual).size !== actual.length || actual.length !== expected.size || actual.some((id) => !expected.has(id))) {
+    throw new Error("judgment set does not cover every evidence bundle exactly once");
+  }
+}
+
+function completedJudgmentFile(path, cwd) {
+  assertCompletedJudgment(dirname(path), cwd);
+  return [path];
+}
+
+function assertCompletedJudgment(directory, cwd) {
+  const outcome = readPrivateJson(privateRelative(cwd, join(directory, "run.json")), { cwd });
+  validateContract("RuntimeOutcome", outcome);
+  if (outcome.stage !== "judge" || outcome.type !== "COMPLETED") throw new Error("QA judgment is incomplete");
+}
+
+function privateRelative(cwd, path) {
+  for (const root of [resolve(cwd), realpathSync(cwd)]) {
+    const value = relative(root, path);
+    if (value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value)) return value;
+  }
+  return relative(resolve(cwd), path);
 }
 
 function shortHash(value) {

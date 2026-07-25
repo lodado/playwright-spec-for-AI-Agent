@@ -16,7 +16,7 @@ const COMMAND_USAGE = Object.freeze({
   execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id>",
   judge: "qa-native judge --run-dir=.qa/runs/<id>",
   replay: "qa-native replay --run-dir=.qa/runs/<id>",
-  report: "qa-native report --run-dir=.qa/runs/<id> --repository-root=.",
+  report: "qa-native report --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
 });
 
 export function decodeIntegrityKey(value) {

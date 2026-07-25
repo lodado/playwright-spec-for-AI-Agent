@@ -220,6 +220,17 @@ npx qa-native judge --run-dir=.qa/runs/dashboard-1
 
 Deterministic checks run first. Only unresolved semantic expectations are sent to Hermes in text-only mode, and immutable Judge Results are written under the run's `judgments/` directory.
 
+Create a repository-aware suggestion-only report for a failed or manual-review judgment:
+
+```bash
+npx qa-native report \
+  --run-dir=.qa/runs/dashboard-1 \
+  --repository-root=. \
+  --revision=HEAD
+```
+
+The report pins `HEAD` to an exact Git commit before locating likely files and line ranges. If a run contains multiple completed judgment sets, select one result explicitly with `--judgment=judgments/<set>/judge-result-<id>.json`.
+
 ## Recommended workflow
 
 | Stage        | Check                                  | Purpose                                |
