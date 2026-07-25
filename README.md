@@ -212,6 +212,14 @@ npx qa-native execute \
 
 The command compiles QA IR, creates a deterministic execution plan, runs the read-only Playwright provider, and writes an authenticated evidence archive. Existing `playwright-spec-for-ai-agent` commands remain supported during the migration.
 
+Judge the saved evidence later without opening a browser again:
+
+```bash
+npx qa-native judge --run-dir=.qa/runs/dashboard-1
+```
+
+Deterministic checks run first. Only unresolved semantic expectations are sent to Hermes in text-only mode, and immutable Judge Results are written under the run's `judgments/` directory.
+
 ## Recommended workflow
 
 | Stage        | Check                                  | Purpose                                |
