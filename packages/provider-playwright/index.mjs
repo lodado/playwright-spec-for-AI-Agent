@@ -13,6 +13,7 @@ const PROVIDER_ID = "playwright-readonly";
 const PROVIDER_VERSION = "0.1.0";
 const TEXT_LIMIT = 1024 * 1024;
 const DOM_LIMIT = 4 * 1024 * 1024;
+const ACTION_LOG_LIMIT = 16 * 1024;
 const MAX_PLAN_NODES = 128;
 const MAX_RUN_ARTIFACTS = 256;
 const MAX_RUN_EVIDENCE_BYTES = 16 * 1024 * 1024;
@@ -24,8 +25,8 @@ const MAX_VIEWPORT_AREA = 4096 * 4096;
 export function playwrightExecutionCapabilities() {
   return providerCapabilities({
     providerId: PROVIDER_ID,
-    actions: ["NAVIGATE", "OBSERVE", "CHECKPOINT"],
-    evidence: ["VISIBLE_TEXT", "DOM_SNAPSHOT"],
+    actions: ["NAVIGATE", "CLICK", "OBSERVE", "CHECKPOINT"],
+    evidence: ["VISIBLE_TEXT", "DOM_SNAPSHOT", "ACTION_LOG"],
   });
 }
 
@@ -68,6 +69,9 @@ export async function executeWithPlaywright({
   } catch {
     if (outcome.type === "COMPLETED") outcome = runtimeError("UNKNOWN_RUNTIME_ERROR", "Execution provider cleanup failed");
   }
+  if (outcome.type === "COMPLETED" && runtime.hasInteractionPolicyViolation()) {
+    outcome = runtimeError("POLICY_VIOLATION", "Execution provider failed");
+  }
   return executionResult(outcome, runtime);
 }
 
@@ -97,6 +101,8 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
   let closed = false;
   let evidenceBytes = 0;
   let artifactCount = 0;
+  let interactionStarted = false;
+  let interactionPolicyViolation = false;
 
   async function openPage() {
     if (session) return session.page;
@@ -121,6 +127,11 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
         try {
           const request = route.request();
           const requestUrl = new URL(request.url());
+          if (interactionStarted) {
+            interactionPolicyViolation = true;
+            await route.abort("blockedbyclient");
+            return;
+          }
           if (!["GET", "HEAD"].includes(request.method()) || !["http:", "https:"].includes(requestUrl.protocol) || requestUrl.origin !== base.origin || requestUrl.username || requestUrl.password) {
             await route.abort("blockedbyclient");
             return;
@@ -130,7 +141,10 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
           await route.abort("blockedbyclient");
         }
       });
-      await context.routeWebSocket("**/*", (webSocket) => webSocket.close());
+      await context.routeWebSocket("**/*", (webSocket) => {
+        if (interactionStarted) interactionPolicyViolation = true;
+        webSocket.close();
+      });
       const page = await context.newPage();
       session = { browser, page };
       return page;
@@ -160,22 +174,27 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
         const captured = [];
         for (const type of node.evidence) {
           const content = await observe(page, type, nodeTimeoutMs);
-          const size = Buffer.byteLength(content);
-          if (artifactCount + 1 > MAX_RUN_ARTIFACTS || evidenceBytes + size > MAX_RUN_EVIDENCE_BYTES) throw providerError("EVIDENCE_STORAGE_FAILED");
-          artifactCount += 1;
-          evidenceBytes += size;
-          captured.push(store.captureArtifact({
-            id: `${node.nodeId}:${type.toLowerCase()}`,
-            type,
-            contentType: type === "DOM_SNAPSHOT" ? "text/html" : "text/plain",
-            content,
-          }));
+          captured.push(captureArtifact(`${node.nodeId}:${type.toLowerCase()}`, type, type === "DOM_SNAPSHOT" ? "text/html" : "text/plain", content));
         }
         state.artifacts.push(...captured);
       } catch (error) {
         if (error?.code) throw error;
         throw providerError("EVIDENCE_STORAGE_FAILED");
       }
+      return;
+    }
+    if (node.kind === "INTERACT") {
+      if (node.action !== "CLICK" || node.evidence.length !== 1 || node.evidence[0] !== "ACTION_LOG") throw providerError("POLICY_VIOLATION");
+      const page = await openPage();
+      const beforeUrl = evidenceUrl(page, base);
+      const locator = semanticClickLocator(page, step.target);
+      await assertSafeClickTarget(locator, nodeTimeoutMs);
+      interactionStarted = true;
+      await locator.click({ timeout: nodeTimeoutMs });
+      if (interactionPolicyViolation) throw providerError("POLICY_VIOLATION");
+      const afterUrl = evidenceUrl(page, base);
+      const content = boundedText(JSON.stringify({ action: "CLICK", target: actionLogTarget(step.target), beforeUrl, afterUrl, status: "SUCCEEDED" }), ACTION_LOG_LIMIT, "ACTION_LOG");
+      observationState(observations, node.scenarioId).artifacts.push(captureArtifact(`${node.nodeId}:action_log`, "ACTION_LOG", "application/json", content));
       return;
     }
     if (node.kind === "CHECKPOINT") {
@@ -204,7 +223,25 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       } catch {
         throw providerError("EVIDENCE_STORAGE_FAILED");
       }
+      if (interactionStarted) await closeInteractionSession();
     }
+  }
+
+  async function closeInteractionSession() {
+    const browser = activeBrowser;
+    if (browser) await browser.close();
+    if (activeBrowser === browser) activeBrowser = undefined;
+    if (session?.browser === browser) session = undefined;
+    interactionStarted = false;
+    if (interactionPolicyViolation) throw providerError("POLICY_VIOLATION");
+  }
+
+  function captureArtifact(id, type, contentType, content) {
+    const size = Buffer.byteLength(content);
+    if (artifactCount + 1 > MAX_RUN_ARTIFACTS || evidenceBytes + size > MAX_RUN_EVIDENCE_BYTES) throw providerError("EVIDENCE_STORAGE_FAILED");
+    artifactCount += 1;
+    evidenceBytes += size;
+    return store.captureArtifact({ id, type, contentType, content });
   }
 
   return {
@@ -214,6 +251,7 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
     hasCompleteEvidence() {
       return bundles.length > 0 && bundles.length === planCheckpointCount(qaIr) && observations.size === 0;
     },
+    hasInteractionPolicyViolation() { return interactionPolicyViolation; },
     get manifest() { return manifest; },
     readBlob: store.readBlob,
     async close() {
@@ -222,6 +260,32 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       activeBrowser = undefined;
     },
   };
+}
+
+async function assertSafeClickTarget(locator, timeout) {
+  const target = await locator.evaluate((element) => ({
+    anchor: element.closest("a[href]") !== null,
+    form: element.closest("form") !== null,
+    editable: element.isContentEditable,
+  }), undefined, { timeout });
+  if (!target || target.anchor !== false || target.form !== false || target.editable !== false) throw providerError("POLICY_VIOLATION");
+}
+
+function semanticClickLocator(page, target) {
+  const identities = [target?.testId !== undefined, target?.text !== undefined, target?.role !== undefined].filter(Boolean).length;
+  if (identities !== 1) throw providerError("CONTRACT_VIOLATION");
+  if (target.testId !== undefined) return page.getByTestId(target.testId);
+  if (target.text?.kind === "literal" && typeof target.text.value === "string") return page.getByText(target.text.value);
+  if (typeof target.role === "string" && target.accessibleName?.kind === "literal" && typeof target.accessibleName.value === "string") {
+    return page.getByRole(target.role, { name: target.accessibleName.value });
+  }
+  throw providerError("CONTRACT_VIOLATION");
+}
+
+function actionLogTarget(target) {
+  if (target.testId !== undefined) return { type: "TEST_ID", value: target.testId };
+  if (target.text !== undefined) return { type: "TEXT", value: target.text.value };
+  return { type: "ROLE", role: target.role, name: target.accessibleName.value };
 }
 
 function planCheckpointCount(qaIr) {
@@ -293,10 +357,11 @@ function runtimeError(code, message) {
 }
 
 function executionResult(outcome, runtime) {
+  const completed = outcome.type === "COMPLETED";
   return Object.freeze({
     outcome,
-    bundles: Object.freeze([...(runtime?.bundles ?? [])]),
-    ...(runtime?.manifest === undefined ? {} : { manifest: runtime.manifest }),
-    readBlob: runtime?.readBlob ?? (() => undefined),
+    bundles: Object.freeze(completed ? [...(runtime?.bundles ?? [])] : []),
+    ...(completed && runtime?.manifest !== undefined ? { manifest: runtime.manifest } : {}),
+    readBlob: completed ? runtime?.readBlob ?? (() => undefined) : () => undefined,
   });
 }

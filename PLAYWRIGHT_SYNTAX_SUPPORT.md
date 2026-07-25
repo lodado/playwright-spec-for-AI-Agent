@@ -62,7 +62,11 @@ This matrix documents what the current parser accepts. It is based on `scripts/d
 
 | Pattern | Status | Result |
 | --- | --- | --- |
-| `.click()` in a test body | Helper only | `classifyStagingTest` can detect this; annotate `safe-interaction` when that is the intended parsed policy. |
+| `page.getByTestId("id").click()` | Executable | With `safe-interaction`, compiles to `INTERACT/CLICK` and produces `ACTION_LOG` evidence. Links, forms, editable targets, and any post-click network request are blocked. |
+| `page.getByText("text").click()` | Executable | Static single- or double-quoted text only. |
+| `page.getByRole("role", { name: "name" }).click()` | Executable | Requires a static accessible name. |
+| CSS/XPath, aliased or chained locators, click options, and non-click actions | Unsupported | The whole `safe-interaction` test fails compilation; supported actions are never executed as a partial subset. |
+| Any click under `safe-interaction-no-confirm` | Deferred | The runtime does not guess which click is the destructive confirmation. |
 | `page.route(...)` / mocked API fulfillment | Helper only | `detectApiMock` and `classifyLiveRunPolicy` can detect this; annotate `mock-judgment` when that is the intended parsed policy. |
 | Login URL assertion such as `toHaveURL(/\/login/)` | Helper only | `classifyStagingTest` can detect this, but `parseDashboardSpecFile` does not call it; use `@qa-live-policy: auth-mock` for parsed output. |
 | Subscription/billing mutation keywords and routes | Helper only | `detectSubscriptionMutation` and `classifyLiveRunPolicy` can detect this; annotate `subscription-mutation` to produce `blocked-subscription-mutation`. |
