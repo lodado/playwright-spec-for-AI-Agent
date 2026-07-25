@@ -98,13 +98,32 @@ describe("qa-native CLI security foundation", () => {
   it("shows help without a key and rejects secret-bearing or unknown arguments", async () => {
     const stdout = vi.fn();
     const stderr = vi.fn();
-    expect(await runQaNative(["--help"], { env: {}, stdout, stderr })).toBe(0);
+    expect(await runQaNative(["--help"], { env: {}, handlers: { execute: vi.fn() }, stdout, stderr })).toBe(0);
     expect(stdout.mock.calls[0][0]).toContain("qa-native execute");
 
     expect(await runQaNative(["execute", "--integrity-key=secret"], { env: {}, stdout, stderr })).toBe(1);
     expect(await runQaNative(["--run-dir=.qa/runs/1"], { env: {}, stdout, stderr })).toBe(1);
     expect(await runQaNative(["unknown"], { env: {}, stdout, stderr })).toBe(1);
+    expect(await runQaNative(["judge", "--run-dir=.qa/missing"], { env: {}, handlers: { execute: vi.fn() }, stdout, stderr })).toBe(1);
+    expect(stderr.mock.calls.at(-1)[0]).toBe("qa-native: command is not available\n");
     expect(JSON.stringify(stderr.mock.calls)).not.toContain("secret");
+  });
+
+  it("shows help but rejects commands on platforms without private POSIX modes", async () => {
+    const stdout = vi.fn();
+    const stderr = vi.fn();
+    const execute = vi.fn();
+    expect(await runQaNative(["--help"], { env: {}, handlers: { execute }, platform: "win32", stdout, stderr })).toBe(0);
+    expect(stdout.mock.calls[0][0]).toContain("qa-native execute");
+
+    expect(await runQaNative([
+      "execute",
+      "--spec=missing.spec.ts",
+      "--base-url=https://example.test",
+      "--run-dir=.qa/runs/windows",
+    ], { cwd: "Z:\\missing", env: {}, handlers: { execute }, platform: "win32", stdout, stderr })).toBe(1);
+    expect(execute).not.toHaveBeenCalled();
+    expect(stderr).toHaveBeenLastCalledWith("qa-native: command is not supported on this platform\n");
   });
 
   it("recognizes every native command through validated handler inputs", async () => {
@@ -132,6 +151,28 @@ describe("qa-native CLI security foundation", () => {
     });
     try {
       expect(await runQaNative(["execute", "--spec=a.spec.ts", "--base-url=https://example.test", "--run-dir=.qa/runs/new"], { cwd, handlers: { execute: handler }, stdout: vi.fn(), stderr: vi.fn() })).toBe(0);
+    } finally {
+      delete process.env.QA_NATIVE_INTEGRITY_KEY;
+    }
+  });
+
+  it("restores unrelated process state after dispatch with an injected environment", async () => {
+    const cwd = temporaryRoot();
+    writeFileSync(join(cwd, "a.spec.ts"), "test('a', () => {})");
+    process.env.QA_NATIVE_INTEGRITY_KEY = "unrelated-global-value";
+    const handler = vi.fn(() => {
+      expect(process.env.QA_NATIVE_INTEGRITY_KEY).toBeUndefined();
+      return 0;
+    });
+    try {
+      expect(await runQaNative(["execute", "--spec=a.spec.ts", "--base-url=https://example.test", "--run-dir=.qa/runs/new"], {
+        cwd,
+        env: { QA_NATIVE_INTEGRITY_KEY: Buffer.alloc(32, 0x72).toString("base64") },
+        handlers: { execute: handler },
+        stdout: vi.fn(),
+        stderr: vi.fn(),
+      })).toBe(0);
+      expect(process.env.QA_NATIVE_INTEGRITY_KEY).toBe("unrelated-global-value");
     } finally {
       delete process.env.QA_NATIVE_INTEGRITY_KEY;
     }

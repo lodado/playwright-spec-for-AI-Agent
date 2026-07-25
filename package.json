@@ -34,6 +34,7 @@
     "manual-review"
   ],
   "bin": {
+    "qa-native": "./bin/qa-native.mjs",
     "playwright-spec-for-ai-agent": "./bin/playwright-spec-for-ai-agent.mjs"
   },
   "files": [
@@ -43,6 +44,8 @@
     "examples",
     "README.md",
     "packages/cli/index.mjs",
+    "packages/cli/qa-native.mjs",
+    "packages/cli/qa-native-execute.mjs",
     "packages/contracts/index.mjs",
     "packages/adapter-playwright/index.mjs",
     "packages/core/index.mjs",
@@ -68,9 +71,6 @@
     "@playwright/test": ">=1.48.0"
   },
   "peerDependenciesMeta": {
-    "@playwright/test": {
-      "optional": true
-    },
     "vitest": {
       "optional": true
     }
@@ -88,6 +88,8 @@
   },
   "exports": {
     "./cli": "./packages/cli/index.mjs",
+    "./cli/qa-native": "./packages/cli/qa-native.mjs",
+    "./cli/qa-native-execute": "./packages/cli/qa-native-execute.mjs",
     "./contracts": "./packages/contracts/index.mjs",
     "./adapter-playwright": "./packages/adapter-playwright/index.mjs",
     "./core": "./packages/core/index.mjs",
