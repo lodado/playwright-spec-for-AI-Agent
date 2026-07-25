@@ -165,6 +165,8 @@ function validateQaIrDocument(value, path) {
   if (value.source.revision !== undefined) string(value.source.revision, `${path}.source.revision`, "QaIrDocument");
   array(value.suites, `${path}.suites`, "QaIrDocument");
   value.suites.forEach((suite, index) => validateQaSuite(suite, `${path}.suites[${index}]`));
+  const scenarioIds = value.suites.flatMap((suite) => suite.scenarios.map((scenario) => scenario.id));
+  if (new Set(scenarioIds).size !== scenarioIds.length) fail("QaIrDocument", `${path}.suites`, "scenario ids must be globally unique");
   if (value.extensions !== undefined) object(value.extensions, `${path}.extensions`, "QaIrDocument");
 }
 
@@ -188,6 +190,8 @@ function validateQaScenario(value, path) {
   recordArray(value.preconditions, `${path}.preconditions`, "QaIrDocument");
   array(value.steps, `${path}.steps`, "QaIrDocument");
   value.steps.forEach((step, index) => validateQaStep(step, `${path}.steps[${index}]`));
+  const stepIds = value.steps.map((step) => step.id);
+  if (new Set(stepIds).size !== stepIds.length) fail("QaIrDocument", `${path}.steps`, "step ids must be unique within a scenario");
   recordArray(value.expectations, `${path}.expectations`, "QaIrDocument");
   object(value.policy, `${path}.policy`, "QaIrDocument");
   validateCapabilityPolicy(value.policy, `${path}.policy`, "QaIrDocument");

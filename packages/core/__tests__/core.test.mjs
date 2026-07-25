@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { QA_IR_VERSION, validateContract } from "../../contracts/index.mjs";
-import { createExecutionPlan, executePlan, providerCapabilities } from "../index.mjs";
+import { createExecutionPlan, executePlan, providerCapabilities, validateExecutionPlanBinding } from "../index.mjs";
 
 const readonlyPolicy = {
   navigation: "ALLOWED",
@@ -57,6 +57,21 @@ describe("core execution planner", () => {
       { from: first.nodes[0].nodeId, to: first.nodes[1].nodeId },
       { from: first.nodes[1].nodeId, to: first.nodes[2].nodeId },
     ]);
+  });
+
+  it("binds submitted plans to the exact QA IR and provider capabilities", () => {
+    const source = qaIr();
+    const capabilities = providerCapabilities();
+    const target = createExecutionPlan({ qaIr: source, providerCapabilities: capabilities });
+    expect(validateExecutionPlanBinding({ qaIr: source, plan: target, providerCapabilities: capabilities })).toBe(target);
+
+    const forged = structuredClone(target);
+    forged.nodes[0].policy.navigation = "BLOCKED";
+    expect(() => validateExecutionPlanBinding({ qaIr: source, plan: forged, providerCapabilities: capabilities })).toThrow(/does not match/);
+
+    const changedIr = structuredClone(source);
+    changedIr.suites[0].scenarios[0].title = "Changed scenario";
+    expect(() => validateExecutionPlanBinding({ qaIr: changedIr, plan: target, providerCapabilities: capabilities })).toThrow(/does not match/);
   });
 
   it("validates retry and timeout policies", async () => {
