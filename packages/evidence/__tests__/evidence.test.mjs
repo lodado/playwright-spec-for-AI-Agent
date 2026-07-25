@@ -1,11 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   EVIDENCE_BUNDLE_VERSION,
   EVIDENCE_MANIFEST_VERSION,
   PROVIDER_CAPABILITIES_VERSION,
   validateContract,
 } from "../../contracts/index.mjs";
-import { createInMemoryEvidenceStore, verifyStoredEvidence } from "../index.mjs";
+import {
+  createInMemoryEvidenceStore,
+  readEvidenceArchive,
+  redactSensitiveText,
+  verifyStoredEvidence,
+  writeEvidenceArchive,
+} from "../index.mjs";
+
+const temporaryDirectories = [];
+const archiveIntegrityKey = Buffer.alloc(32, 0x41);
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
 
 const providerCapabilities = {
   schemaVersion: PROVIDER_CAPABILITIES_VERSION,
@@ -55,6 +71,140 @@ function bundle(target = store(), overrides = {}) {
 }
 
 describe("evidence store", () => {
+  it("persists sealed multi-checkpoint evidence for offline replay and rejects tampering", () => {
+    const target = store();
+    const first = bundle(target, { checkpointId: "checkpoint-1" });
+    const firstManifest = target.appendCheckpoint(first);
+    const second = bundle(target, { checkpointId: "checkpoint-2" });
+    const manifest = target.appendCheckpoint(second, { suppliedManifest: firstManifest });
+    const parent = mkdtempSync(join(tmpdir(), "qa-evidence-"));
+    temporaryDirectories.push(parent);
+    const directory = join(parent, "run-1");
+
+    writeEvidenceArchive({
+      directory,
+      bundles: [first, second],
+      manifest,
+      readBlob: target.readBlob,
+      secrets: ["supplied-secret"],
+      integrityKey: archiveIntegrityKey,
+    });
+    const replay = readEvidenceArchive({ directory, secrets: ["supplied-secret"], integrityKey: archiveIntegrityKey });
+
+    expect(replay.bundles).toEqual([first, second]);
+    expect(replay.manifest).toEqual(manifest);
+    expect(Object.isFrozen(replay.bundles)).toBe(true);
+    expect(replay.readBlob(first.artifacts[0].storageRef)).toEqual(target.readBlob(first.artifacts[0].storageRef));
+    const storedText = replay.readBlob(first.artifacts[0].storageRef).toString("utf8");
+    expect(redactSensitiveText(storedText, ["supplied-secret"])).toBe(storedText);
+    expect(redactSensitiveText("[REDACTED] remains stable", ["ACT"])).toBe("[REDACTED] remains stable");
+    expect(() => writeEvidenceArchive({ directory, bundles: [first, second], manifest, readBlob: target.readBlob, integrityKey: archiveIntegrityKey })).toThrow(/already exists/);
+    expect(() => readEvidenceArchive({ directory, integrityKey: Buffer.alloc(32, 0x42) })).toThrow(/authentication failed/);
+
+    const serialized = [
+      readFileSync(join(directory, "evidence-manifest.json"), "utf8"),
+      readFileSync(join(directory, "bundles", `${first.bundleId.slice("sha256:".length)}.json`), "utf8"),
+      readFileSync(join(directory, "blobs", first.artifacts[0].storageRef.slice("sha256:".length)), "utf8"),
+    ].join("\n");
+    expect(serialized).not.toContain("supplied-secret");
+
+    writeFileSync(join(directory, "unexpected"), "not part of the authenticated archive");
+    expect(() => readEvidenceArchive({ directory, integrityKey: archiveIntegrityKey })).toThrow(/unexpected entries/);
+    rmSync(join(directory, "unexpected"));
+    const firstBundlePath = join(directory, "bundles", `${first.bundleId.slice("sha256:".length)}.json`);
+    const firstBundleJson = readFileSync(firstBundlePath);
+    writeFileSync(firstBundlePath, `${"[".repeat(80)}0${"]".repeat(80)}`);
+    expect(() => readEvidenceArchive({ directory, integrityKey: archiveIntegrityKey })).toThrow(/nesting depth limit/);
+    writeFileSync(firstBundlePath, firstBundleJson);
+    writeFileSync(join(directory, "blobs", first.artifacts[0].storageRef.slice("sha256:".length)), "tampered");
+    expect(() => readEvidenceArchive({ directory, integrityKey: archiveIntegrityKey })).toThrow(/tampered stored blob/);
+  });
+
+  it("refuses to archive caller-supplied secrets that escaped capture configuration", () => {
+    const target = store({ secrets: [] });
+    const evidenceBundle = bundle(target, {
+      artifacts: [visibleText(target, { content: "archive-only-secret" })],
+    });
+    const manifest = target.appendCheckpoint(evidenceBundle);
+    const parent = mkdtempSync(join(tmpdir(), "qa-evidence-secret-"));
+    temporaryDirectories.push(parent);
+
+    expect(() => writeEvidenceArchive({
+      directory: join(parent, "run-secret"),
+      bundles: [evidenceBundle],
+      manifest,
+      readBlob: target.readBlob,
+      secrets: ["archive-only-secret"],
+      integrityKey: archiveIntegrityKey,
+    })).toThrow(/sensitive data/);
+
+    expect(redactSensitiveText("token[REDACTED]", ["token[REDACTED]"])).toBe("[REDACTED]");
+
+    const markerTarget = store({ secrets: [] });
+    const markerArtifact = visibleText(markerTarget, { content: "token[REDACTED]" });
+    const markerBundle = markerTarget.createBundle({
+      runId: "run-marker-secret",
+      scenarioId: "scenario",
+      checkpointId: "checkpoint",
+      capturedAt: "2026-07-25T00:00:00.000Z",
+      environment,
+      artifacts: [markerArtifact],
+      facts: [{ id: "marker", kind: "TEXT", value: "token[REDACTED]" }],
+    });
+    const markerManifest = markerTarget.appendCheckpoint(markerBundle);
+    expect(() => writeEvidenceArchive({
+      directory: join(parent, "run-marker-secret"),
+      bundles: [markerBundle],
+      manifest: markerManifest,
+      readBlob: markerTarget.readBlob,
+      secrets: ["token[REDACTED]"],
+      integrityKey: archiveIntegrityKey,
+    })).toThrow(/sensitive data/);
+    expect(() => writeEvidenceArchive({
+      directory: join(parent, "run-exact-marker-secret"),
+      bundles: [markerBundle],
+      manifest: markerManifest,
+      readBlob: markerTarget.readBlob,
+      secrets: ["[REDACTED]"],
+      integrityKey: archiveIntegrityKey,
+    })).toThrow(/cannot equal the redaction marker/);
+  });
+
+  it("bounds archive checkpoint fan-out before persistence", () => {
+    const target = store();
+    const evidenceBundle = bundle(target);
+    const manifest = target.appendCheckpoint(evidenceBundle);
+    const oversized = {
+      ...manifest,
+      checkpoints: Array.from({ length: 129 }, (_, index) => ({
+        ...manifest.checkpoints[0],
+        checkpointId: `checkpoint-${index}`,
+      })),
+    };
+    const parent = mkdtempSync(join(tmpdir(), "qa-evidence-limit-"));
+    temporaryDirectories.push(parent);
+
+    expect(() => writeEvidenceArchive({
+      directory: join(parent, "run-limit"),
+      bundles: [evidenceBundle],
+      manifest: oversized,
+      readBlob: target.readBlob,
+      integrityKey: archiveIntegrityKey,
+    })).toThrow(/checkpoint count limit/);
+  });
+
+  it("rejects deeply nested unauthenticated metadata without recursive overflow", () => {
+    const parent = mkdtempSync(join(tmpdir(), "qa-evidence-depth-"));
+    temporaryDirectories.push(parent);
+    const directory = join(parent, "run-depth");
+    mkdirSync(join(directory, "bundles"), { recursive: true });
+    mkdirSync(join(directory, "blobs"));
+    writeFileSync(join(directory, "evidence-manifest.json"), `${"[".repeat(80)}0${"]".repeat(80)}`);
+    writeFileSync(join(directory, "archive-auth"), `hmac-sha256:${"0".repeat(64)}`);
+
+    expect(() => readEvidenceArchive({ directory, integrityKey: archiveIntegrityKey })).toThrow(/nesting depth limit/);
+  });
+
   it("redacts secrets before blob, bundle, and manifest storage", () => {
     const target = store();
     const artifact = visibleText(target);

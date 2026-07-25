@@ -1,4 +1,14 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import {
   EVIDENCE_BUNDLE_VERSION,
   EVIDENCE_MANIFEST_VERSION,
@@ -22,6 +32,13 @@ const URL_USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s\/@]*@/gi;
 const HIGH_CONFIDENCE_TOKEN_PATTERN = /\b(?:gh[pousr]_[a-z0-9]{20,}|npm_[a-z0-9]{20,}|sk-(?:proj-)?[a-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9a-z_-]{35}|xox[baprs]-[a-z0-9-]{10,}|eyJ[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,})\b/gi;
 const HIGH_ENTROPY_QUOTED_PATTERN = /(["'])[a-z0-9+\/_-]{40,}={0,2}\1/gi;
 const BINARY_ARTIFACT_TYPES = new Set(["SCREENSHOT", "TRACE"]);
+const MAX_ARCHIVE_METADATA_BYTES = 4 * 1024 * 1024;
+const MAX_ARCHIVE_TOTAL_METADATA_BYTES = 16 * 1024 * 1024;
+const MAX_ARCHIVE_BLOB_BYTES = 64 * 1024 * 1024;
+const MAX_ARCHIVE_TOTAL_BLOB_BYTES = 256 * 1024 * 1024;
+const MAX_ARCHIVE_CHECKPOINTS = 128;
+const MAX_ARCHIVE_ARTIFACTS = 1024;
+const MAX_ARCHIVE_JSON_DEPTH = 64;
 
 export function createInMemoryEvidenceStore({
   providerCapabilities,
@@ -217,55 +234,155 @@ export function redactSensitiveText(value, secrets = []) {
 
 export function verifyStoredEvidence({ bundle, manifest, readBlob }) {
   if (typeof readBlob !== "function") throw new Error("stored evidence requires a readBlob function");
-  const bundleSnapshot = jsonClone(bundle, "stored evidence bundle");
-  const manifestSnapshot = jsonClone(manifest, "stored evidence manifest");
-  validateContract("EvidenceBundle", bundleSnapshot);
-  validateContract("EvidenceManifest", manifestSnapshot);
-  assertUnique(bundleSnapshot.artifacts.map((artifact) => artifact.id), "artifact id");
-  assertUnique(bundleSnapshot.facts.map((fact) => fact.id), "fact id");
-  assertKnownArtifactRefs(
-    bundleSnapshot.facts,
-    new Set(bundleSnapshot.artifacts.map((artifact) => artifact.id)),
-  );
-
-  if (derivedBundleId(bundleSnapshot) !== bundleSnapshot.bundleId) {
-    throw new Error(`tampered evidence bundle id ${bundleSnapshot.bundleId}`);
-  }
-  if (manifestSnapshot.runId !== bundleSnapshot.runId) {
-    throw new Error(`manifest runId ${manifestSnapshot.runId} does not match bundle runId ${bundleSnapshot.runId}`);
-  }
-  const bundleHash = exactHash(bundleSnapshot);
-  const checkpoint = manifestSnapshot.checkpoints.find(
-    (entry) => entry.checkpointId === bundleSnapshot.checkpointId,
-  );
-  if (
-    !checkpoint ||
-    checkpoint.evidenceBundleId !== bundleSnapshot.bundleId ||
-    checkpoint.evidenceBundleHash !== bundleHash
-  ) {
-    throw new Error(`manifest checkpoint does not seal evidence bundle ${bundleSnapshot.bundleId}`);
-  }
+  const verified = verifyStoredEvidenceMetadata(bundle, manifest);
 
   const verifiedBlobs = new Map();
-  for (const artifact of bundleSnapshot.artifacts) {
+  for (const artifact of verified.bundle.artifacts) {
     const source = readBlob(artifact.storageRef);
     if (!(source instanceof Uint8Array)) throw new Error(`missing stored blob ${artifact.storageRef}`);
     const blob = Buffer.from(source);
-    if (
-      artifact.storageRef !== artifact.contentHash ||
-      artifact.contentHash !== exactHash(blob) ||
-      artifact.size !== blob.byteLength
-    ) {
-      throw new Error(`tampered stored blob ${artifact.storageRef}`);
-    }
+    assertStoredBlob(artifact, blob);
     verifiedBlobs.set(artifact.storageRef, blob);
   }
 
   return Object.freeze({
-    bundle: deepFreeze(bundleSnapshot),
-    manifest: deepFreeze(manifestSnapshot),
+    bundle: verified.bundle,
+    manifest: verified.manifest,
     readBlob(storageRef) {
       const blob = verifiedBlobs.get(storageRef);
+      return blob === undefined ? undefined : Buffer.from(blob);
+    },
+  });
+}
+
+export function writeEvidenceArchive({ directory, bundles, manifest, readBlob, secrets = [], integrityKey } = {}) {
+  // ponytail: archive roots must be private; use descriptor-based no-follow I/O for hostile shared filesystems.
+  if (typeof directory !== "string" || directory.length === 0) throw new TypeError("evidence archive directory must be a non-empty string");
+  if (!Array.isArray(bundles) || bundles.length === 0) throw new TypeError("evidence archive requires at least one bundle");
+  if (bundles.length > MAX_ARCHIVE_CHECKPOINTS) throw new Error("evidence archive exceeds checkpoint count limit");
+  const secretList = archiveSecrets(secrets);
+  const key = archiveIntegrityKey(integrityKey);
+  validateArchiveCheckpointCount(manifest);
+  assertJsonDepth(manifest, "evidence archive manifest");
+  for (const bundle of bundles) assertJsonDepth(bundle, "evidence archive bundle");
+  const manifestSnapshot = jsonClone(manifest, "evidence archive manifest");
+  const bundleSnapshots = bundles.map((bundle) => jsonClone(bundle, "evidence archive bundle"));
+  validateArchiveLimits(bundleSnapshots, manifestSnapshot);
+  validateArchiveSet(bundleSnapshots, manifestSnapshot);
+  if (typeof readBlob !== "function") throw new Error("evidence archive requires a readBlob function");
+
+  const blobs = new Map();
+  const verifiedBundles = bundleSnapshots.map((bundle) => verifyStoredEvidenceMetadata(bundle, manifestSnapshot).bundle);
+  for (const bundle of verifiedBundles) {
+    assertSecretFreeJson("evidence bundle", bundle, secretList);
+    for (const artifact of bundle.artifacts) {
+      let blob = blobs.get(artifact.storageRef);
+      if (blob === undefined) {
+        const source = readBlob(artifact.storageRef);
+        if (!(source instanceof Uint8Array)) throw new Error(`missing stored blob ${artifact.storageRef}`);
+        blob = Buffer.from(source);
+        blobs.set(artifact.storageRef, blob);
+      }
+      assertStoredBlob(artifact, blob);
+      if (blob.byteLength > MAX_ARCHIVE_BLOB_BYTES) throw new Error(`evidence blob ${artifact.storageRef} exceeds archive size limit`);
+      assertNoSecretBytes(`evidence blob ${artifact.storageRef}`, blob, secretList);
+      assertNoHighConfidenceTokenBytes(`evidence blob ${artifact.storageRef}`, blob);
+      if (isTextContentType(artifact.contentType)) assertSecretFreeText(`evidence blob ${artifact.storageRef}`, decodeUtf8(blob, artifact.storageRef), secretList);
+    }
+  }
+  const totalBlobBytes = [...blobs.values()].reduce((sum, blob) => sum + blob.byteLength, 0);
+  if (totalBlobBytes > MAX_ARCHIVE_TOTAL_BLOB_BYTES) throw new Error("evidence archive exceeds total blob size limit");
+  const manifestJson = exactJson(manifestSnapshot);
+  assertMetadataSize(manifestJson, "evidence manifest");
+  assertSecretFreeJson("evidence manifest", manifestSnapshot, secretList);
+  for (const bundle of verifiedBundles) assertMetadataSize(exactJson(bundle), `evidence bundle ${bundle.bundleId}`);
+
+  const archivePath = resolve(directory);
+  if (existsSync(archivePath)) throw new Error(`evidence archive already exists: ${archivePath}`);
+  mkdirSync(dirname(archivePath), { recursive: true, mode: 0o700 });
+  let created = false;
+  try {
+    mkdirSync(archivePath, { mode: 0o700 });
+    created = true;
+    mkdirSync(join(archivePath, "bundles"), { mode: 0o700 });
+    mkdirSync(join(archivePath, "blobs"), { mode: 0o700 });
+    for (const bundle of verifiedBundles) {
+      writePrivateFile(join(archivePath, "bundles", `${hashFileName(bundle.bundleId, "bundle id")}.json`), exactJson(bundle));
+    }
+    for (const [storageRef, blob] of blobs) writePrivateFile(join(archivePath, "blobs", hashFileName(storageRef, "storage ref")), blob);
+    writePrivateFile(join(archivePath, "evidence-manifest.json"), manifestJson);
+    writePrivateFile(join(archivePath, "archive-auth"), archiveAuthentication(manifestSnapshot, key));
+  } catch (error) {
+    if (created) rmSync(archivePath, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+export function readEvidenceArchive({ directory, secrets = [], integrityKey } = {}) {
+  if (typeof directory !== "string" || directory.length === 0) throw new TypeError("evidence archive directory must be a non-empty string");
+  const secretList = archiveSecrets(secrets);
+  const key = archiveIntegrityKey(integrityKey);
+  const archivePath = resolve(directory);
+  assertDirectory(archivePath, "evidence archive");
+  assertEntries(archivePath, new Set(["archive-auth", "blobs", "bundles", "evidence-manifest.json"]), "evidence archive");
+  assertDirectory(join(archivePath, "bundles"), "evidence bundle directory");
+  assertDirectory(join(archivePath, "blobs"), "evidence blob directory");
+
+  const manifestText = readPrivateFile(join(archivePath, "evidence-manifest.json"), MAX_ARCHIVE_METADATA_BYTES, "evidence manifest").toString("utf8");
+  const manifest = parseJson(manifestText, "evidence manifest");
+  assertJsonDepth(manifest, "evidence manifest");
+  validateArchiveCheckpointCount(manifest);
+  validateContract("EvidenceManifest", manifest);
+  const authentication = readPrivateFile(join(archivePath, "archive-auth"), 128, "evidence archive authentication").toString("utf8");
+  if (!authenticatedArchive(manifest, key, authentication)) throw new Error("evidence archive authentication failed");
+  assertSecretFreeJson("evidence manifest", manifest, secretList);
+
+  const expectedBundleFiles = new Set(manifest.checkpoints.map((checkpoint) => `${hashFileName(checkpoint.evidenceBundleId, "bundle id")}.json`));
+  assertEntries(join(archivePath, "bundles"), expectedBundleFiles, "evidence bundle directory");
+  let totalMetadataBytes = Buffer.byteLength(manifestText);
+  for (const file of expectedBundleFiles) totalMetadataBytes += privateFileSize(join(archivePath, "bundles", file), MAX_ARCHIVE_METADATA_BYTES, "evidence bundle");
+  if (totalMetadataBytes > MAX_ARCHIVE_TOTAL_METADATA_BYTES) throw new Error("evidence archive exceeds total metadata size limit");
+  const bundles = manifest.checkpoints.map((checkpoint) => {
+    const text = readPrivateFile(join(archivePath, "bundles", `${hashFileName(checkpoint.evidenceBundleId, "bundle id")}.json`), MAX_ARCHIVE_METADATA_BYTES, "evidence bundle").toString("utf8");
+    const bundle = parseJson(text, "evidence bundle");
+    assertJsonDepth(bundle, "evidence bundle");
+    validateContract("EvidenceBundle", bundle);
+    if (bundle.bundleId !== checkpoint.evidenceBundleId) throw new Error(`evidence bundle file does not match ${checkpoint.evidenceBundleId}`);
+    assertSecretFreeJson("evidence bundle", bundle, secretList);
+    return bundle;
+  });
+  validateArchiveLimits(bundles, manifest);
+  validateArchiveSet(bundles, manifest);
+
+  const expectedBlobFiles = new Set(bundles.flatMap((bundle) => bundle.artifacts.map((artifact) => hashFileName(artifact.storageRef, "storage ref"))));
+  assertEntries(join(archivePath, "blobs"), expectedBlobFiles, "evidence blob directory");
+  const rawBlobs = new Map();
+  const loadBlob = (storageRef) => {
+    if (!expectedBlobFiles.has(hashFileName(storageRef, "storage ref"))) return undefined;
+    if (!rawBlobs.has(storageRef)) {
+      rawBlobs.set(storageRef, readPrivateFile(join(archivePath, "blobs", hashFileName(storageRef, "storage ref")), MAX_ARCHIVE_BLOB_BYTES, "evidence blob"));
+      if ([...rawBlobs.values()].reduce((sum, blob) => sum + blob.byteLength, 0) > MAX_ARCHIVE_TOTAL_BLOB_BYTES) throw new Error("evidence archive exceeds total blob size limit");
+    }
+    return rawBlobs.get(storageRef);
+  };
+  const verifiedBundles = [];
+  for (const bundle of bundles) {
+    const verified = verifyStoredEvidenceMetadata(bundle, manifest);
+    verifiedBundles.push(verified.bundle);
+    for (const artifact of verified.bundle.artifacts) {
+      const blob = loadBlob(artifact.storageRef);
+      assertStoredBlob(artifact, blob);
+      assertNoSecretBytes(`evidence blob ${artifact.storageRef}`, blob, secretList);
+      assertNoHighConfidenceTokenBytes(`evidence blob ${artifact.storageRef}`, blob);
+      if (isTextContentType(artifact.contentType)) assertSecretFreeText(`evidence blob ${artifact.storageRef}`, decodeUtf8(blob, artifact.storageRef), secretList);
+    }
+  }
+
+  return Object.freeze({
+    bundles: deepFreeze(verifiedBundles),
+    manifest: deepFreeze(structuredClone(manifest)),
+    readBlob(storageRef) {
+      const blob = rawBlobs.get(storageRef);
       return blob === undefined ? undefined : Buffer.from(blob);
     },
   });
@@ -320,6 +437,33 @@ function prepareArtifactContent(type, contentType, content, secrets, binaryRedac
   if (typeof value !== "string") throw new Error(`${type} ${contentType} evidence must be text`);
   const redacted = redactString(value, secrets);
   return { bytes: Buffer.from(redacted.value), replacements: redacted.replacements };
+}
+
+function verifyStoredEvidenceMetadata(bundle, manifest) {
+  const bundleSnapshot = jsonClone(bundle, "stored evidence bundle");
+  const manifestSnapshot = jsonClone(manifest, "stored evidence manifest");
+  validateContract("EvidenceBundle", bundleSnapshot);
+  validateContract("EvidenceManifest", manifestSnapshot);
+  assertUnique(bundleSnapshot.artifacts.map((artifact) => artifact.id), "artifact id");
+  assertUnique(bundleSnapshot.facts.map((fact) => fact.id), "fact id");
+  assertKnownArtifactRefs(bundleSnapshot.facts, new Set(bundleSnapshot.artifacts.map((artifact) => artifact.id)));
+  if (derivedBundleId(bundleSnapshot) !== bundleSnapshot.bundleId) throw new Error(`tampered evidence bundle id ${bundleSnapshot.bundleId}`);
+  if (manifestSnapshot.runId !== bundleSnapshot.runId) throw new Error(`manifest runId ${manifestSnapshot.runId} does not match bundle runId ${bundleSnapshot.runId}`);
+  const checkpoint = manifestSnapshot.checkpoints.find((entry) => entry.checkpointId === bundleSnapshot.checkpointId);
+  if (!checkpoint || checkpoint.evidenceBundleId !== bundleSnapshot.bundleId || checkpoint.evidenceBundleHash !== exactHash(bundleSnapshot)) {
+    throw new Error(`manifest checkpoint does not seal evidence bundle ${bundleSnapshot.bundleId}`);
+  }
+  return {
+    bundle: deepFreeze(bundleSnapshot),
+    manifest: deepFreeze(manifestSnapshot),
+  };
+}
+
+function assertStoredBlob(artifact, blob) {
+  if (!(blob instanceof Uint8Array)) throw new Error(`missing stored blob ${artifact.storageRef}`);
+  if (artifact.storageRef !== artifact.contentHash || artifact.contentHash !== exactHash(blob) || artifact.size !== blob.byteLength) {
+    throw new Error(`tampered stored blob ${artifact.storageRef}`);
+  }
 }
 
 function validateBundleIntegrity(bundle, blobs, bundles) {
@@ -430,37 +574,66 @@ function redactCredentialValue(value) {
 
 function redactString(value, secrets) {
   let replacements = 0;
-  let redacted = value;
-  for (const secret of secrets) {
-    const parts = redacted.split(secret);
-    replacements += parts.length - 1;
-    redacted = parts.join("[REDACTED]");
-  }
+  let marker = ",\0QA_NATIVE_REDACTED\0";
+  while (value.includes(marker)) marker += "\0";
+  const protectedValue = protectSuppliedSecrets(value, secrets, marker);
+  replacements += protectedValue.replacements;
+  let redacted = protectedValue.value;
   redacted = redacted.replace(CREDENTIAL_PATTERN, (_, key, separator) => {
     replacements += 1;
-    return `${key}${separator}[REDACTED]`;
+    return `${key}${separator}${marker}`;
   });
   redacted = redacted.replace(AUTHORIZATION_PATTERN, (_, prefix) => {
     replacements += 1;
-    return `${prefix}[REDACTED]`;
+    return `${prefix}${marker}`;
   });
   redacted = redacted.replace(COOKIE_PATTERN, (_, prefix) => {
     replacements += 1;
-    return `${prefix}[REDACTED]`;
+    return `${prefix}${marker}`;
   });
   redacted = redacted.replace(URL_USERINFO_PATTERN, (_, scheme) => {
     replacements += 1;
-    return `${scheme}[REDACTED]@`;
+    return `${scheme}${marker}@`;
   });
   redacted = redacted.replace(HIGH_CONFIDENCE_TOKEN_PATTERN, () => {
     replacements += 1;
-    return "[REDACTED]";
+    return marker;
   });
   redacted = redacted.replace(HIGH_ENTROPY_QUOTED_PATTERN, (_, quote) => {
     replacements += 1;
-    return `${quote}[REDACTED]${quote}`;
+    return `${quote}${marker}${quote}`;
   });
-  return { value: redacted, replacements };
+  return { value: redacted.split(marker).join("[REDACTED]"), replacements };
+}
+
+function protectSuppliedSecrets(value, secrets, marker) {
+  let offset = 0;
+  let replacements = 0;
+  let protectedValue = "";
+  while (offset < value.length) {
+    const redactionIndex = value.indexOf("[REDACTED]", offset);
+    let secretIndex = -1;
+    let secretLength = 0;
+    for (const secret of secrets) {
+      const index = value.indexOf(secret, offset);
+      if (index !== -1 && (secretIndex === -1 || index < secretIndex || (index === secretIndex && secret.length > secretLength))) {
+        secretIndex = index;
+        secretLength = secret.length;
+      }
+    }
+    if (secretIndex !== -1 && (redactionIndex === -1 || secretIndex <= redactionIndex)) {
+      protectedValue += `${value.slice(offset, secretIndex)}${marker}`;
+      offset = secretIndex + secretLength;
+      replacements += 1;
+    } else if (redactionIndex !== -1) {
+      protectedValue += `${value.slice(offset, redactionIndex)}${marker}`;
+      offset = redactionIndex + "[REDACTED]".length;
+    } else {
+      protectedValue += value.slice(offset);
+      break;
+    }
+  }
+  return { value: protectedValue, replacements };
 }
 
 function redactRequiredString(value, label, secrets) {
@@ -505,6 +678,137 @@ function sortJson(value) {
 function exactHash(value) {
   const bytes = value instanceof Uint8Array ? value : Buffer.from(exactJson(value));
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+}
+
+function validateArchiveSet(bundles, manifest) {
+  validateContract("EvidenceManifest", manifest);
+  const expected = new Set(manifest.checkpoints.map((checkpoint) => checkpoint.evidenceBundleId));
+  const actual = new Set(bundles.map((bundle) => bundle.bundleId));
+  if (actual.size !== bundles.length) throw new Error("evidence archive contains duplicate bundles");
+  if (expected.size !== manifest.checkpoints.length || expected.size !== actual.size || [...expected].some((bundleId) => !actual.has(bundleId))) {
+    throw new Error("evidence archive bundles do not match manifest checkpoints");
+  }
+}
+
+function validateArchiveLimits(bundles, manifest) {
+  validateArchiveCheckpointCount(manifest);
+  const artifactCount = bundles.reduce((sum, bundle) => sum + (Array.isArray(bundle?.artifacts) ? bundle.artifacts.length : 0), 0);
+  if (artifactCount > MAX_ARCHIVE_ARTIFACTS) throw new Error("evidence archive exceeds artifact count limit");
+  const metadataBytes = Buffer.byteLength(exactJson(manifest)) + bundles.reduce((sum, bundle) => sum + Buffer.byteLength(exactJson(bundle)), 0);
+  if (metadataBytes > MAX_ARCHIVE_TOTAL_METADATA_BYTES) throw new Error("evidence archive exceeds total metadata size limit");
+}
+
+function validateArchiveCheckpointCount(manifest) {
+  if (Array.isArray(manifest?.checkpoints) && manifest.checkpoints.length > MAX_ARCHIVE_CHECKPOINTS) throw new Error("evidence archive exceeds checkpoint count limit");
+}
+
+function hashFileName(value, label) {
+  const match = /^sha256:([0-9a-f]{64})$/.exec(value);
+  if (!match) throw new Error(`${label} must be a sha256 content hash`);
+  return match[1];
+}
+
+function assertSecretFreeText(label, value, secrets) {
+  if (redactSensitiveText(value, secrets) !== value) throw new Error(`${label} contains sensitive data`);
+}
+
+function assertSecretFreeJson(label, value, secrets) {
+  if (exactJson(redact(value, secrets).value) !== exactJson(value)) throw new Error(`${label} contains sensitive data`);
+}
+
+function assertNoSecretBytes(label, value, secrets) {
+  for (const secret of secrets) if (value.indexOf(Buffer.from(secret)) !== -1) throw new Error(`${label} contains sensitive data`);
+}
+
+function assertNoHighConfidenceTokenBytes(label, value) {
+  // ponytail: raw-byte checks complement the required binary redactor; add OCR/archive inspection when those artifacts are enabled.
+  const text = value.toString("latin1");
+  if (new RegExp(HIGH_CONFIDENCE_TOKEN_PATTERN.source, "i").test(text) || new RegExp(HIGH_ENTROPY_QUOTED_PATTERN.source, "i").test(text)) {
+    throw new Error(`${label} contains sensitive data`);
+  }
+}
+
+function archiveSecrets(secrets) {
+  if (!Array.isArray(secrets)) throw new TypeError("evidence archive secrets must be an array");
+  const normalized = secrets.filter(Boolean).map(String);
+  if (normalized.includes("[REDACTED]")) throw new TypeError("evidence archive secret cannot equal the redaction marker");
+  return Object.freeze(normalized);
+}
+
+function archiveIntegrityKey(value) {
+  if (!(value instanceof Uint8Array) || value.byteLength < 32) throw new TypeError("evidence archive integrityKey must contain at least 32 bytes");
+  return Buffer.from(value);
+}
+
+function archiveAuthentication(manifest, key) {
+  return `hmac-sha256:${createHmac("sha256", key).update(exactJson(manifest)).digest("hex")}`;
+}
+
+function authenticatedArchive(manifest, key, actual) {
+  const expected = Buffer.from(archiveAuthentication(manifest, key));
+  const supplied = Buffer.from(actual);
+  return supplied.byteLength === expected.byteLength && timingSafeEqual(supplied, expected);
+}
+
+function assertMetadataSize(value, label) {
+  if (Buffer.byteLength(value) > MAX_ARCHIVE_METADATA_BYTES) throw new Error(`${label} exceeds archive size limit`);
+}
+
+function decodeUtf8(value, label) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(value);
+  } catch {
+    throw new Error(`evidence blob ${label} is not valid UTF-8 text`);
+  }
+}
+
+function writePrivateFile(path, value) {
+  writeFileSync(path, value, { flag: "wx", mode: 0o600 });
+}
+
+function readPrivateFile(path, maxBytes, label) {
+  const stat = lstatSync(path);
+  if (!stat.isFile()) throw new Error(`${label} must be a regular file`);
+  if (stat.size > maxBytes) throw new Error(`${label} exceeds archive size limit`);
+  return readFileSync(path);
+}
+
+function privateFileSize(path, maxBytes, label) {
+  const stat = lstatSync(path);
+  if (!stat.isFile()) throw new Error(`${label} must be a regular file`);
+  if (stat.size > maxBytes) throw new Error(`${label} exceeds archive size limit`);
+  return stat.size;
+}
+
+function assertDirectory(path, label) {
+  const stat = lstatSync(path);
+  if (!stat.isDirectory()) throw new Error(`${label} must be a directory`);
+}
+
+function assertEntries(path, expected, label) {
+  const actual = readdirSync(path);
+  if (actual.length !== expected.size || actual.some((entry) => !expected.has(entry))) throw new Error(`${label} contains unexpected entries`);
+}
+
+function parseJson(value, label) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new Error(`${label} is not valid JSON`);
+  }
+}
+
+function assertJsonDepth(value, label) {
+  const stack = [{ value, depth: 0 }];
+  const seen = new WeakSet();
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current.value || typeof current.value !== "object") continue;
+    if (current.depth > MAX_ARCHIVE_JSON_DEPTH) throw new Error(`${label} exceeds JSON nesting depth limit`);
+    if (seen.has(current.value)) throw new Error(`${label} contains repeated object references`);
+    seen.add(current.value);
+    for (const child of Object.values(current.value)) stack.push({ value: child, depth: current.depth + 1 });
+  }
 }
 
 function derivedBundleId(bundle) {
