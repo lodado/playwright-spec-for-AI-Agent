@@ -192,7 +192,21 @@ function validateQaScenario(value, path) {
   value.steps.forEach((step, index) => validateQaStep(step, `${path}.steps[${index}]`));
   const stepIds = value.steps.map((step) => step.id);
   if (new Set(stepIds).size !== stepIds.length) fail("QaIrDocument", `${path}.steps`, "step ids must be unique within a scenario");
-  recordArray(value.expectations, `${path}.expectations`, "QaIrDocument");
+  array(value.expectations, `${path}.expectations`, "QaIrDocument");
+  value.expectations.forEach((expectation, index) => {
+    const expectationPath = `${path}.expectations[${index}]`;
+    object(expectation, expectationPath, "QaIrDocument");
+    allowedKeys(expectation, ["id", "kind", "target", "expected", "url", "value", "text", "attribute", "provenance"], expectationPath, "QaIrDocument");
+    string(expectation.id, `${expectationPath}.id`, "QaIrDocument");
+    oneOf(expectation.kind, ["CONTAINS_TEXT", "VISIBLE", "NOT_VISIBLE", "PRESENT", "ROLE", "NAME", "ATTRIBUTE", "URL", "URL_MATCH", "VISIBLE_TEXT", "VISUAL_CONSISTENCY", "VISUAL_STABILITY"], `${expectationPath}.kind`, "QaIrDocument");
+    if (expectation.target !== undefined) validateSemanticTarget(expectation.target, `${expectationPath}.target`);
+    if (expectation.provenance !== undefined) {
+      array(expectation.provenance, `${expectationPath}.provenance`, "QaIrDocument");
+      expectation.provenance.forEach((item, provenanceIndex) => validateSourceProvenance(item, `${expectationPath}.provenance[${provenanceIndex}]`, "QaIrDocument"));
+    }
+  });
+  const expectationIds = value.expectations.map((expectation) => expectation.id);
+  if (new Set(expectationIds).size !== expectationIds.length) fail("QaIrDocument", `${path}.expectations`, "expectation ids must be unique within a scenario");
   object(value.policy, `${path}.policy`, "QaIrDocument");
   validateCapabilityPolicy(value.policy, `${path}.policy`, "QaIrDocument");
   array(value.provenance, `${path}.provenance`, "QaIrDocument");
@@ -215,7 +229,15 @@ function validateQaStep(value, path) {
     validateSemanticTarget(value.target, `${path}.target`);
   } else if (value.kind === "OBSERVE") {
     allowedKeys(value, ["id", "kind", "requests"], path, "QaIrDocument");
-    recordArray(value.requests, `${path}.requests`, "QaIrDocument");
+    array(value.requests, `${path}.requests`, "QaIrDocument");
+    value.requests.forEach((request, index) => {
+      const requestPath = `${path}.requests[${index}]`;
+      object(request, requestPath, "QaIrDocument");
+      allowedKeys(request, ["type"], requestPath, "QaIrDocument");
+      oneOf(request.type, ["SCREENSHOT", "DOM_SNAPSHOT", "ARIA_SNAPSHOT", "VISIBLE_TEXT", "NETWORK_LOG", "CONSOLE_LOG", "TRACE", "ACTION_LOG", "ELEMENT_OBSERVATION"], `${requestPath}.type`, "QaIrDocument");
+    });
+    const requestTypes = value.requests.map((request) => request.type);
+    if (new Set(requestTypes).size !== requestTypes.length) fail("QaIrDocument", `${path}.requests`, "request types must be unique within an observation step");
   } else {
     allowedKeys(value, ["id", "kind", "checkpointId"], path, "QaIrDocument");
     string(value.checkpointId, `${path}.checkpointId`, "QaIrDocument");
@@ -380,6 +402,38 @@ function validateObservedFact(value, path) {
   string(value.id, `${path}.id`, "EvidenceBundle");
   string(value.kind, `${path}.kind`, "EvidenceBundle");
   present(value.value, `${path}.value`, "EvidenceBundle");
+  if (value.kind === "ELEMENT_OBSERVATION") validateElementObservation(value.value, `${path}.value`);
+}
+
+function validateElementObservation(value, path) {
+  object(value, path, "EvidenceBundle");
+  string(value.expectationId, `${path}.expectationId`, "EvidenceBundle");
+  oneOf(value.resolution, ["FOUND", "MISSING", "AMBIGUOUS", "UNSUPPORTED", "UNSTABLE"], `${path}.resolution`, "EvidenceBundle");
+  if (value.resolution === "FOUND") {
+    allowedKeys(value, ["expectationId", "resolution", "visible", "text", "textTruncated", "role", "accessibleName", "attributes"], path, "EvidenceBundle");
+    if (value.visible !== undefined) bool(value.visible, `${path}.visible`, "EvidenceBundle");
+    if (value.text !== undefined) {
+      if (typeof value.text !== "string" || value.text.length > 4_096) fail("EvidenceBundle", `${path}.text`, "must be a string of at most 4096 characters");
+      bool(value.textTruncated, `${path}.textTruncated`, "EvidenceBundle");
+    } else if (value.textTruncated !== undefined) fail("EvidenceBundle", `${path}.textTruncated`, "requires text");
+    if (value.role !== undefined) boundedString(value.role, 1_024, `${path}.role`, "EvidenceBundle");
+    if (value.accessibleName !== undefined && (typeof value.accessibleName !== "string" || value.accessibleName.length > 4_096)) fail("EvidenceBundle", `${path}.accessibleName`, "must be a string of at most 4096 characters");
+    if (value.attributes !== undefined) {
+      object(value.attributes, `${path}.attributes`, "EvidenceBundle");
+      for (const [name, attribute] of Object.entries(value.attributes)) {
+        boundedString(name, 512, `${path}.attributes`, "EvidenceBundle");
+        if (typeof attribute !== "string" || attribute.length > 4_096) fail("EvidenceBundle", `${path}.attributes.${name}`, "must be a string of at most 4096 characters");
+      }
+    }
+    return;
+  }
+  if (value.resolution === "AMBIGUOUS") {
+    allowedKeys(value, ["expectationId", "resolution", "count"], path, "EvidenceBundle");
+    number(value.count, `${path}.count`, "EvidenceBundle");
+    if (!Number.isInteger(value.count) || value.count < 2) fail("EvidenceBundle", `${path}.count`, "must be an integer greater than one");
+    return;
+  }
+  allowedKeys(value, ["expectationId", "resolution"], path, "EvidenceBundle");
 }
 
 function validateEvidenceArtifact(value, path) {

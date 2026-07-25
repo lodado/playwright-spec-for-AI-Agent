@@ -14,6 +14,8 @@ const PROVIDER_VERSION = "0.1.0";
 const TEXT_LIMIT = 1024 * 1024;
 const DOM_LIMIT = 4 * 1024 * 1024;
 const ACTION_LOG_LIMIT = 16 * 1024;
+const ELEMENT_TEXT_LIMIT = 4 * 1024;
+const MAX_ELEMENT_OBSERVATIONS = 128;
 const MAX_PLAN_NODES = 128;
 const MAX_RUN_ARTIFACTS = 256;
 const MAX_RUN_EVIDENCE_BYTES = 16 * 1024 * 1024;
@@ -26,7 +28,7 @@ export function playwrightExecutionCapabilities() {
   return providerCapabilities({
     providerId: PROVIDER_ID,
     actions: ["NAVIGATE", "CLICK", "OBSERVE", "CHECKPOINT"],
-    evidence: ["VISIBLE_TEXT", "DOM_SNAPSHOT", "ACTION_LOG"],
+    evidence: ["VISIBLE_TEXT", "DOM_SNAPSHOT", "ACTION_LOG", "ELEMENT_OBSERVATION"],
   });
 }
 
@@ -45,6 +47,8 @@ export async function executeWithPlaywright({
 } = {}) {
   let runtime;
   try {
+    qaIr = jsonSnapshot(qaIr);
+    plan = jsonSnapshot(plan);
     validateContract("QaIrDocument", qaIr);
     validateContract("ExecutionPlan", plan);
     const capabilities = playwrightExecutionCapabilities();
@@ -93,6 +97,7 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
     scenario,
     steps: new Map(scenario.steps.map((step) => [step.id, step])),
   }])));
+  if ([...scenarios.values()].some(({ scenario }) => scenario.expectations.length > MAX_ELEMENT_OBSERVATIONS)) throw new Error("scenario exceeds element observation limit");
   const observations = new Map();
   const bundles = [];
   let manifest;
@@ -173,6 +178,10 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       try {
         const captured = [];
         for (const type of node.evidence) {
+          if (type === "ELEMENT_OBSERVATION") {
+            state.facts.push(...(await observeExpectations(page, entry.scenario.expectations, node.nodeId, nodeTimeoutMs)).map(captureFact));
+            continue;
+          }
           const content = await observe(page, type, nodeTimeoutMs);
           captured.push(captureArtifact(`${node.nodeId}:${type.toLowerCase()}`, type, type === "DOM_SNAPSHOT" ? "text/html" : "text/plain", content));
         }
@@ -187,7 +196,8 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       if (node.action !== "CLICK" || node.evidence.length !== 1 || node.evidence[0] !== "ACTION_LOG") throw providerError("POLICY_VIOLATION");
       const page = await openPage();
       const beforeUrl = evidenceUrl(page, base);
-      const locator = semanticClickLocator(page, step.target);
+      const locator = semanticLocator(page, step.target, { requireAccessibleName: true });
+      if (!locator) throw providerError("CONTRACT_VIOLATION");
       await assertSafeClickTarget(locator, nodeTimeoutMs);
       interactionStarted = true;
       await locator.click({ timeout: nodeTimeoutMs });
@@ -215,7 +225,7 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
             ...(timezoneId === undefined ? {} : { timezone: timezoneId }),
           },
           artifacts: state.artifacts,
-          facts: [{ id: `${node.nodeId}:url`, kind: "URL", value: targetUrl }],
+          facts: [...state.facts, { id: `${node.nodeId}:url`, kind: "URL", value: targetUrl }],
         });
         manifest = store.appendCheckpoint(bundle, manifest === undefined ? {} : { suppliedManifest: manifest });
         bundles.push(bundle);
@@ -242,6 +252,13 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
     artifactCount += 1;
     evidenceBytes += size;
     return store.captureArtifact({ id, type, contentType, content });
+  }
+
+  function captureFact(fact) {
+    const size = Buffer.byteLength(JSON.stringify(fact));
+    if (evidenceBytes + size > MAX_RUN_EVIDENCE_BYTES) throw providerError("EVIDENCE_STORAGE_FAILED");
+    evidenceBytes += size;
+    return fact;
   }
 
   return {
@@ -271,15 +288,57 @@ async function assertSafeClickTarget(locator, timeout) {
   if (!target || target.anchor !== false || target.form !== false || target.editable !== false) throw providerError("POLICY_VIOLATION");
 }
 
-function semanticClickLocator(page, target) {
+function semanticLocator(page, target, { requireAccessibleName = false, allowUnsupported = false } = {}) {
   const identities = [target?.testId !== undefined, target?.text !== undefined, target?.role !== undefined].filter(Boolean).length;
-  if (identities !== 1) throw providerError("CONTRACT_VIOLATION");
-  if (target.testId !== undefined) return page.getByTestId(target.testId);
-  if (target.text?.kind === "literal" && typeof target.text.value === "string") return page.getByText(target.text.value);
-  if (typeof target.role === "string" && target.accessibleName?.kind === "literal" && typeof target.accessibleName.value === "string") {
-    return page.getByRole(target.role, { name: target.accessibleName.value });
+  if (identities === 0) return undefined;
+  if (identities !== 1) {
+    if (allowUnsupported) return undefined;
+    throw providerError("CONTRACT_VIOLATION");
+  }
+  if (target.testId !== undefined) return boundedLocatorValue(target.testId) ? page.getByTestId(target.testId) : undefined;
+  if (target.text?.kind === "literal" && boundedLocatorValue(target.text.value)) return page.getByText(target.text.value);
+  if (typeof target.role === "string") {
+    const name = target.accessibleName?.kind === "literal" && typeof target.accessibleName.value === "string" ? target.accessibleName.value : undefined;
+    if (!boundedLocatorValue(target.role) || (target.accessibleName !== undefined && !boundedLocatorValue(name))) return undefined;
+    if (requireAccessibleName && name === undefined) return undefined;
+    return page.getByRole(target.role, name === undefined ? {} : { name });
   }
   throw providerError("CONTRACT_VIOLATION");
+}
+
+async function observeExpectations(page, expectations, nodeId, timeout) {
+  const facts = [];
+  for (const expectation of expectations) {
+    if (!["CONTAINS_TEXT", "VISIBLE", "NOT_VISIBLE", "PRESENT"].includes(expectation.kind)) continue;
+    const locator = semanticLocator(page, expectation.target, { allowUnsupported: true });
+    if (!locator) continue;
+    const count = await locator.count();
+    const id = `${nodeId}:element:${expectation.id}`;
+    if (count === 0) {
+      facts.push({ id, kind: "ELEMENT_OBSERVATION", value: { expectationId: expectation.id, resolution: "MISSING" } });
+      continue;
+    }
+    if (count > 1) {
+      facts.push({ id, kind: "ELEMENT_OBSERVATION", value: { expectationId: expectation.id, resolution: "AMBIGUOUS", count } });
+      continue;
+    }
+    const captured = await locator.evaluate((element, maxChars) => (element.textContent ?? "").slice(0, maxChars + 1), ELEMENT_TEXT_LIMIT, { timeout });
+    if (typeof captured !== "string") throw providerError("EVIDENCE_STORAGE_FAILED");
+    const value = { expectationId: expectation.id, resolution: "FOUND", visible: await locator.isVisible({ timeout }) };
+    if (captured.length <= ELEMENT_TEXT_LIMIT) Object.assign(value, { text: captured, textTruncated: false });
+    facts.push({ id, kind: "ELEMENT_OBSERVATION", value });
+  }
+  return facts;
+}
+
+function boundedLocatorValue(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 1_024;
+}
+
+function jsonSnapshot(value) {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) throw new Error("provider input must be JSON-serializable");
+  return JSON.parse(serialized);
 }
 
 function actionLogTarget(target) {
@@ -304,7 +363,7 @@ function boundedText(value, limit, type) {
 }
 
 function observationState(observations, scenarioId) {
-  if (!observations.has(scenarioId)) observations.set(scenarioId, { artifacts: [] });
+  if (!observations.has(scenarioId)) observations.set(scenarioId, { artifacts: [], facts: [] });
   return observations.get(scenarioId);
 }
 

@@ -318,7 +318,12 @@ describe("documented runtime contracts", () => {
     expect(() => validateContract("ExecutionPlan", { schemaVersion: EXECUTION_PLAN_VERSION, planId: "p", qaIrId: "q", nodes: [], edges: [], retryPolicy: {} })).toThrow(/timeoutPolicy/);
     expect(() => validateContract("EvidenceBundle", { ...evidenceBundle(), environment: { targetUrl: "https://example.test" } })).toThrow(/browser/);
     expect(() => validateContract("EvidenceBundle", { ...evidenceBundle(), facts: [{ id: "fact-bad", kind: "URL" }] })).toThrow(/value/);
+    expect(() => validateContract("EvidenceBundle", { ...evidenceBundle(), facts: [{ id: "fact-element", kind: "ELEMENT_OBSERVATION", value: { expectationId: "expect-heading", visible: true } }] })).toThrow(/resolution/);
     expect(() => validateContract("QaIrDocument", { ...qaIr(), suites: [{ ...qaIr().suites[0], scenarios: [{ ...qaIr().suites[0].scenarios[0], steps: [{ id: "bogus", kind: "BOGUS" }] }] }] })).toThrow(/NAVIGATE/);
+    expect(() => validateContract("QaIrDocument", { ...qaIr(), suites: [{ ...qaIr().suites[0], scenarios: [{ ...qaIr().suites[0].scenarios[0], steps: [{ id: "observe", kind: "OBSERVE", requests: [{ type: "VISIBLE_TEXT", selector: "body" }] }] }] }] })).toThrow(/selector/);
+    expect(() => validateContract("QaIrDocument", { ...qaIr(), suites: [{ ...qaIr().suites[0], scenarios: [{ ...qaIr().suites[0].scenarios[0], steps: [{ id: "observe", kind: "OBSERVE", requests: [{ type: "VISIBLE_TEXT" }, { type: "VISIBLE_TEXT" }] }] }] }] })).toThrow(/unique/);
+    expect(() => validateContract("QaIrDocument", { ...qaIr(), suites: [{ ...qaIr().suites[0], scenarios: [{ ...qaIr().suites[0].scenarios[0], expectations: [qaIr().suites[0].scenarios[0].expectations[0], qaIr().suites[0].scenarios[0].expectations[0]] }] }] })).toThrow(/unique/);
+    expect(() => validateContract("QaIrDocument", { ...qaIr(), suites: [{ ...qaIr().suites[0], scenarios: [{ ...qaIr().suites[0].scenarios[0], expectations: [{ id: "bad", kind: "BOGUS", garbage: true }] }] }] })).toThrow(/garbage|BOGUS/);
     expect(() => validateContract("QaIrDocument", { ...qaIr(), suites: [{ ...qaIr().suites[0], provenance: [{ path: "qa/dashboard.yaml" }] }] })).toThrow(/range/);
     expect(() => validateContract("JudgeResult", { ...judgeResult(), stage: "judge" })).toThrow(/not allowed/);
   });

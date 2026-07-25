@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { QA_IR_VERSION } from "../../contracts/index.mjs";
 import { createExecutionPlan } from "../../core/index.mjs";
 import { verifyStoredEvidence } from "../../evidence/index.mjs";
+import { evaluateDeterministically } from "../../judge/index.mjs";
 import { executeWithPlaywright, playwrightExecutionCapabilities } from "../index.mjs";
 
 const policy = {
@@ -33,10 +34,10 @@ function qaIr(target = "/dashboard") {
         preconditions: [],
         steps: [
           { id: "navigate", kind: "NAVIGATE", target: { type: "PATH", value: target } },
-          { id: "observe", kind: "OBSERVE", requests: [{ type: "VISIBLE_TEXT" }, { type: "DOM_SNAPSHOT" }] },
+          { id: "observe", kind: "OBSERVE", requests: [{ type: "VISIBLE_TEXT" }, { type: "DOM_SNAPSHOT" }, { type: "ELEMENT_OBSERVATION" }] },
           { id: "checkpoint", kind: "CHECKPOINT", checkpointId: "loaded" },
         ],
-        expectations: [{ id: "heading", kind: "CONTAINS_TEXT", expected: { kind: "literal", value: "Dashboard" } }],
+        expectations: [{ id: "heading", kind: "CONTAINS_TEXT", target: { testId: "heading" }, expected: { kind: "literal", value: "Dashboard" } }],
         policy,
         provenance: [],
       }],
@@ -57,7 +58,7 @@ function clickableQaIr(action = "CLICK") {
   return input;
 }
 
-function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccessCode=short-secret#short-secret", text = "Dashboard SESSION-SECRET", dom = "<main>Dashboard SESSION-SECRET</main>", clickError, onClick, closeDelayMs = 0 } = {}) {
+function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccessCode=short-secret#short-secret", text = "Dashboard SESSION-SECRET", dom = "<main>Dashboard SESSION-SECRET</main>", clickError, onClick, closeDelayMs = 0, elementCount = 1 } = {}) {
   const calls = [];
   let routeHandler;
   let webSocketHandler;
@@ -73,7 +74,11 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
     },
     getByTestId(value) {
       return {
-        async evaluate() { return { anchor: false, form: false, editable: false }; },
+        async count() { return elementCount; },
+        async isVisible() { return true; },
+        async evaluate(_callback, argument) {
+          return typeof argument === "number" ? text.slice(0, argument + 1) : { anchor: false, form: false, editable: false };
+        },
         async click() {
           calls.push(["click:testId", value]);
           if (clickError) throw clickError;
@@ -82,10 +87,10 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
       };
     },
     getByText(value) {
-      return { async evaluate() { return { anchor: false, form: false, editable: false }; }, async click() { calls.push(["click:text", value]); } };
+      return { async count() { return elementCount; }, async isVisible() { return true; }, async evaluate() { return text; }, async click() { calls.push(["click:text", value]); } };
     },
     getByRole(role, options) {
-      return { async evaluate() { return { anchor: false, form: false, editable: false }; }, async click() { calls.push(["click:role", role, options]); } };
+      return { async count() { return elementCount; }, async isVisible() { return true; }, async evaluate(_callback, argument) { return typeof argument === "number" ? text.slice(0, argument + 1) : { anchor: false, form: false, editable: false }; }, async click() { calls.push(["click:role", role, options]); } };
     },
     url() { return pageUrl; },
     viewportSize() { return { width: 1280, height: 720 }; },
@@ -116,7 +121,7 @@ describe("readonly Playwright execution provider", () => {
   it("executes a plan and seals redacted browser evidence before returning", async () => {
     const input = qaIr();
     const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
-    const fixture = fakeBrowser();
+    const fixture = fakeBrowser({ text: "Dashboard" });
     const result = await executeWithPlaywright({
       qaIr: input,
       plan,
@@ -133,10 +138,89 @@ describe("readonly Playwright execution provider", () => {
     ]);
     expect(result.bundles).toHaveLength(1);
     expect(result.bundles[0].artifacts.map((artifact) => artifact.type)).toEqual(["DOM_SNAPSHOT", "VISIBLE_TEXT"]);
-    expect(result.bundles[0].facts).toMatchObject([{ kind: "URL", value: "https://example.test/dashboard" }]);
+    expect(result.bundles[0].facts).toMatchObject([
+      { kind: "ELEMENT_OBSERVATION", value: { expectationId: "heading", resolution: "FOUND", visible: true, text: "Dashboard", textTruncated: false } },
+      { kind: "URL", value: "https://example.test/dashboard" },
+    ]);
+    expect(evaluateDeterministically({ qaIr: input, bundle: result.bundles[0], manifest: result.manifest, readBlob: result.readBlob }).resolvedChecks).toMatchObject([
+      { expectationId: "heading", status: "MATCHED" },
+    ]);
     expect(JSON.stringify(result)).not.toContain("SESSION-SECRET");
     expect(JSON.stringify(result)).not.toContain("short-secret");
     expect(verifyStoredEvidence({ bundle: result.bundles[0], manifest: result.manifest, readBlob: result.readBlob }).bundle).toEqual(result.bundles[0]);
+  });
+
+  it("keeps ambiguous semantic targets unresolved instead of inventing a deterministic result", async () => {
+    const input = qaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    const fixture = fakeBrowser({ elementCount: 2 });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-ambiguous", browserType: fixture.browserType });
+    const evaluation = evaluateDeterministically({ qaIr: input, bundle: result.bundles[0], manifest: result.manifest, readBlob: result.readBlob });
+
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    expect(result.bundles[0].facts[0]).toMatchObject({ kind: "ELEMENT_OBSERVATION", value: { expectationId: "heading", resolution: "AMBIGUOUS", count: 2 } });
+    expect(evaluation.unresolvedChecks).toMatchObject([{ expectationId: "heading" }]);
+  });
+
+  it("models missing targets explicitly without creating an early deterministic failure", async () => {
+    const input = qaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    const fixture = fakeBrowser({ elementCount: 0 });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-missing", browserType: fixture.browserType });
+    const evaluation = evaluateDeterministically({ qaIr: input, bundle: result.bundles[0], manifest: result.manifest, readBlob: result.readBlob });
+
+    expect(result.bundles[0].facts[0]).toMatchObject({ kind: "ELEMENT_OBSERVATION", value: { expectationId: "heading", resolution: "MISSING" } });
+    expect(evaluation.unresolvedChecks).toMatchObject([{ expectationId: "heading" }]);
+  });
+
+  it("resolves PRESENT from a uniquely found target", async () => {
+    const input = qaIr();
+    input.suites[0].scenarios[0].expectations[0].kind = "PRESENT";
+    delete input.suites[0].scenarios[0].expectations[0].expected;
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    const fixture = fakeBrowser();
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-present", browserType: fixture.browserType });
+    const evaluation = evaluateDeterministically({ qaIr: input, bundle: result.bundles[0], manifest: result.manifest, readBlob: result.readBlob });
+
+    expect(evaluation.resolvedChecks).toMatchObject([{ expectationId: "heading", status: "MATCHED" }]);
+  });
+
+  it("keeps truncated or redacted text mismatches unresolved", async () => {
+    for (const candidate of [
+      { text: "x".repeat(5_000), expected: "needle", secrets: [] },
+      { text: "SESSION-SECRET", expected: "SESSION-SECRET", secrets: ["SESSION-SECRET"] },
+      { text: "SESSION-SECRET", expected: "[REDACTED]", secrets: ["SESSION-SECRET"] },
+      { text: `${"A".repeat(4_090)}TOP-SECRET-1234567890`, expected: "TOP-SECRET-1234567890", secrets: ["TOP-SECRET-1234567890"] },
+    ]) {
+      const input = qaIr();
+      input.suites[0].scenarios[0].expectations[0].expected.value = candidate.expected;
+      const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+      const fixture = fakeBrowser({ text: candidate.text });
+      const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: `run-partial-${candidate.secrets.length}`, browserType: fixture.browserType, secrets: candidate.secrets });
+      const evaluation = evaluateDeterministically({ qaIr: input, bundle: result.bundles[0], manifest: result.manifest, readBlob: result.readBlob });
+
+      expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+      expect(evaluation.unresolvedChecks).toMatchObject([{ expectationId: "heading" }]);
+      expect(JSON.stringify(result)).not.toContain("SESSION-SECRET");
+      expect(JSON.stringify(result)).not.toContain("TOP-SE");
+    }
+  });
+
+  it("snapshots mutable QA IR before browser execution", async () => {
+    const input = qaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    let reads = 0;
+    Object.defineProperty(input.suites[0].scenarios[0].expectations[0].target, "testId", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return reads === 1 ? "heading" : "tampered";
+      },
+    });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-snapshot", browserType: fakeBrowser().browserType });
+
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    expect(reads).toBe(1);
   });
 
   it("allows only same-origin HTTP(S) browser requests", async () => {

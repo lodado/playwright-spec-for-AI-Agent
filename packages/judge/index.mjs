@@ -138,15 +138,18 @@ function deterministicCheck(expectation, bundle, readBlob) {
     return check(expectation, passed, fact.id);
   }
 
-  const observed = bundle.facts.find((item) => item.kind === "ELEMENT_OBSERVATION" && item.value?.expectationId === expectation.id);
-  if (observed) return checkExpectationObservation(expectation, observed);
+  const observations = bundle.facts.filter((item) => item.kind === "ELEMENT_OBSERVATION" && item.value?.expectationId === expectation.id);
+  if (observations.length === 1) return checkExpectationObservation(expectation, observations[0]);
 
   if (expectation.kind === "VISIBLE_TEXT" && literalValue(expectation.expected ?? expectation.text) !== undefined) {
     const expected = literalValue(expectation.expected ?? expectation.text);
     const artifacts = bundle.artifacts.filter((artifact) => artifact.type === "VISIBLE_TEXT");
     if (artifacts.length === 0) return null;
-    const matched = artifacts.filter((artifact) => readBlob(artifact.storageRef).toString("utf8").includes(expected));
-    return check(expectation, matched.length > 0, (matched[0] ?? artifacts[0]).id);
+    for (const artifact of artifacts) {
+      const text = readBlob(artifact.storageRef).toString("utf8");
+      if (!text.includes("[REDACTED]") && normalizedText(text).includes(normalizedText(expected))) return check(expectation, true, artifact.id);
+    }
+    return null;
   }
 
   return null;
@@ -154,13 +157,22 @@ function deterministicCheck(expectation, bundle, readBlob) {
 
 function checkExpectationObservation(expectation, observed) {
   const value = observed.value;
+  if (value.resolution === "MISSING") {
+    if (expectation.kind === "NOT_VISIBLE") return check(expectation, true, observed.id);
+    return null;
+  }
+  if (value.resolution !== "FOUND") return null;
   if (expectation.kind === "CONTAINS_TEXT") {
     const expected = literalValue(expectation.expected);
-    return expected === undefined || typeof value.text !== "string" ? null : check(expectation, value.text.includes(expected), observed.id);
+    if (expected === undefined || typeof value.text !== "string") return null;
+    if (value.textTruncated || value.text.includes("[REDACTED]")) return null;
+    const normalizedObserved = normalizedText(value.text);
+    const normalizedExpected = normalizedText(expected);
+    return normalizedObserved.includes(normalizedExpected) ? check(expectation, true, observed.id) : null;
   }
-  if (expectation.kind === "VISIBLE") return typeof value.visible === "boolean" ? check(expectation, value.visible, observed.id) : null;
-  if (expectation.kind === "NOT_VISIBLE") return typeof value.visible === "boolean" ? check(expectation, !value.visible, observed.id) : null;
-  if (expectation.kind === "PRESENT") return typeof value.present === "boolean" ? check(expectation, value.present, observed.id) : null;
+  if (expectation.kind === "VISIBLE") return value.visible === true ? check(expectation, true, observed.id) : null;
+  if (expectation.kind === "NOT_VISIBLE") return value.visible === false ? check(expectation, true, observed.id) : null;
+  if (expectation.kind === "PRESENT") return check(expectation, true, observed.id);
   if (expectation.kind === "ROLE") return exactObservation(expectation, value.role, expectation.expected ?? expectation.target?.role, observed.id);
   if (expectation.kind === "NAME") return exactObservation(expectation, value.accessibleName, expectation.expected ?? expectation.target?.accessibleName, observed.id);
   if (expectation.kind === "ATTRIBUTE") {
@@ -172,9 +184,13 @@ function checkExpectationObservation(expectation, observed) {
   return null;
 }
 
+function normalizedText(value) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
 function exactObservation(expectation, observed, expectedValue, evidenceRef) {
   const expected = literalValue(expectedValue);
-  return typeof observed === "string" && expected !== undefined ? check(expectation, observed === expected, evidenceRef) : null;
+  return typeof observed === "string" && expected !== undefined && observed === expected ? check(expectation, true, evidenceRef) : null;
 }
 
 function check(expectation, passed, evidenceRef) {

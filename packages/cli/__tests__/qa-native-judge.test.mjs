@@ -126,7 +126,7 @@ function persistedRun({ scenarioCount = 1, deterministic }) {
       capturedAt: `2026-07-25T00:00:0${index}.000Z`,
       environment: { targetUrl: "https://example.test/dashboard", browser: "chromium", viewport: { width: 1280, height: 720 } },
       artifacts: [artifact],
-      facts: deterministic ? [{ id: `visible-${index}`, kind: "ELEMENT_OBSERVATION", value: { expectationId: expectation.id, visible: true } }] : [],
+      facts: deterministic ? [{ id: `visible-${index}`, kind: "ELEMENT_OBSERVATION", value: { expectationId: expectation.id, resolution: "FOUND", visible: true } }] : [],
     });
     bundles.push(bundle);
     manifest = store.appendCheckpoint(bundle);

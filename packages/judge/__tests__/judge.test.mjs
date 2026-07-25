@@ -85,6 +85,7 @@ function fixture(options = {}) {
   const facts = [
     { id: "fact-url", kind: "URL", value: options.url ?? "https://example.test/dashboard" },
     observation("text", options.omitText ? {} : { text: options.text ?? "Dashboard overview" }),
+    ...(options.duplicateText ? [{ ...observation("text-copy", { text: "Dashboard overview" }), value: { expectationId: "text", resolution: "FOUND", text: "Dashboard overview", textTruncated: false } }] : []),
     observation("visible", options.omitVisible ? {} : { visible: true }),
     observation("role", { role: "button" }),
     observation("name", { accessibleName: "Save" }),
@@ -117,7 +118,7 @@ function observation(expectationId, value) {
   return {
     id: `fact-${expectationId}`,
     kind: "ELEMENT_OBSERVATION",
-    value: { expectationId, ...value },
+    value: { expectationId, resolution: "FOUND", ...value, ...(value.text === undefined ? {} : { textTruncated: false }) },
   };
 }
 
@@ -163,13 +164,13 @@ describe("deterministic evidence evaluation", () => {
     }]);
   });
 
-  it("reports observed contradictions without model reasoning", () => {
-    const evidence = fixture({ text: "Billing" });
+  it("reports stable URL contradictions without model reasoning", () => {
+    const evidence = fixture({ url: "https://example.test/billing" });
     const evaluation = evaluateDeterministically({ qaIr: qaIr({ semantic: false }), ...evidence });
     expect(evaluation.status).toBe("FAIL");
-    expect(evaluation.resolvedChecks.find((item) => item.expectationId === "text")).toMatchObject({
+    expect(evaluation.resolvedChecks.find((item) => item.expectationId === "url")).toMatchObject({
       status: "CONTRADICTED",
-      evidenceRefs: ["fact-text"],
+      evidenceRefs: ["fact-url"],
     });
   });
 
@@ -180,6 +181,14 @@ describe("deterministic evidence evaluation", () => {
     expect(evaluation.resolvedChecks.find((item) => item.expectationId === "url")?.status).toBe("MATCHED");
     expect(evaluation.unresolvedChecks.map((item) => item.expectationId)).toEqual(["text", "visible"]);
     expect(evaluation.status).toBe("MANUAL_REVIEW");
+  });
+
+  it("keeps duplicate observations unresolved instead of trusting the first fact", () => {
+    const evidence = fixture({ duplicateText: true });
+    const evaluation = evaluateDeterministically({ qaIr: qaIr({ semantic: false }), ...evidence });
+
+    expect(evaluation.unresolvedChecks.map(item => item.expectationId)).toContain("text");
+    expect(evaluation.resolvedChecks.some(item => item.expectationId === "text")).toBe(false);
   });
 });
 
