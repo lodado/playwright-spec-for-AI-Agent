@@ -95,6 +95,8 @@ export function extractTestBlocks(source) {
       title,
       body: source.slice(bodyStart, index - 1),
       index: match.index,
+      bodyStart,
+      endIndex: index,
     });
   }
 

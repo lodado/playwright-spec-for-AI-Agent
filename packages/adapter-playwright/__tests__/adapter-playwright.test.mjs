@@ -1,0 +1,141 @@
+import { describe, expect, it } from "vitest";
+import { canonicalHash, validateContract } from "../../contracts/index.mjs";
+import { compilePlaywrightSpec } from "../index.mjs";
+
+const source = `// @qa-scenario: DASHBOARD_READONLY
+// @qa-page: /dashboard
+// @qa-live-policy: readonly
+test("loads dashboard", async ({ page }) => {
+  await expect(page.getByTestId("heading")).toContainText("Dashboard");
+});
+`;
+
+describe("compilePlaywrightSpec", () => {
+  it("emits valid deterministic QA IR without timestamps", () => {
+    const first = compilePlaywrightSpec({ source, sourcePath: "dashboard.spec.ts", revision: "abc123" });
+    const second = compilePlaywrightSpec({ source, sourcePath: "dashboard.spec.ts", revision: "abc123" });
+
+    expect(validateContract("CompileResult", first)).toEqual(first);
+    expect(first).toEqual(second);
+    expect(JSON.stringify(first)).not.toContain("generatedAt");
+    expect(first.qaIr.source).toEqual({
+      adapter: "adapter-playwright",
+      adapterVersion: "0.1.0",
+      uri: "dashboard.spec.ts",
+      revision: "abc123",
+    });
+    expect(first.qaIr.suites).toHaveLength(1);
+    expect(first.qaIr.suites[0].scenarios).toHaveLength(1);
+  });
+
+  it("records per-test source provenance with exact line and column", () => {
+    const result = compilePlaywrightSpec({ source, sourcePath: "dashboard.spec.ts", revision: "abc123" });
+    const provenance = result.qaIr.suites[0].scenarios[0].provenance[0];
+
+    expect(provenance).toEqual({
+      path: "dashboard.spec.ts",
+      range: {
+        start: { line: 4, column: 1, offset: source.indexOf("test(") },
+        end: { line: 6, column: 2, offset: source.indexOf("});") + 1 },
+      },
+      adapter: { name: "adapter-playwright", version: "0.1.0" },
+      contentHash: canonicalHash(source.slice(source.indexOf("test("), source.indexOf("});") + 1)),
+      revision: "abc123",
+    });
+    expect(result.qaIr.suites[0].scenarios[0].expectations[0].provenance).toEqual([provenance]);
+  });
+
+  it("keeps Playwright selector details in adapter hint data and preserves match semantics", () => {
+    const scenario = compilePlaywrightSpec({ source, sourcePath: "dashboard.spec.ts" }).qaIr.suites[0].scenarios[0];
+    const expectation = scenario.expectations[0];
+
+    expect(expectation.kind).toBe("CONTAINS_TEXT");
+    expect(expectation.target).toMatchObject({ testId: "heading" });
+    expect(expectation.target.text).toBeUndefined();
+    expect(expectation.expected).toEqual({ kind: "literal", value: "Dashboard" });
+    expect(expectation.target.selector).toBeUndefined();
+    expect(expectation.target.hints).toEqual([{ adapter: "playwright", data: { kind: "testId", value: "heading" } }]);
+    expect(scenario.steps.map(step => step.kind)).toEqual(["NAVIGATE", "CHECKPOINT"]);
+
+    const regexSource = source.replace("toContainText(\"Dashboard\")", "toContainText(/Dash.+/) ");
+    const regexExpectation = compilePlaywrightSpec({ source: regexSource, sourcePath: "dashboard.spec.ts" }).qaIr.suites[0].scenarios[0].expectations[0];
+    expect(regexExpectation.expected).toEqual({ kind: "regex", value: "Dash.+" });
+    expect(regexExpectation.target).toMatchObject({ testId: "heading" });
+    expect(regexExpectation.target.text).toBeUndefined();
+  });
+
+
+  it("maps text locator identity separately from assertion value", () => {
+    const textSource = `// @qa-scenario: TEXT\n// @qa-live-policy: readonly\ntest("text locator", async ({ page }) => {\n  await expect(page.getByText("Status")).toContainText("Ready");\n});\n`;
+    const expectation = compilePlaywrightSpec({ source: textSource, sourcePath: "text.spec.ts" }).qaIr.suites[0].scenarios[0].expectations[0];
+    expect(expectation.target.text).toEqual({ kind: "literal", value: "Status" });
+    expect(expectation.expected).toEqual({ kind: "literal", value: "Ready" });
+  });
+
+  it("omits navigate steps when no qa page is present", () => {
+    const noPage = source.replace("// @qa-page: /dashboard\n", "");
+    const scenario = compilePlaywrightSpec({ source: noPage, sourcePath: "dashboard.spec.ts" }).qaIr.suites[0].scenarios[0];
+    expect(scenario.steps.map(step => step.kind)).toEqual(["CHECKPOINT"]);
+  });
+
+  it("uses deterministic discriminators for duplicate titles", () => {
+    const duplicateSource = `// @qa-scenario: DUPES\n// @qa-live-policy: readonly\ntest("same", async ({ page }) => {\n  await expect(page.getByText("A")).toContainText("A");\n});\n// @qa-live-policy: readonly\ntest("same", async ({ page }) => {\n  await expect(page.getByText("B")).toContainText("B");\n});\n`;
+    const scenarios = compilePlaywrightSpec({ source: duplicateSource, sourcePath: "dupes.spec.ts" }).qaIr.suites[0].scenarios;
+    expect(new Set(scenarios.map(item => item.id)).size).toBe(2);
+    expect(new Set(scenarios.flatMap(item => item.expectations.map(expectation => expectation.id))).size).toBe(2);
+  });
+
+  it("clones policies and provenance between compiles", () => {
+    const first = compilePlaywrightSpec({ source, sourcePath: "dashboard.spec.ts" });
+    first.qaIr.suites[0].scenarios[0].policy.navigation = "BLOCKED";
+    first.qaIr.suites[0].scenarios[0].provenance[0].path = "mutated";
+
+    const second = compilePlaywrightSpec({ source, sourcePath: "dashboard.spec.ts" });
+    expect(second.qaIr.suites[0].scenarios[0].policy.navigation).toBe("ALLOWED");
+    expect(second.qaIr.suites[0].scenarios[0].provenance[0].path).toBe("dashboard.spec.ts");
+  });
+
+  it("maps provider-neutral allowed and blocked policies", () => {
+    const policies = Object.fromEntries(
+      ["readonly", "safe-interaction", "mock-judgment", "subscription-mutation", "auth-mock", "skip"].map(policy => {
+        const policySource = `// @qa-scenario: POLICY\n// @qa-live-policy: ${policy}\ntest("${policy}", async ({ page }) => {\n  await expect(page.getByText("A")).toContainText("A");\n});\n`;
+        return [policy, compilePlaywrightSpec({ source: policySource, sourcePath: `${policy}.spec.ts` }).qaIr.suites[0].scenarios[0].policy];
+      }),
+    );
+
+    expect(policies.readonly).toMatchObject({ navigation: "ALLOWED", readDom: true, click: "NONE", destructiveMutation: false });
+    expect(policies["safe-interaction"]).toMatchObject({ navigation: "ALLOWED", click: "SAFE_ONLY", type: "NON_SECRET" });
+    expect(policies["mock-judgment"]).toMatchObject({ navigation: "ALLOWED", readNetwork: false, click: "NONE" });
+    expect(policies["subscription-mutation"]).toMatchObject({ navigation: "BLOCKED", readDom: false, click: "NONE" });
+    expect(policies["auth-mock"]).toMatchObject({ navigation: "BLOCKED", readDom: false, click: "NONE" });
+    expect(policies.skip).toMatchObject({ navigation: "BLOCKED", readDom: false, click: "NONE" });
+  });
+
+  it("diagnoses dropped or unsupported blocks as failed compiles", () => {
+    const unsupported = `// @qa-scenario: SKIPPED\n// @qa-live-policy: readonly\ntest.skip("skipped", async ({ page }) => {\n  await expect(page.getByText("A")).toContainText("A");\n});\ntest("plain callback", ({ page }) => {\n});\n`;
+    const result = compilePlaywrightSpec({ source: unsupported, sourcePath: "unsupported.spec.ts" });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.map(item => item.code)).toEqual(["UNSUPPORTED_TEST_MODIFIER", "UNSUPPORTED_TEST_CALLBACK"]);
+    expect(result.qaIr.suites[0].scenarios).toEqual([]);
+  });
+
+  it("fails missing scenario and unsupported readonly assertions", () => {
+    const missingScenario = `// @qa-live-policy: readonly\ntest("missing", async ({ page }) => {\n  await expect(page.getByText("A")).toContainText("A");\n});\n`;
+    expect(compilePlaywrightSpec({ source: missingScenario, sourcePath: "missing.spec.ts" })).toMatchObject({ ok: false });
+
+    const unsupportedAssertion = `// @qa-scenario: BAD\n// @qa-live-policy: readonly\ntest("bad", async ({ page }) => {\n  await expect(page.getByText("A")).toBeVisible();\n  await expect(page.locator("h1")).toHaveCount(1);\n});\n`;
+    const result = compilePlaywrightSpec({ source: unsupportedAssertion, sourcePath: "bad.spec.ts" });
+    expect(result.qaIr.suites[0].scenarios[0].expectations).toHaveLength(1);
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.map(item => item.code)).toContain("UNSUPPORTED_READONLY_ASSERTIONS");
+  });
+
+  it("warns that interaction bodies are deferred instead of inventing steps", () => {
+    const interaction = `// @qa-scenario: CLICK\n// @qa-live-policy: safe-interaction\ntest("clicks", async ({ page }) => {\n  await page.getByRole("button", { name: "Open" }).click();\n  await expect(page.getByText("Opened")).toBeVisible();\n});\n`;
+    const result = compilePlaywrightSpec({ source: interaction, sourcePath: "interaction.spec.ts" });
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toMatchObject([{ code: "DEFERRED_INTERACTION_STEPS", severity: "WARNING" }]);
+    expect(result.qaIr.suites[0].scenarios[0].steps.map(step => step.kind)).toEqual(["CHECKPOINT"]);
+  });
+});
