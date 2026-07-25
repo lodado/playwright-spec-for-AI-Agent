@@ -1,10 +1,11 @@
-import { lstatSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { parseArgs } from "node:util";
+import { parseArgs, TextDecoder } from "node:util";
 
 const INTEGRITY_KEY_ENV = "QA_NATIVE_INTEGRITY_KEY";
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
+const MAX_PRIVATE_JSON_BYTES = 4 * 1024 * 1024;
 const COMMAND_OPTIONS = Object.freeze({
   execute: new Set(["spec", "base-url", "run-dir"]),
   judge: new Set(["run-dir"]),
@@ -68,6 +69,31 @@ export function writePrivateJsonExclusive(value, payload, { cwd = process.cwd() 
   }
   if (serialized === undefined) throw new CliError("output is not JSON-serializable");
   return writePrivateFileExclusive(value, `${serialized}\n`, { cwd });
+}
+
+export function readPrivateJson(value, { cwd = process.cwd() } = {}) {
+  const target = resolvePrivateQaPath(value, { cwd });
+  assertPrivateDirectory(dirname(target));
+  let descriptor;
+  try {
+    descriptor = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.size > MAX_PRIVATE_JSON_BYTES) throw new CliError("private JSON input is invalid");
+    const buffer = Buffer.alloc(MAX_PRIVATE_JSON_BYTES + 1);
+    let offset = 0;
+    while (offset < buffer.byteLength) {
+      const bytesRead = readSync(descriptor, buffer, offset, buffer.byteLength - offset, null);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    if (offset > MAX_PRIVATE_JSON_BYTES) throw new CliError("private JSON input is invalid");
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, offset)));
+  } catch (error) {
+    if (error instanceof CliError) throw error;
+    throw new CliError("private JSON input is invalid");
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
 }
 
 export function writePrivateFileExclusive(value, content, { cwd = process.cwd() } = {}) {

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildHermesAgentArgs,
+  buildHermesChildEnv,
   extractHermesFinalResponseText,
   extractJsonFromHermesOutput,
   prepareEphemeralHermesHome,
@@ -53,6 +54,38 @@ describe("prepareEphemeralHermesHome", () => {
       cleanup();
     }
     expect(existsSync(path)).toBe(false);
+  });
+
+  it("does not seed generic env or persona files into text-only runs", () => {
+    const { path, cleanup } = prepareEphemeralHermesHome({ mode: "text-only" });
+    try {
+      const entries = readdirSync(path);
+      expect(entries).not.toContain(".env");
+      expect(entries).not.toContain("SOUL.md");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("buildHermesChildEnv", () => {
+  it("isolates text-only Hermes from unrelated process credentials", () => {
+    const source = {
+      PATH: "/usr/bin",
+      HTTPS_PROXY: "https://proxy.example",
+      STAGING_QA_PASSWORD: "staging-secret",
+      SLACK_WEBHOOK_URL: "slack-secret",
+      GITHUB_TOKEN: "github-secret",
+      OPENAI_API_KEY: "provider-secret",
+    };
+    expect(buildHermesChildEnv("text-only", "/tmp/hermes", source)).toEqual({
+      PATH: "/usr/bin",
+      HTTPS_PROXY: "https://proxy.example",
+      HOME: "/tmp/hermes",
+      USERPROFILE: "/tmp/hermes",
+      HERMES_HOME: "/tmp/hermes",
+    });
+    expect(buildHermesChildEnv("browse", "/tmp/hermes", source)).toMatchObject({ STAGING_QA_PASSWORD: "staging-secret", HERMES_HOME: "/tmp/hermes" });
   });
 });
 

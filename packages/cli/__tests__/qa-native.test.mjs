@@ -1,10 +1,11 @@
-import { lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createExclusiveQaDirectory,
   decodeIntegrityKey,
+  readPrivateJson,
   resolvePrivateQaPath,
   runQaNative,
   writePrivateFileExclusive,
@@ -63,6 +64,15 @@ describe("qa-native CLI security foundation", () => {
     expect(() => writePrivateFileExclusive(".qa/runs/run-1/report.md", "replaced", { cwd })).toThrow(/already exists/);
     expect(readFileSync(raw, "utf8")).toBe("private report");
     expect(() => writePrivateJsonExclusive(".qa/runs/run-1/undefined.json", undefined, { cwd })).toThrow(/JSON-serializable/);
+  });
+
+  it("reads only bounded private JSON through no-follow file descriptors", () => {
+    const cwd = temporaryRoot();
+    createExclusiveQaDirectory(".qa/runs/run-1", { cwd });
+    const artifact = writePrivateJsonExclusive(".qa/runs/run-1/input.json", { ok: true }, { cwd });
+    expect(readPrivateJson(".qa/runs/run-1/input.json", { cwd })).toEqual({ ok: true });
+    chmodSync(artifact, 0o644);
+    expect(() => readPrivateJson(".qa/runs/run-1/input.json", { cwd })).toThrow(/private JSON/);
   });
 
   it("dispatches known commands without exposing the key or raw errors", async () => {
