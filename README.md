@@ -7,7 +7,7 @@
 [![npm version](https://img.shields.io/npm/v/playwright-spec-for-ai-agent?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/playwright-spec-for-ai-agent)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
-[![Playwright](https://img.shields.io/badge/Playwright-%3E%3D1.40-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)](https://playwright.dev)
+[![Playwright](https://img.shields.io/badge/Playwright-%3E%3D1.48-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)](https://playwright.dev)
 [![GitHub stars](https://img.shields.io/github/stars/lodado/playwright-spec-for-AI-Agent?style=for-the-badge&logo=github)](https://github.com/lodado/playwright-spec-for-AI-Agent/stargazers)
 [![GitHub issues](https://img.shields.io/github/issues/lodado/playwright-spec-for-AI-Agent?style=for-the-badge&logo=github)](https://github.com/lodado/playwright-spec-for-AI-Agent/issues)
 
@@ -197,6 +197,20 @@ spec -> abstract-ai -> judge -> review -> slack (optional)
 | `review`      | Ask Hermes to review judgment quality without browsing. |
 | `slack`       | Send fail/manual-review verdicts to Slack.              |
 | `nightly`     | Run the full pipeline.                                  |
+
+### QA Native runtime preview
+
+The new evidence-driven runtime currently exposes a read-only Playwright execution slice on macOS and Linux. Windows is not yet supported because `.qa` run artifacts rely on private POSIX directory and file modes.
+
+```bash
+export QA_NATIVE_INTEGRITY_KEY="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64'))")"
+npx qa-native execute \
+  --spec=tests/e2e/dashboard.spec.ts \
+  --base-url=https://staging.example.com \
+  --run-dir=.qa/runs/dashboard-1
+```
+
+The command compiles QA IR, creates a deterministic execution plan, runs the read-only Playwright provider, and writes an authenticated evidence archive. Existing `playwright-spec-for-ai-agent` commands remain supported during the migration.
 
 ## Recommended workflow
 

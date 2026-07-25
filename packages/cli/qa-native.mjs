@@ -11,17 +11,12 @@ const COMMAND_OPTIONS = Object.freeze({
   replay: new Set(["run-dir"]),
   report: new Set(["run-dir", "repository-root", "revision", "judgment"]),
 });
-const HELP = `qa-native — evidence-driven Playwright QA runtime
-
-Usage:
-  qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id>
-  qa-native judge --run-dir=.qa/runs/<id>
-  qa-native replay --run-dir=.qa/runs/<id>
-  qa-native report --run-dir=.qa/runs/<id> --repository-root=.
-
-Environment:
-  QA_NATIVE_INTEGRITY_KEY  Canonical base64 encoding of at least 32 random bytes
-`;
+const COMMAND_USAGE = Object.freeze({
+  execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id>",
+  judge: "qa-native judge --run-dir=.qa/runs/<id>",
+  replay: "qa-native replay --run-dir=.qa/runs/<id>",
+  report: "qa-native report --run-dir=.qa/runs/<id> --repository-root=.",
+});
 
 export function decodeIntegrityKey(value) {
   if (typeof value !== "string" || value.length === 0 || value.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
@@ -92,21 +87,25 @@ export async function runQaNative(argv, {
   cwd = process.cwd(),
   env = process.env,
   handlers = {},
+  platform = process.platform,
   stdout = (value) => process.stdout.write(value),
   stderr = (value) => process.stderr.write(value),
 } = {}) {
   let integrityKey;
+  const restoreProcessKey = env !== process.env;
+  const previousProcessKey = restoreProcessKey ? process.env[INTEGRITY_KEY_ENV] : undefined;
   try {
     const request = parseRequest(argv);
     if (request.help) {
-      stdout(HELP);
+      stdout(helpText(Object.keys(handlers)));
       return 0;
     }
+    const handler = handlers[request.command];
+    if (typeof handler !== "function") throw new CliError("command is not available");
+    if (platform === "win32") throw new CliError("command is not supported on this platform");
     integrityKey = decodeIntegrityKey(env[INTEGRITY_KEY_ENV]);
     delete process.env[INTEGRITY_KEY_ENV];
     const normalized = normalizeRequest(request, cwd);
-    const handler = handlers[request.command];
-    if (typeof handler !== "function") throw new CliError("command is not available");
     const status = await handler({ ...normalized, integrityKey });
     return Number.isInteger(status) ? status : 0;
   } catch (error) {
@@ -114,7 +113,21 @@ export async function runQaNative(argv, {
     return 1;
   } finally {
     integrityKey?.fill(0);
+    if (restoreProcessKey && previousProcessKey !== undefined) process.env[INTEGRITY_KEY_ENV] = previousProcessKey;
+    else delete process.env[INTEGRITY_KEY_ENV];
   }
+}
+
+function helpText(commands) {
+  const available = commands.filter((command) => COMMAND_USAGE[command]);
+  return `qa-native — evidence-driven Playwright QA runtime
+
+Usage:
+${available.map((command) => `  ${COMMAND_USAGE[command]}`).join("\n") || "  No runtime commands are installed."}
+
+Environment:
+  QA_NATIVE_INTEGRITY_KEY  Canonical base64 encoding of at least 32 random bytes
+`;
 }
 
 function parseRequest(argv) {

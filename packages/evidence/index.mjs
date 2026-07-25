@@ -255,13 +255,21 @@ export function verifyStoredEvidence({ bundle, manifest, readBlob }) {
   });
 }
 
-export function writeEvidenceArchive({ directory, bundles, manifest, readBlob, secrets = [], integrityKey } = {}) {
+export function writeEvidenceArchive(options = {}) {
+  const key = archiveIntegrityKey(options?.integrityKey);
+  try {
+    return writeEvidenceArchiveWithKey(options, key);
+  } finally {
+    key.fill(0);
+  }
+}
+
+function writeEvidenceArchiveWithKey({ directory, bundles, manifest, readBlob, secrets = [] } = {}, key) {
   // ponytail: archive roots must be private; use descriptor-based no-follow I/O for hostile shared filesystems.
   if (typeof directory !== "string" || directory.length === 0) throw new TypeError("evidence archive directory must be a non-empty string");
   if (!Array.isArray(bundles) || bundles.length === 0) throw new TypeError("evidence archive requires at least one bundle");
   if (bundles.length > MAX_ARCHIVE_CHECKPOINTS) throw new Error("evidence archive exceeds checkpoint count limit");
   const secretList = archiveSecrets(secrets);
-  const key = archiveIntegrityKey(integrityKey);
   validateArchiveCheckpointCount(manifest);
   assertJsonDepth(manifest, "evidence archive manifest");
   for (const bundle of bundles) assertJsonDepth(bundle, "evidence archive bundle");
@@ -318,10 +326,18 @@ export function writeEvidenceArchive({ directory, bundles, manifest, readBlob, s
   }
 }
 
-export function readEvidenceArchive({ directory, secrets = [], integrityKey } = {}) {
+export function readEvidenceArchive(options = {}) {
+  const key = archiveIntegrityKey(options?.integrityKey);
+  try {
+    return readEvidenceArchiveWithKey(options, key);
+  } finally {
+    key.fill(0);
+  }
+}
+
+function readEvidenceArchiveWithKey({ directory, secrets = [] } = {}, key) {
   if (typeof directory !== "string" || directory.length === 0) throw new TypeError("evidence archive directory must be a non-empty string");
   const secretList = archiveSecrets(secrets);
-  const key = archiveIntegrityKey(integrityKey);
   const archivePath = resolve(directory);
   assertDirectory(archivePath, "evidence archive");
   assertEntries(archivePath, new Set(["archive-auth", "blobs", "bundles", "evidence-manifest.json"]), "evidence archive");
@@ -736,8 +752,13 @@ function archiveSecrets(secrets) {
 }
 
 function archiveIntegrityKey(value) {
-  if (!(value instanceof Uint8Array) || value.byteLength < 32) throw new TypeError("evidence archive integrityKey must contain at least 32 bytes");
-  return Buffer.from(value);
+  if (!(value instanceof Uint8Array)) throw new TypeError("evidence archive integrityKey must contain at least 32 bytes");
+  const key = Buffer.from(value);
+  if (key.byteLength < 32) {
+    key.fill(0);
+    throw new TypeError("evidence archive integrityKey must contain at least 32 bytes");
+  }
+  return key;
 }
 
 function archiveAuthentication(manifest, key) {
