@@ -1,7 +1,7 @@
 {
   "name": "playwright-spec-for-ai-agent",
   "version": "0.9.0",
-  "description": "AI-assisted live staging QA layer for Playwright test suites. Parses @qa-scenario annotations from *.spec.ts into structured QA scenarios, then uses Hermes Agent to log into staging, visit target pages, and judge live DOM against test intent — returning pass, fail, manual_review, or skip without running Playwright against staging or mutating billing state.",
+  "description": "AI-assisted live staging QA layer for Playwright test suites. Parses @qa-scenario annotations from *.spec.ts into structured QA scenarios, then uses Hermes Agent to log into staging, visit target pages, and judge live DOM against test intent \u2014 returning pass, fail, manual_review, or skip without running Playwright against staging or mutating billing state.",
   "type": "module",
   "license": "MIT",
   "author": "lodado <ycp998@naver.com>",
@@ -43,7 +43,8 @@
     "examples",
     "README.md",
     "packages/contracts/index.mjs",
-    "packages/adapter-playwright/index.mjs"
+    "packages/adapter-playwright/index.mjs",
+    "packages/core/index.mjs"
   ],
   "scripts": {
     "qa:spec": "node bin/playwright-spec-for-ai-agent.mjs spec",
@@ -79,6 +80,7 @@
   },
   "exports": {
     "./contracts": "./packages/contracts/index.mjs",
-    "./adapter-playwright": "./packages/adapter-playwright/index.mjs"
+    "./adapter-playwright": "./packages/adapter-playwright/index.mjs",
+    "./core": "./packages/core/index.mjs"
   }
 }
