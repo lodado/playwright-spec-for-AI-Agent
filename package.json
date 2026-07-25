@@ -41,7 +41,8 @@
     "scripts",
     "playwright-spec-for-ai-agent.config.example.mjs",
     "examples",
-    "README.md"
+    "README.md",
+    "packages/contracts/index.mjs"
   ],
   "scripts": {
     "qa:spec": "node bin/playwright-spec-for-ai-agent.mjs spec",
@@ -74,5 +75,8 @@
   "publishConfig": {
     "access": "public",
     "provenance": true
+  },
+  "exports": {
+    "./contracts": "./packages/contracts/index.mjs"
   }
 }
