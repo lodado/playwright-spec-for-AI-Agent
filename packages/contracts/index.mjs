@@ -523,7 +523,16 @@ function validateJudgeResult(value, path, context) {
   probability(value.confidence, `${path}.confidence`, "JudgeResult");
   array(value.expectationResults, `${path}.expectationResults`, "JudgeResult");
   const evidenceIds = context.evidenceBundle ? collectEvidenceIds(context.evidenceBundle, value.evidenceBundleId) : undefined;
-  value.expectationResults.forEach((item, index) => validateExpectationJudgment(item, `${path}.expectationResults[${index}]`, value.verdict, evidenceIds));
+  const expectedIds = context.qaIr && context.evidenceBundle ? scenarioExpectationIds(context.qaIr, context.evidenceBundle) : undefined;
+  const actualIds = new Set();
+  value.expectationResults.forEach((item, index) => {
+    validateExpectationJudgment(item, `${path}.expectationResults[${index}]`, value.verdict, evidenceIds, "JudgeResult", expectedIds);
+    if (actualIds.has(item.expectationId)) fail("JudgeResult", `${path}.expectationResults[${index}].expectationId`, "must be unique");
+    actualIds.add(item.expectationId);
+  });
+  if (expectedIds && (actualIds.size !== expectedIds.size || [...expectedIds].some((id) => !actualIds.has(id)))) {
+    fail("JudgeResult", `${path}.expectationResults`, "must resolve every scenario expectation exactly once");
+  }
   array(value.uncertainty, `${path}.uncertainty`, "JudgeResult");
   value.uncertainty.forEach((item, index) => {
     object(item, `${path}.uncertainty[${index}]`, "JudgeResult");
@@ -770,6 +779,12 @@ function collectEvidenceIds(bundle, expectedBundleId) {
     ...bundle.artifacts.map((artifact) => artifact.id),
     ...bundle.facts.filter((fact) => fact.id !== undefined).map((fact) => fact.id),
   ]);
+}
+
+function scenarioExpectationIds(qaIr, bundle) {
+  const scenario = qaIr.suites.flatMap((suite) => suite.scenarios).find((item) => item.id === bundle.scenarioId);
+  if (!scenario) fail("JudgeResult", "$.evidenceBundle.scenarioId", `unknown scenario ${bundle.scenarioId}`);
+  return new Set(scenario.expectations.map((expectation) => expectation.id));
 }
 
 function diagnostics(value, path, contract) { array(value, path, contract); value.forEach((item, index) => validateDiagnostic(item, `${path}[${index}]`)); }
