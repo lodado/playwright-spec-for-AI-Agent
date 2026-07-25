@@ -112,8 +112,43 @@ describe("core execution planner", () => {
     expect(unknownCalls).toEqual([]);
   });
 
-  it("rejects mutating QA policy during planning", () => {
-    expect(() => createExecutionPlan({ qaIr: qaIr({ ...readonlyPolicy, click: "SAFE_ONLY" }), providerCapabilities: providerCapabilities() })).toThrow(/readonly execution/);
+  it("plans only policy-authorized CLICK interactions with action evidence", () => {
+    const clickStep = { id: "click", kind: "INTERACT", action: "CLICK", target: { testId: "open" } };
+    const clickPolicy = { ...readonlyPolicy, click: "SAFE_ONLY" };
+    const capabilities = providerCapabilities({ actions: ["CLICK"], evidence: ["ACTION_LOG"] });
+    const clickPlan = createExecutionPlan({ qaIr: qaIr(clickPolicy, [clickStep]), providerCapabilities: capabilities });
+
+    expect(clickPlan.nodes[0]).toMatchObject({ kind: "INTERACT", action: "CLICK", evidence: ["ACTION_LOG"] });
+    expect(() => createExecutionPlan({ qaIr: qaIr(readonlyPolicy, [clickStep]), providerCapabilities: capabilities })).toThrow(/click is blocked by policy/);
+    expect(() => createExecutionPlan({ qaIr: qaIr(clickPolicy, [{ ...clickStep, action: "TYPE", value: "x" }]), providerCapabilities: providerCapabilities({ actions: ["TYPE"], evidence: [] }) })).toThrow(/TYPE is not supported/);
+  });
+
+  it("preflights CLICK action and ACTION_LOG capabilities before execution", async () => {
+    const clickStep = { id: "click", kind: "INTERACT", action: "CLICK", target: { testId: "open" } };
+    const clickPolicy = { ...readonlyPolicy, click: "SAFE_ONLY" };
+    const capabilities = providerCapabilities({ actions: ["CLICK"], evidence: ["ACTION_LOG"] });
+    const clickPlan = createExecutionPlan({ qaIr: qaIr(clickPolicy, [clickStep]), providerCapabilities: capabilities });
+
+    for (const missing of [
+      providerCapabilities({ actions: [], evidence: ["ACTION_LOG"] }),
+      providerCapabilities({ actions: ["CLICK"], evidence: [] }),
+    ]) {
+      const calls = [];
+      expect(await executePlan({ plan: clickPlan, providerCapabilities: missing, executeNode: node => calls.push(node.nodeId) })).toMatchObject({ code: "POLICY_VIOLATION" });
+      expect(calls).toEqual([]);
+    }
+
+    const forged = structuredClone(clickPlan);
+    forged.nodes[0].evidence = [];
+    const calls = [];
+    expect(await executePlan({ plan: forged, providerCapabilities: providerCapabilities({ actions: ["CLICK"], evidence: [] }), executeNode: node => calls.push(node.nodeId) })).toMatchObject({ code: "POLICY_VIOLATION" });
+    expect(calls).toEqual([]);
+
+    const disguised = structuredClone(clickPlan);
+    disguised.nodes[0].kind = "OBSERVE";
+    const disguisedCalls = [];
+    expect(await executePlan({ plan: disguised, providerCapabilities: capabilities, executeNode: node => disguisedCalls.push(node.nodeId) })).toMatchObject({ code: "CONTRACT_VIOLATION" });
+    expect(disguisedCalls).toEqual([]);
   });
 
   it("rejects blocked navigation and DOM evidence before execution", async () => {

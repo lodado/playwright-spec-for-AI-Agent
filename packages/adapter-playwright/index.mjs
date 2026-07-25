@@ -5,7 +5,7 @@ import {
   QA_IR_VERSION,
   validateContract,
 } from "../contracts/index.mjs";
-import { extractTestBlocks, parseAnnotations, parseDashboardSpecFile } from "../../scripts/dashboard-spec-parser.mjs";
+import { extractTestBlocks, parseAnnotations, parseDashboardSpecFile, parseReadOnlyExpectations } from "../../scripts/dashboard-spec-parser.mjs";
 
 const ADAPTER_NAME = "adapter-playwright";
 const ADAPTER_VERSION = "0.1.0";
@@ -79,17 +79,27 @@ export function compilePlaywrightSpec({ source, sourcePath, revision } = {}) {
 function scenarioFromLegacyTest(legacy, test, index, block, source, sourcePath, revision, diagnostics) {
   const provenance = blockProvenance(source, sourcePath, block, revision);
   const discriminator = `${index}:${block?.index ?? "unknown"}`;
-  const expectations = normalizeExpectations(test.expectations ?? [], block?.body ?? "").map((expectation, expectationIndex) =>
+  const body = block?.body ?? "";
+  const executableInteraction = test.liveRunPolicy === "executable-interaction";
+  const parsedInteraction = executableInteraction ? parseExecutableInteraction(body) : undefined;
+  const assertionBody = executableInteraction ? parsedInteraction?.assertionBody ?? "" : body;
+  const expectations = normalizeExpectations(test.expectations ?? [], assertionBody, isReadonly(test.liveRunPolicy) || executableInteraction).map((expectation, expectationIndex) =>
     expectationFromLegacy(legacy, test, discriminator, expectation, expectationIndex, provenance),
   );
+  const interactions = executableInteraction ? parsedInteraction?.clicks : [];
 
   if (isReadonly(test.liveRunPolicy)) {
-    const assertionCount = countAssertions(block?.body ?? "");
+    const assertionCount = countAssertions(body);
     if (assertionCount === 0 || assertionCount !== expectations.length) {
       diagnostics.push(diagnostic("UNSUPPORTED_READONLY_ASSERTIONS", "ERROR", `Unsupported readonly assertions found in test: ${test.title}`, sourcePath, positionAt(source, block?.index ?? 0)));
     }
   }
-  if (test.stagingMode === "interaction") {
+  if (executableInteraction && countAssertions(assertionBody) !== expectations.length) {
+    diagnostics.push(diagnostic("UNSUPPORTED_INTERACTION_ASSERTIONS", "ERROR", `Unsupported interaction assertions found in test: ${test.title}`, sourcePath, positionAt(source, block?.index ?? 0)));
+  }
+  if (executableInteraction && interactions === undefined) {
+    diagnostics.push(diagnostic("UNSUPPORTED_INTERACTION_STEPS", "ERROR", `Unsupported or mixed interaction steps found in test: ${test.title}`, sourcePath, positionAt(source, block?.index ?? 0)));
+  } else if (test.stagingMode === "interaction" && !executableInteraction) {
     diagnostics.push(diagnostic("DEFERRED_INTERACTION_STEPS", "WARNING", `Interaction steps are deferred for Playwright execution: ${test.title}`, sourcePath, positionAt(source, block?.index ?? 0)));
   }
 
@@ -97,18 +107,21 @@ function scenarioFromLegacyTest(legacy, test, index, block, source, sourcePath, 
     id: stableId("scenario", legacy.scenarioId, test.checkId, discriminator),
     title: test.title,
     preconditions: [],
-    steps: stepsFromLegacy(legacy, test, discriminator, expectations),
+    steps: stepsFromLegacy(legacy, test, discriminator, expectations, interactions ?? []),
     expectations,
     policy: clonePolicy(POLICY_BY_LIVE_RUN[test.liveRunPolicy] ?? blockedPolicy()),
     provenance: [clone(provenance)],
   };
 }
 
-function stepsFromLegacy(legacy, test, discriminator, expectations) {
+function stepsFromLegacy(legacy, test, discriminator, expectations, interactions) {
   const steps = [];
   if (legacy.page) {
     steps.push({ id: stableId("step-navigate", legacy.scenarioId, test.checkId, discriminator), kind: "NAVIGATE", target: { type: "PATH", value: legacy.page } });
   }
+  interactions.forEach((locator, index) => {
+    steps.push({ id: stableId("step-interact", legacy.scenarioId, test.checkId, discriminator, index), kind: "INTERACT", action: "CLICK", target: semanticTargetFromLocator(locator) });
+  });
   if (expectations.length > 0) {
     steps.push({ id: stableId("step-observe", legacy.scenarioId, test.checkId, discriminator), kind: "OBSERVE", requests: [{ type: "VISIBLE_TEXT" }] });
   }
@@ -116,9 +129,39 @@ function stepsFromLegacy(legacy, test, discriminator, expectations) {
   return steps;
 }
 
-function normalizeExpectations(expectations, body) {
+function normalizeExpectations(expectations, body, parseBody) {
   if (expectations.length > 0) return expectations;
+  if (!parseBody) return [];
+  const parsed = parseReadOnlyExpectations(body);
+  if (parsed.length > 0) return parsed;
   return parseRegexContainTextExpectations(body);
+}
+
+function parseExecutableInteraction(body) {
+  if (body.includes("/*") || body.includes("*/") || body.includes("`")) return undefined;
+  const clicks = [];
+  const assertions = [];
+  for (const line of body.split("\n").map(item => item.trim()).filter(item => item && !item.startsWith("//"))) {
+    const direct = line.match(/^await\s+page\.(getByTestId|getByText)\(\s*(["'])([^"'\\]*)\2\s*\)\.click\(\s*\)\s*;?$/);
+    if (direct) {
+      clicks.push({ kind: direct[1] === "getByTestId" ? "testId" : "text", value: direct[3] });
+      continue;
+    }
+    const role = line.match(/^await\s+page\.getByRole\(\s*(["'])([^"'\\]*)\1\s*,\s*\{\s*name\s*:\s*(["'])([^"'\\]*)\3\s*\}\s*\)\.click\(\s*\)\s*;?$/);
+    if (role) {
+      clicks.push({ kind: "role", role: role[2], name: role[4] });
+      continue;
+    }
+    if (!isSupportedInteractionAssertion(line)) return undefined;
+    assertions.push(line);
+  }
+  return clicks.length > 0 ? { clicks, assertionBody: assertions.join("\n") } : undefined;
+}
+
+function isSupportedInteractionAssertion(line) {
+  return /^await\s+expect\(\s*page\.(?:getByTestId|getByText)\(\s*(["'])([^"'\\]*)\1\s*\)\s*\)(?:\.not)?\.toBeVisible\(\s*\)\s*;?$/.test(line)
+    || /^await\s+expect\(\s*page\.(?:getByTestId|getByText)\(\s*(["'])([^"'\\]*)\1\s*\)\s*\)\.toContainText\(\s*(["'])([^"'\\]*)\3\s*\)\s*;?$/.test(line)
+    || /^await\s+expect\(\s*page\.(?:getByTestId|getByText)\(\s*(["'])([^"'\\]*)\1\s*\)\s*\)\.toContainText\(\s*\/((?:\\\/|[^/])+?)\/\s*\)\s*;?$/.test(line);
 }
 
 function parseRegexContainTextExpectations(body) {

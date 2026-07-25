@@ -44,7 +44,20 @@ function qaIr(target = "/dashboard") {
   };
 }
 
-function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccessCode=short-secret#short-secret", text = "Dashboard SESSION-SECRET", dom = "<main>Dashboard SESSION-SECRET</main>" } = {}) {
+function clickableQaIr(action = "CLICK") {
+  const input = qaIr();
+  input.suites[0].scenarios[0].policy = { ...policy, click: "SAFE_ONLY" };
+  input.suites[0].scenarios[0].steps.splice(1, 0, {
+    id: "click",
+    kind: "INTERACT",
+    action,
+    target: { testId: "open-menu" },
+    ...(action === "CLICK" ? {} : { value: "unsafe" }),
+  });
+  return input;
+}
+
+function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccessCode=short-secret#short-secret", text = "Dashboard SESSION-SECRET", dom = "<main>Dashboard SESSION-SECRET</main>", clickError, onClick, closeDelayMs = 0 } = {}) {
   const calls = [];
   let routeHandler;
   let webSocketHandler;
@@ -58,6 +71,22 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
         },
       };
     },
+    getByTestId(value) {
+      return {
+        async evaluate() { return { anchor: false, form: false, editable: false }; },
+        async click() {
+          calls.push(["click:testId", value]);
+          if (clickError) throw clickError;
+          await onClick?.({ routeHandler, webSocketHandler });
+        },
+      };
+    },
+    getByText(value) {
+      return { async evaluate() { return { anchor: false, form: false, editable: false }; }, async click() { calls.push(["click:text", value]); } };
+    },
+    getByRole(role, options) {
+      return { async evaluate() { return { anchor: false, form: false, editable: false }; }, async click() { calls.push(["click:role", role, options]); } };
+    },
     url() { return pageUrl; },
     viewportSize() { return { width: 1280, height: 720 }; },
   };
@@ -70,7 +99,10 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
         async newPage() { calls.push(["newPage"]); return page; },
       };
     },
-    async close() { calls.push(["close"]); },
+    async close() {
+      if (closeDelayMs > 0) await new Promise(resolve => setTimeout(resolve, closeDelayMs));
+      calls.push(["close"]);
+    },
   };
   return {
     calls,
@@ -130,6 +162,129 @@ describe("readonly Playwright execution provider", () => {
     const webSocket = { close: vi.fn() };
     fixture.webSocketHandler(webSocket);
     expect(webSocket.close).toHaveBeenCalledOnce();
+  });
+
+  it("executes semantic clicks and seals a redacted ACTION_LOG", async () => {
+    const input = clickableQaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    const fixture = fakeBrowser();
+    const result = await executeWithPlaywright({
+      qaIr: input,
+      plan,
+      baseUrl: "https://example.test",
+      runId: "run-click",
+      browserType: fixture.browserType,
+      secrets: ["open-menu"],
+      now: () => "2026-07-25T00:00:00.000Z",
+    });
+
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    expect(fixture.calls).toContainEqual(["click:testId", "open-menu"]);
+    const action = result.bundles[0].artifacts.find(artifact => artifact.type === "ACTION_LOG");
+    expect(action).toBeDefined();
+    expect(result.readBlob(action.storageRef).toString()).toContain("[REDACTED]");
+    expect(result.readBlob(action.storageRef).toString()).not.toContain("open-menu");
+    expect(verifyStoredEvidence({ bundle: result.bundles[0], manifest: result.manifest, readBlob: result.readBlob }).bundle).toEqual(result.bundles[0]);
+  });
+
+  it("starts a fresh browser session for a scenario after a click checkpoint", async () => {
+    const input = clickableQaIr();
+    const first = input.suites[0].scenarios[0];
+    input.suites[0].scenarios.push({
+      ...structuredClone(first),
+      id: "scenario-two",
+      steps: first.steps.map(step => ({
+        ...structuredClone(step),
+        id: `${step.id}-two`,
+        ...(step.kind === "CHECKPOINT" ? { checkpointId: "loaded-two" } : {}),
+      })),
+    });
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    const fixture = fakeBrowser();
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-click-two", browserType: fixture.browserType });
+
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    expect(result.bundles).toHaveLength(2);
+    expect(fixture.calls.filter(([name]) => name === "launch")).toHaveLength(2);
+    expect(fixture.calls.filter(([name]) => name === "close")).toHaveLength(2);
+  });
+
+  it("fails a click that attempts a mutating request instead of logging success", async () => {
+    const input = clickableQaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    const fixture = fakeBrowser({
+      onClick: async ({ routeHandler }) => routeHandler({
+        request: () => ({ method: () => "POST", url: () => "https://example.test/api/update" }),
+        abort: vi.fn(),
+        continue: vi.fn(),
+      }),
+    });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-click-post", browserType: fixture.browserType });
+
+    expect(result.outcome).toMatchObject({ type: "ERROR", code: "POLICY_VIOLATION" });
+    expect(result.bundles).toHaveLength(0);
+    expect(fixture.calls.at(-1)).toEqual(["close"]);
+  });
+
+  it("fails any network request started by a click", async () => {
+    const input = clickableQaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    const fixture = fakeBrowser({
+      onClick: async ({ routeHandler }) => routeHandler({
+        request: () => ({ method: () => "GET", url: () => "https://attacker.test/collect" }),
+        abort: vi.fn(),
+        continue: vi.fn(),
+      }),
+    });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-click-network", browserType: fixture.browserType });
+
+    expect(result.outcome).toMatchObject({ type: "ERROR", code: "POLICY_VIOLATION" });
+    expect(result.bundles).toHaveLength(0);
+  });
+
+  it("fails a WebSocket started by a click", async () => {
+    const input = clickableQaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    const socket = { close: vi.fn() };
+    const fixture = fakeBrowser({ onClick: ({ webSocketHandler }) => webSocketHandler(socket) });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-click-websocket", browserType: fixture.browserType });
+
+    expect(socket.close).toHaveBeenCalledOnce();
+    expect(result.outcome).toMatchObject({ type: "ERROR", code: "POLICY_VIOLATION" });
+    expect(result.bundles).toHaveLength(0);
+  });
+
+  it("withholds already sealed evidence when a delayed click request is detected during cleanup", async () => {
+    const input = clickableQaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    const fixture = fakeBrowser({
+      closeDelayMs: 5,
+      onClick: ({ routeHandler }) => {
+        setTimeout(() => void routeHandler({
+          request: () => ({ method: () => "POST", url: () => "https://example.test/delayed" }),
+          abort: vi.fn(),
+          continue: vi.fn(),
+        }), 0);
+      },
+    });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-click-delayed", browserType: fixture.browserType });
+
+    expect(result.outcome).toMatchObject({ type: "ERROR", code: "POLICY_VIOLATION" });
+    expect(result.bundles).toHaveLength(0);
+    expect(result.manifest).toBeUndefined();
+    expect(result.readBlob("anything")).toBeUndefined();
+  });
+
+  it("returns no sealed evidence and closes the browser when a click fails", async () => {
+    const input = clickableQaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    const fixture = fakeBrowser({ clickError: new Error("missing secret target") });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-click-failed", browserType: fixture.browserType });
+
+    expect(result.outcome).toMatchObject({ type: "ERROR", code: "UNKNOWN_RUNTIME_ERROR", message: "Execution provider failed" });
+    expect(result.bundles).toHaveLength(0);
+    expect(fixture.calls.at(-1)).toEqual(["close"]);
+    expect(JSON.stringify(result)).not.toContain("missing secret target");
   });
 
   it("rejects cross-origin redirects without sealing evidence and still closes the browser", async () => {

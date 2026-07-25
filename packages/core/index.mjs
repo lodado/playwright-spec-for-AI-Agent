@@ -12,7 +12,6 @@ export const DEFAULT_RETRY_POLICY = Object.freeze({ maxAttempts: 1 });
 export const DEFAULT_TIMEOUT_POLICY = Object.freeze({ perNodeMs: 30000, runMs: 120000 });
 
 const INTERNAL_ERROR = Symbol("core.internalError");
-const MUTATING_KINDS = new Set(["INTERACT"]);
 const REQUIRED_ACTIONS = Object.freeze({
   NAVIGATE: "NAVIGATE",
   OBSERVE: "OBSERVE",
@@ -87,7 +86,7 @@ function nodesForScenario(suite, scenario) {
     scenarioId: scenario.id,
     stepId: step.id ?? String(index),
     kind: step.kind,
-    action: REQUIRED_ACTIONS[step.kind],
+    action: step.kind === "INTERACT" ? step.action : REQUIRED_ACTIONS[step.kind],
     evidence: evidenceRequests(step),
     policy: { ...scenario.policy },
   }));
@@ -182,28 +181,35 @@ function validatePolicyAndCapabilities(plan, providerCapabilities, stage) {
   const evidence = new Set(providerCapabilities.evidence);
 
   for (const node of plan.nodes) {
-    if (isMutation(node)) throw policyError(stage, `${node.nodeId} is not allowed in readonly execution`);
+    validateCanonicalNode(node, stage);
+    if (node.kind === "INTERACT") validateInteractionPolicy(node, stage);
     if (node.kind === "NAVIGATE" && node.policy?.navigation !== "ALLOWED") throw policyError(stage, `${node.nodeId} navigation is blocked by policy`);
     if (node.action && !actions.has(node.action)) throw policyError(stage, `${node.action} requires provider action capability`);
     for (const request of node.evidence ?? []) {
       if (request === "NETWORK_LOG" && node.policy?.readNetwork !== true) throw policyError(stage, `${request} requires readNetwork policy`);
-      if (request !== "NETWORK_LOG" && node.policy?.readDom !== true) throw policyError(stage, `${request} requires readDom policy`);
+      if (request !== "NETWORK_LOG" && request !== "ACTION_LOG" && node.policy?.readDom !== true) throw policyError(stage, `${request} requires readDom policy`);
       if (!evidence.has(request)) throw policyError(stage, `${request} requires provider evidence capability`);
     }
   }
 }
 
-function isMutation(node) {
-  const policy = node.policy ?? {};
-  return MUTATING_KINDS.has(node.kind)
-    || policy.click !== "NONE"
-    || policy.type !== "NONE"
-    || policy.upload === true
-    || policy.submit === true
-    || policy.destructiveMutation !== false;
+function validateCanonicalNode(node, stage) {
+  if (node.kind === "INTERACT") return;
+  const action = REQUIRED_ACTIONS[node.kind];
+  if (action === undefined || node.action !== action) throw contractError(stage, `${node.nodeId} has a non-canonical kind/action combination`);
+  if (node.kind !== "OBSERVE" && node.evidence?.length !== 0) throw contractError(stage, `${node.nodeId} has non-canonical evidence`);
+  if (node.kind === "OBSERVE" && node.evidence?.includes("ACTION_LOG")) throw contractError(stage, `${node.nodeId} has non-canonical evidence`);
+}
+
+function validateInteractionPolicy(node, stage) {
+  if (node.action !== "CLICK") throw policyError(stage, `${node.action} is not supported for execution`);
+  if (node.policy?.click !== "SAFE_ONLY" && node.policy?.click !== "ALL") throw policyError(stage, `${node.nodeId} click is blocked by policy`);
+  if (node.policy?.submit !== false || node.policy?.destructiveMutation !== false) throw policyError(stage, `${node.nodeId} click exceeds safe interaction policy`);
+  if (node.evidence?.length !== 1 || node.evidence[0] !== "ACTION_LOG") throw policyError(stage, `${node.nodeId} click requires ACTION_LOG evidence`);
 }
 
 function evidenceRequests(step) {
+  if (step.kind === "INTERACT" && step.action === "CLICK") return ["ACTION_LOG"];
   if (step.kind !== "OBSERVE") return [];
   return (step.requests ?? []).map((request) => request.type).filter(Boolean).sort();
 }

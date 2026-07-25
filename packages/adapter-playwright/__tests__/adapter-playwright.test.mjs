@@ -132,11 +132,53 @@ describe("compilePlaywrightSpec", () => {
     expect(result.diagnostics.map(item => item.code)).toContain("UNSUPPORTED_READONLY_ASSERTIONS");
   });
 
-  it("warns that interaction bodies are deferred instead of inventing steps", () => {
-    const interaction = `// @qa-scenario: CLICK\n// @qa-live-policy: safe-interaction\ntest("clicks", async ({ page }) => {\n  await page.getByRole("button", { name: "Open" }).click();\n  await expect(page.getByText("Opened")).toBeVisible();\n});\n`;
+  it("compiles static semantic clicks without using Playwright selectors as runtime authority", () => {
+    const interaction = `// @qa-scenario: CLICK\n// @qa-page: /dashboard\n// @qa-live-policy: safe-interaction\ntest("clicks", async ({ page }) => {\n  await page.getByTestId("menu").click();\n  await page.getByText("Settings").click();\n  await page.getByRole("button", { name: "Open" }).click();\n  await expect(page.getByText("Opened")).toBeVisible();\n});\n`;
     const result = compilePlaywrightSpec({ source: interaction, sourcePath: "interaction.spec.ts" });
+
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.qaIr.suites[0].scenarios[0].steps.map(step => step.kind)).toEqual(["NAVIGATE", "INTERACT", "INTERACT", "INTERACT", "OBSERVE", "CHECKPOINT"]);
+    expect(result.qaIr.suites[0].scenarios[0].steps.filter(step => step.kind === "INTERACT")).toMatchObject([
+      { action: "CLICK", target: { testId: "menu" } },
+      { action: "CLICK", target: { text: { kind: "literal", value: "Settings" } } },
+      { action: "CLICK", target: { role: "button", accessibleName: { kind: "literal", value: "Open" } } },
+    ]);
+  });
+
+  it("fails executable interactions atomically when any action is unsupported", () => {
+    const interaction = `// @qa-scenario: MIXED\n// @qa-live-policy: safe-interaction\ntest("mixed", async ({ page }) => {\n  // await page.getByTestId("comment-only").click();\n  await page.getByTestId("menu").click();\n  await page.locator(".unsafe").click();\n  await page.getByTestId("name").fill("value");\n  await expect(page.locator(".result")).toHaveCount(1);\n});\n`;
+    const result = compilePlaywrightSpec({ source: interaction, sourcePath: "mixed.spec.ts" });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toMatchObject([{ code: "UNSUPPORTED_INTERACTION_STEPS", severity: "ERROR" }]);
+    expect(result.qaIr.suites[0].scenarios[0].steps.some(step => step.kind === "INTERACT")).toBe(false);
+
+    for (const hidden of [
+      `/* await page.getByTestId("commented").click(); */`,
+      `if (false) {\n    await page.getByTestId("conditional").click();\n  }`,
+      `await replayHelper(page);\n  await page.getByTestId("after-helper").click();`,
+      `await page.getByTestId("before-helper").click();\n  await expect(page.getByText("Ready")).toBeVisible(); await replayHelper(page);`,
+    ]) {
+      const candidate = `// @qa-scenario: HIDDEN\n// @qa-live-policy: safe-interaction\ntest("hidden", async ({ page }) => {\n  ${hidden}\n});\n`;
+      const compiled = compilePlaywrightSpec({ source: candidate, sourcePath: "hidden.spec.ts" });
+      expect(compiled.ok).toBe(false);
+      expect(compiled.qaIr.suites[0].scenarios[0].steps.some(step => step.kind === "INTERACT")).toBe(false);
+    }
+
+    const commentedAssertion = `// @qa-scenario: COMMENT\n// @qa-live-policy: safe-interaction\ntest("comment", async ({ page }) => {\n  await page.getByTestId("run").click();\n  // await expect(page.getByText("Never")).toBeVisible();\n});\n`;
+    const compiled = compilePlaywrightSpec({ source: commentedAssertion, sourcePath: "comment.spec.ts" });
+    expect(compiled.ok).toBe(true);
+    expect(compiled.qaIr.suites[0].scenarios[0].expectations).toEqual([]);
+    expect(compiled.qaIr.suites[0].scenarios[0].steps.map(step => step.kind)).toEqual(["INTERACT", "CHECKPOINT"]);
+  });
+
+  it("keeps no-confirm interactions deferred instead of guessing a safe stopping point", () => {
+    const interaction = `// @qa-scenario: CONFIRM\n// @qa-live-policy: safe-interaction-no-confirm\ntest("confirm", async ({ page }) => {\n  await page.getByTestId("cancel").click();\n});\n`;
+    const result = compilePlaywrightSpec({ source: interaction, sourcePath: "confirm.spec.ts" });
+
     expect(result.ok).toBe(true);
     expect(result.diagnostics).toMatchObject([{ code: "DEFERRED_INTERACTION_STEPS", severity: "WARNING" }]);
-    expect(result.qaIr.suites[0].scenarios[0].steps.map(step => step.kind)).toEqual(["CHECKPOINT"]);
+    expect(result.qaIr.suites[0].scenarios[0].steps.some(step => step.kind === "INTERACT")).toBe(false);
   });
 });
