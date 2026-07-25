@@ -49,7 +49,7 @@ function evidence(text = "Dashboard") {
       schemaVersion: PROVIDER_CAPABILITIES_VERSION,
       providerId: "fixture-provider",
       actions: ["OBSERVE", "CHECKPOINT"],
-      evidence: ["VISIBLE_TEXT"],
+      evidence: ["VISIBLE_TEXT", "ELEMENT_OBSERVATION"],
     },
     secrets: ["login-secret"],
   });
@@ -72,7 +72,16 @@ function evidence(text = "Dashboard") {
       timezone: "UTC",
     },
     artifacts: [artifact],
-    facts: [],
+    facts: [{
+      id: "heading-observation",
+      kind: "ELEMENT_OBSERVATION",
+      value: {
+        expectationId: "heading",
+        resolution: "FOUND",
+        text,
+        textTruncated: false,
+      },
+    }],
   });
   const manifest = store.appendCheckpoint(bundle);
   return { bundle, manifest, readBlob: store.readBlob };
@@ -82,7 +91,12 @@ describe("Hermes judge provider", () => {
   it("bypasses Hermes transport for fully deterministic evidence", async () => {
     const transport = vi.fn();
     const result = await judgeWithHermes({
-      qaIr: qaIr([{ id: "heading", kind: "VISIBLE_TEXT", text: "Dashboard" }]),
+      qaIr: qaIr([{
+        id: "heading",
+        kind: "CONTAINS_TEXT",
+        target: { testId: "heading" },
+        expected: { kind: "literal", value: "Dashboard" },
+      }]),
       ...evidence("Dashboard"),
       transport,
       model: "hermes-test",

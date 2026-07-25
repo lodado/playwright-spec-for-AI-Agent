@@ -56,7 +56,7 @@ describe("compilePlaywrightSpec", () => {
     expect(expectation.target.selector).toBeUndefined();
     expect(expectation.target.hints).toEqual([{ adapter: "playwright", data: { kind: "testId", value: "heading" } }]);
     expect(scenario.steps.map(step => step.kind)).toEqual(["NAVIGATE", "OBSERVE", "CHECKPOINT"]);
-    expect(scenario.steps[1].requests).toEqual([{ type: "VISIBLE_TEXT" }]);
+    expect(scenario.steps[1].requests).toEqual([{ type: "ELEMENT_OBSERVATION" }, { type: "VISIBLE_TEXT" }]);
 
     const regexSource = source.replace("toContainText(\"Dashboard\")", "toContainText(/Dash.+/) ");
     const regexExpectation = compilePlaywrightSpec({ source: regexSource, sourcePath: "dashboard.spec.ts" }).qaIr.suites[0].scenarios[0].expectations[0];

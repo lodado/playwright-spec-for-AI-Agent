@@ -123,7 +123,7 @@ function stepsFromLegacy(legacy, test, discriminator, expectations, interactions
     steps.push({ id: stableId("step-interact", legacy.scenarioId, test.checkId, discriminator, index), kind: "INTERACT", action: "CLICK", target: semanticTargetFromLocator(locator) });
   });
   if (expectations.length > 0) {
-    steps.push({ id: stableId("step-observe", legacy.scenarioId, test.checkId, discriminator), kind: "OBSERVE", requests: [{ type: "VISIBLE_TEXT" }] });
+    steps.push({ id: stableId("step-observe", legacy.scenarioId, test.checkId, discriminator), kind: "OBSERVE", requests: [{ type: "ELEMENT_OBSERVATION" }, { type: "VISIBLE_TEXT" }] });
   }
   steps.push({ id: stableId("step-checkpoint", legacy.scenarioId, test.checkId, discriminator), kind: "CHECKPOINT", checkpointId: stableId("checkpoint", legacy.scenarioId, test.checkId, discriminator) });
   return steps;
