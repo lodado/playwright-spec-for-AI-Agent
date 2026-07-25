@@ -347,7 +347,7 @@ function validateEvidenceManifest(value, path) {
   value.checkpoints.forEach((checkpoint, index) => {
     const checkpointPath = `${path}.checkpoints[${index}]`;
     object(checkpoint, checkpointPath, "EvidenceManifest");
-    allowedKeys(checkpoint, ["checkpointId", "stage", "evidenceBundleId", "sealed", "contentHash", "producer"], checkpointPath, "EvidenceManifest");
+    allowedKeys(checkpoint, ["checkpointId", "stage", "evidenceBundleId", "evidenceBundleHash", "sealed", "contentHash", "producer"], checkpointPath, "EvidenceManifest");
     string(checkpoint.checkpointId, `${checkpointPath}.checkpointId`, "EvidenceManifest");
     if (checkpointIds.has(checkpoint.checkpointId)) fail("EvidenceManifest", `${checkpointPath}.checkpointId`, "must be unique");
     checkpointIds.add(checkpoint.checkpointId);
@@ -356,6 +356,7 @@ function validateEvidenceManifest(value, path) {
     if (stageIndex < previousStage) fail("EvidenceManifest", `${checkpointPath}.stage`, "must be non-decreasing");
     previousStage = stageIndex;
     string(checkpoint.evidenceBundleId, `${checkpointPath}.evidenceBundleId`, "EvidenceManifest");
+    string(checkpoint.evidenceBundleHash, `${checkpointPath}.evidenceBundleHash`, "EvidenceManifest");
     exact(checkpoint.sealed, true, `${checkpointPath}.sealed`, "EvidenceManifest");
     string(checkpoint.contentHash, `${checkpointPath}.contentHash`, "EvidenceManifest");
     object(checkpoint.producer, `${checkpointPath}.producer`, "EvidenceManifest");
@@ -505,6 +506,7 @@ function checkpointContentHash(checkpoint) {
     checkpointId: checkpoint.checkpointId,
     stage: checkpoint.stage,
     evidenceBundleId: checkpoint.evidenceBundleId,
+    evidenceBundleHash: checkpoint.evidenceBundleHash,
     sealed: checkpoint.sealed,
     producer: checkpoint.producer,
   });

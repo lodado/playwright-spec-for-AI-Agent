@@ -132,6 +132,7 @@ function checkpoint(fields) {
     checkpointId: fields.checkpointId,
     stage: fields.stage,
     evidenceBundleId: fields.evidenceBundleId,
+    evidenceBundleHash: fields.evidenceBundleHash ?? canonicalHash({ bundleId: fields.evidenceBundleId }),
     sealed: true,
     producer: { name: "contracts-test", version: "0.1.0" },
   };
