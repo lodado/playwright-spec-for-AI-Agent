@@ -9,15 +9,18 @@ import {
 const REDACTION_RULES = Object.freeze([
   "authorization-bearer/0.1",
   "credential-key-value/0.1",
+  "high-confidence-token/0.1",
   "sensitive-object-key/0.1",
   "supplied-value/0.1",
 ]);
 
 const CREDENTIAL_PATTERN =
-  /["']?\b(access[_-]?token|refresh[_-]?token|id[_-]?token|session(?:[_-]?id)?|token|api[_-]?key|client[_-]?secret|password|passwd|secret)\b["']?(\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,}&]+)/gi;
+  /["']?\b(access[_-]?token|refresh[_-]?token|id[_-]?token|[a-z0-9_-]*token|session(?:[_-]?id)?|api[_-]?key|client[_-]?secret|password|passwd|secret)\b["']?(\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,}&]+)/gi;
 const AUTHORIZATION_PATTERN = /(["']?\b(?:proxy[-_\s]?)?authorization\b["']?\s*(?::|=|,\s*))(?:(?:"[^"\r\n]*"|'[^'\r\n]*')|[^\r\n,\]}]+)/gi;
 const COOKIE_PATTERN = /(["']?\b(?:set[-_\s]?)?cookie\b["']?\s*(?::|=|,\s*))(?:(?:"[^"\r\n]*"|'[^'\r\n]*')|[^\r\n,\]}]+)/gi;
 const URL_USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s\/@]*@/gi;
+const HIGH_CONFIDENCE_TOKEN_PATTERN = /\b(?:gh[pousr]_[a-z0-9]{20,}|npm_[a-z0-9]{20,}|sk-(?:proj-)?[a-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9a-z_-]{35}|xox[baprs]-[a-z0-9-]{10,}|eyJ[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,})\b/gi;
+const HIGH_ENTROPY_QUOTED_PATTERN = /(["'])[a-z0-9+\/_-]{40,}={0,2}\1/gi;
 const BINARY_ARTIFACT_TYPES = new Set(["SCREENSHOT", "TRACE"]);
 
 export function createInMemoryEvidenceStore({
@@ -205,6 +208,11 @@ export function createInMemoryEvidenceStore({
     readBundle,
     readManifest,
   };
+}
+
+export function redactSensitiveText(value, secrets = []) {
+  if (typeof value !== "string") throw new TypeError("redacted value must be a string");
+  return redactString(value, [...secrets].filter(Boolean).map(String)).value;
 }
 
 export function verifyStoredEvidence({ bundle, manifest, readBlob }) {
@@ -443,6 +451,14 @@ function redactString(value, secrets) {
   redacted = redacted.replace(URL_USERINFO_PATTERN, (_, scheme) => {
     replacements += 1;
     return `${scheme}[REDACTED]@`;
+  });
+  redacted = redacted.replace(HIGH_CONFIDENCE_TOKEN_PATTERN, () => {
+    replacements += 1;
+    return "[REDACTED]";
+  });
+  redacted = redacted.replace(HIGH_ENTROPY_QUOTED_PATTERN, (_, quote) => {
+    replacements += 1;
+    return `${quote}[REDACTED]${quote}`;
   });
   return { value: redacted, replacements };
 }

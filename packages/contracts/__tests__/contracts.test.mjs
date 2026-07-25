@@ -435,4 +435,96 @@ describe("documented runtime contracts", () => {
     }))).toThrow(/between 0 and 1/);
   });
 
+  it("enforces evidence-linked remediation and safe repository context", () => {
+    const diagnosis = {
+      schemaVersion: FAILURE_DIAGNOSIS_VERSION,
+      diagnosisId: "diagnosis-1",
+      judgeResultId: "judge-1",
+      origin: "PRODUCT_CODE",
+      confidence: 0.7,
+      symptom: "Heading missing",
+      likelyCause: "Rendering changed",
+      supportingEvidenceRefs: ["artifact-visible-text"],
+      contradictingEvidenceRefs: [],
+      remediationEligible: true,
+      manualReviewReasons: [],
+    };
+    expect(() => validateContract("FailureDiagnosis", { ...diagnosis, confidence: 2 })).toThrow(/between 0 and 1/);
+    expect(() => validateContract("FailureDiagnosis", {
+      ...diagnosis,
+      origin: "UNKNOWN",
+      remediationEligible: false,
+      manualReviewReasons: [],
+    })).toThrow(/manual review/);
+    expect(() => validateContract("FailureDiagnosis", {
+      ...diagnosis,
+      supportingEvidenceRefs: ["invented"],
+    }, { judgeResult: judgeResult(), evidenceBundle: evidenceBundle() })).toThrow(/unknown evidence ref/);
+
+    const context = {
+      schemaVersion: CODE_CONTEXT_VERSION,
+      bundleId: "context-1",
+      repositoryId: "repo-1",
+      revision: "abc123",
+      failureDiagnosisId: "diagnosis-1",
+      candidates: [{
+        path: "src/Dashboard.tsx",
+        range: { start: { line: 3, column: 1 }, end: { line: 5, column: 2 } },
+        relevanceScore: 0.9,
+        matchReasons: ["TEST_ID_MATCH"],
+      }],
+      snippets: [{
+        path: "src/Dashboard.tsx",
+        range: { start: { line: 3, column: 1 }, end: { line: 5, column: 2 } },
+        text: "Dashboard",
+        contentHash: `sha256:${"a".repeat(64)}`,
+      }],
+      searchAudit: { queries: [{ term: "dashboard", reason: "TEST_ID_MATCH" }], strategies: ["GIT_GREP_FIXED_STRING"] },
+    };
+    expect(validateContract("CodeContextBundle", context)).toBe(context);
+    expect(() => validateContract("CodeContextBundle", {
+      ...context,
+      candidates: [{ ...context.candidates[0], path: "../.env" }],
+    })).toThrow(/safe repository-relative path/);
+    expect(() => validateContract("CodeContextBundle", {
+      ...context,
+      candidates: [{ ...context.candidates[0], relevanceScore: -1 }],
+    })).toThrow(/between 0 and 1/);
+    expect(() => validateContract("CodeContextBundle", {
+      ...context,
+      snippets: [{ ...context.snippets[0], text: "x".repeat(32_769) }],
+    })).toThrow(/at most 32768 characters/);
+
+    const recommendation = {
+      schemaVersion: REPAIR_RECOMMENDATION_VERSION,
+      recommendationId: "recommendation-1",
+      diagnosisId: "diagnosis-1",
+      repositoryRevision: "abc123",
+      title: "Review dashboard",
+      severity: "MEDIUM",
+      summary: "Heading missing",
+      rootCause: "Rendering changed",
+      confidence: 0.7,
+      locations: [{ path: "src/Dashboard.tsx", range: context.candidates[0].range, reason: "TEST_ID_MATCH" }],
+      changes: [{ path: "src/Dashboard.tsx", recommendation: "Restore heading", expectedEffect: "Heading is visible", risks: ["Copy may be intentional"] }],
+      verificationPlan: [{ command: "npm test", purpose: "Run regressions" }],
+      evidenceRefs: ["artifact-visible-text"],
+      codeContextRefs: ["context-1"],
+      patchEligibility: "SUGGESTION_ONLY",
+    };
+    expect(validateContract("RepairRecommendation", recommendation, { diagnosis, codeContext: context })).toBe(recommendation);
+    expect(() => validateContract("RepairRecommendation", { ...recommendation, confidence: Infinity })).toThrow(/between 0 and 1/);
+    expect(() => validateContract("RepairRecommendation", { ...recommendation, patchEligibility: "PATCH_ALLOWED" })).toThrow(/verified patch gate/);
+    const manualDiagnosis = {
+      ...diagnosis,
+      origin: "UNKNOWN",
+      remediationEligible: false,
+      manualReviewReasons: ["Owner is unknown"],
+    };
+    expect(() => validateContract("RepairRecommendation", recommendation, {
+      diagnosis: manualDiagnosis,
+      codeContext: context,
+    })).toThrow(/ineligible diagnoses require manual review/);
+  });
+
 });
