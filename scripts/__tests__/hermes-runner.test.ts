@@ -8,6 +8,7 @@ import {
   extractJsonFromHermesOutput,
   prepareEphemeralHermesHome,
   prepareHermesJsonParseSurface,
+  resolveTextOnlyDisabledToolsets,
   unwrapHermesEnvelope,
 } from "../hermes-runner.mjs";
 
@@ -24,6 +25,14 @@ describe("buildHermesAgentArgs", () => {
     });
     expect(args).toContain('--disabled_toolsets="browser,web,terminal"');
     expect(args).toContain("--model=test-model");
+  });
+
+  it("cannot remove mandatory text-only tool restrictions", () => {
+    expect(resolveTextOnlyDisabledToolsets("browser,custom").split(",")).toEqual([
+      "*",
+      "browser",
+      "custom",
+    ]);
   });
 });
 

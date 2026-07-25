@@ -45,7 +45,9 @@
     "packages/contracts/index.mjs",
     "packages/adapter-playwright/index.mjs",
     "packages/core/index.mjs",
-    "packages/evidence/index.mjs"
+    "packages/evidence/index.mjs",
+    "packages/judge/index.mjs",
+    "packages/provider-hermes/index.mjs"
   ],
   "scripts": {
     "qa:spec": "node bin/playwright-spec-for-ai-agent.mjs spec",
@@ -83,6 +85,8 @@
     "./contracts": "./packages/contracts/index.mjs",
     "./adapter-playwright": "./packages/adapter-playwright/index.mjs",
     "./core": "./packages/core/index.mjs",
-    "./evidence": "./packages/evidence/index.mjs"
+    "./evidence": "./packages/evidence/index.mjs",
+    "./judge": "./packages/judge/index.mjs",
+    "./provider-hermes": "./packages/provider-hermes/index.mjs"
   }
 }
