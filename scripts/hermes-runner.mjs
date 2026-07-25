@@ -60,13 +60,21 @@ const HERMES_TEXT_ONLY_ENV_KEYS = [
  * Only mode-specific boot files are copied from the real ~/.hermes. Returns
  * the path plus cleanup() to delete it.
  */
-export function prepareEphemeralHermesHome({ mode = "browse" } = {}) {
-  const realHome = join(homedir(), ".hermes");
-  const path = mkdtempSync(join(tmpdir(), "hermes-qa-home-"));
+export function prepareEphemeralHermesHome({
+  mode = "browse",
+  sourceHome = join(homedir(), ".hermes"),
+  makeTemporaryHome = () => mkdtempSync(join(tmpdir(), "hermes-qa-home-")),
+} = {}) {
+  const path = makeTemporaryHome();
   const bootFiles = mode === "text-only" ? HERMES_TEXT_ONLY_HOME_BOOT_FILES : HERMES_HOME_BOOT_FILES;
-  for (const name of bootFiles) {
-    const src = join(realHome, name);
-    if (existsSync(src)) cpSync(src, join(path, name));
+  try {
+    for (const name of bootFiles) {
+      const src = join(sourceHome, name);
+      if (existsSync(src)) cpSync(src, join(path, name));
+    }
+  } catch (error) {
+    rmSync(path, { recursive: true, force: true });
+    throw error;
   }
   return {
     path,

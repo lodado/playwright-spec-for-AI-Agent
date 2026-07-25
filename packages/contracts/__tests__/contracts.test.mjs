@@ -330,13 +330,15 @@ describe("documented runtime contracts", () => {
   });
 
   it("validates judge evidence refs against an optional EvidenceBundle context", () => {
-    expect(validateContract("JudgeResult", judgeResult(), { evidenceBundle: evidenceBundle() })).toMatchObject({ verdict: "PASS" });
+    expect(validateContract("JudgeResult", judgeResult(), { qaIr: qaIr(), evidenceBundle: evidenceBundle() })).toMatchObject({ verdict: "PASS" });
     expect(() =>
       validateContract("JudgeResult", judgeResult({ expectationResults: [{ ...judgeResult().expectationResults[0], evidenceRefs: ["missing"] }] }), {
         evidenceBundle: evidenceBundle(),
       }),
     ).toThrow(/unknown evidence ref/);
     expect(() => validateContract("JudgeResult", judgeResult({ evidenceBundleId: "other-bundle" }), { evidenceBundle: evidenceBundle() })).toThrow(/bundleId/);
+    expect(() => validateContract("JudgeResult", judgeResult({ expectationResults: [] }), { qaIr: qaIr(), evidenceBundle: evidenceBundle() })).toThrow(/every scenario expectation/);
+    expect(() => validateContract("JudgeResult", judgeResult({ expectationResults: [judgeResult().expectationResults[0], judgeResult().expectationResults[0]] }), { qaIr: qaIr(), evidenceBundle: evidenceBundle() })).toThrow(/unique/);
   });
 
   it("maps invalid model output to RuntimeOutcome ERROR/CONTRACT_VIOLATION without fake product failure", () => {

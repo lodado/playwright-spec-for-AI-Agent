@@ -1,5 +1,5 @@
-import { existsSync, readdirSync } from "node:fs";
-import { basename } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -64,6 +64,27 @@ describe("prepareEphemeralHermesHome", () => {
       expect(entries).not.toContain("SOUL.md");
     } finally {
       cleanup();
+    }
+  });
+
+  it("removes partial credential homes when boot-file copying fails", () => {
+    const root = mkdtempSync(join(tmpdir(), "hermes-home-failure-"));
+    const sourceHome = join(root, "source");
+    const destination = join(root, "destination");
+    try {
+      mkdirSync(sourceHome);
+      mkdirSync(join(sourceHome, "auth.json"));
+      expect(() => prepareEphemeralHermesHome({
+        mode: "text-only",
+        sourceHome,
+        makeTemporaryHome: () => {
+          mkdirSync(destination);
+          return destination;
+        },
+      })).toThrow();
+      expect(existsSync(destination)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
