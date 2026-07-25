@@ -32,6 +32,7 @@ export const RUNTIME_ERROR_CODES = Object.freeze([
 
 const runtimeStages = ["compile", "plan", "execute", "evidence", "evaluate", "judge", "diagnose", "report"];
 const failureOrigins = ["PRODUCT_CODE", "TEST_CODE", "QA_SPEC", "API_CONTRACT", "FIXTURE_OR_MOCK", "TEST_DATA", "ENVIRONMENT", "THIRD_PARTY", "UNKNOWN"];
+const codeMatchReasons = ["TEST_ID_MATCH", "VISIBLE_TEXT_MATCH", "ROUTE_MATCH", "NETWORK_ENDPOINT_MATCH", "STACK_TRACE_MATCH", "RECENTLY_CHANGED", "DEPENDENCY_MATCH"];
 const payloadHashNoise = new Set([
   "appliedAt",
   "capturedAt",
@@ -510,6 +511,10 @@ function validateJudgeResult(value, path, context) {
   allowedKeys(value, ["schemaVersion", "resultId", "qaIrId", "evidenceBundleId", "verdict", "confidence", "expectationResults", "uncertainty", "judge", "inputHash"], path, "JudgeResult");
   exact(value.schemaVersion, JUDGE_RESULT_VERSION, `${path}.schemaVersion`, "JudgeResult");
   for (const key of ["resultId", "qaIrId", "evidenceBundleId", "inputHash"]) string(value[key], `${path}.${key}`, "JudgeResult");
+  if (context.qaIr) {
+    validateQaIrDocument(context.qaIr, "$.qaIr");
+    exact(value.qaIrId, context.qaIr.id, `${path}.qaIrId`, "JudgeResult");
+  }
   oneOf(value.verdict, VERDICTS, `${path}.verdict`, "JudgeResult");
   probability(value.confidence, `${path}.confidence`, "JudgeResult");
   array(value.expectationResults, `${path}.expectationResults`, "JudgeResult");
@@ -542,58 +547,171 @@ function validateExpectationJudgment(value, path, verdict, evidenceIds, contract
   if (evidenceIds) for (const ref of value.evidenceRefs) if (!evidenceIds.has(ref)) fail(contract, `${path}.evidenceRefs`, `unknown evidence ref ${ref}`);
 }
 
-function validateFailureDiagnosis(value, path) {
+function validateFailureDiagnosis(value, path, context = {}) {
   object(value, path, "FailureDiagnosis");
   allowedKeys(value, ["schemaVersion", "diagnosisId", "judgeResultId", "origin", "confidence", "symptom", "likelyCause", "supportingEvidenceRefs", "contradictingEvidenceRefs", "remediationEligible", "manualReviewReasons"], path, "FailureDiagnosis");
   exact(value.schemaVersion, FAILURE_DIAGNOSIS_VERSION, `${path}.schemaVersion`, "FailureDiagnosis");
-  for (const key of ["diagnosisId", "judgeResultId", "symptom", "likelyCause"]) string(value[key], `${path}.${key}`, "FailureDiagnosis");
+  for (const key of ["diagnosisId", "judgeResultId"]) boundedString(value[key], 512, `${path}.${key}`, "FailureDiagnosis");
+  boundedString(value.symptom, 4_096, `${path}.symptom`, "FailureDiagnosis");
+  boundedString(value.likelyCause, 4_096, `${path}.likelyCause`, "FailureDiagnosis");
   oneOf(value.origin, failureOrigins, `${path}.origin`, "FailureDiagnosis");
-  number(value.confidence, `${path}.confidence`, "FailureDiagnosis");
-  stringArray(value.supportingEvidenceRefs, `${path}.supportingEvidenceRefs`, "FailureDiagnosis");
-  stringArray(value.contradictingEvidenceRefs, `${path}.contradictingEvidenceRefs`, "FailureDiagnosis");
+  probability(value.confidence, `${path}.confidence`, "FailureDiagnosis");
+  uniqueStringArray(value.supportingEvidenceRefs, `${path}.supportingEvidenceRefs`, "FailureDiagnosis");
+  uniqueStringArray(value.contradictingEvidenceRefs, `${path}.contradictingEvidenceRefs`, "FailureDiagnosis");
   bool(value.remediationEligible, `${path}.remediationEligible`, "FailureDiagnosis");
-  stringArray(value.manualReviewReasons, `${path}.manualReviewReasons`, "FailureDiagnosis");
-  if (["UNKNOWN", "ENVIRONMENT", "THIRD_PARTY"].includes(value.origin) && value.remediationEligible) fail("FailureDiagnosis", `${path}.remediationEligible`, `${value.origin} diagnoses cannot auto-patch`);
+  uniqueStringArray(value.manualReviewReasons, `${path}.manualReviewReasons`, "FailureDiagnosis");
+  value.supportingEvidenceRefs.forEach((ref, index) => boundedString(ref, 512, `${path}.supportingEvidenceRefs[${index}]`, "FailureDiagnosis"));
+  value.contradictingEvidenceRefs.forEach((ref, index) => boundedString(ref, 512, `${path}.contradictingEvidenceRefs[${index}]`, "FailureDiagnosis"));
+  value.manualReviewReasons.forEach((reason, index) => boundedString(reason, 2_000, `${path}.manualReviewReasons[${index}]`, "FailureDiagnosis"));
+  if (value.supportingEvidenceRefs.length > 100 || value.contradictingEvidenceRefs.length > 100) fail("FailureDiagnosis", path, "must reference at most 100 evidence items per category");
+  if (value.manualReviewReasons.length > 20) fail("FailureDiagnosis", `${path}.manualReviewReasons`, "must contain at most 20 reasons");
+  if (value.supportingEvidenceRefs.some((ref) => value.contradictingEvidenceRefs.includes(ref))) fail("FailureDiagnosis", path, "supporting and contradicting evidence must be disjoint");
+  if (value.remediationEligible && value.supportingEvidenceRefs.length === 0) fail("FailureDiagnosis", `${path}.supportingEvidenceRefs`, "eligible remediation requires evidence");
+  if (["UNKNOWN", "ENVIRONMENT", "THIRD_PARTY"].includes(value.origin)) {
+    if (value.remediationEligible) fail("FailureDiagnosis", `${path}.remediationEligible`, `${value.origin} diagnoses cannot auto-patch`);
+    if (value.manualReviewReasons.length === 0) fail("FailureDiagnosis", `${path}.manualReviewReasons`, `${value.origin} diagnoses require manual review`);
+  }
+  if (context.judgeResult) {
+    validateJudgeResult(context.judgeResult, "$.judgeResult", context);
+    exact(value.judgeResultId, context.judgeResult.resultId, `${path}.judgeResultId`, "FailureDiagnosis");
+  }
+  if (context.evidenceBundle) {
+    validateEvidenceBundle(context.evidenceBundle, "$.evidenceBundle");
+    const evidenceIds = collectEvidenceIds(context.evidenceBundle, context.evidenceBundle.bundleId);
+    for (const ref of [...value.supportingEvidenceRefs, ...value.contradictingEvidenceRefs]) {
+      if (!evidenceIds.has(ref)) fail("FailureDiagnosis", path, `unknown evidence ref ${ref}`);
+    }
+  }
 }
 
 function validateCodeContextBundle(value, path) {
   object(value, path, "CodeContextBundle");
   allowedKeys(value, ["schemaVersion", "bundleId", "repositoryId", "revision", "failureDiagnosisId", "candidates", "snippets", "searchAudit"], path, "CodeContextBundle");
   exact(value.schemaVersion, CODE_CONTEXT_VERSION, `${path}.schemaVersion`, "CodeContextBundle");
-  for (const key of ["bundleId", "repositoryId", "revision", "failureDiagnosisId"]) string(value[key], `${path}.${key}`, "CodeContextBundle");
+  for (const key of ["bundleId", "repositoryId", "failureDiagnosisId"]) boundedString(value[key], 512, `${path}.${key}`, "CodeContextBundle");
+  boundedString(value.revision, 128, `${path}.revision`, "CodeContextBundle");
   array(value.candidates, `${path}.candidates`, "CodeContextBundle");
+  if (value.candidates.length > 10) fail("CodeContextBundle", `${path}.candidates`, "must contain at most 10 candidates");
   value.candidates.forEach((candidate, index) => validateCodeCandidate(candidate, `${path}.candidates[${index}]`));
-  recordArray(value.snippets, `${path}.snippets`, "CodeContextBundle");
+  const candidateKeys = value.candidates.map((candidate) => JSON.stringify([candidate.path, candidate.symbol, candidate.range]));
+  if (new Set(candidateKeys).size !== candidateKeys.length) fail("CodeContextBundle", `${path}.candidates`, "must be unique");
+  array(value.snippets, `${path}.snippets`, "CodeContextBundle");
+  if (value.snippets.length > 10) fail("CodeContextBundle", `${path}.snippets`, "must contain at most 10 snippets");
+  value.snippets.forEach((snippet, index) => validateCodeSnippet(snippet, `${path}.snippets[${index}]`));
+  if (value.snippets.reduce((total, snippet) => total + snippet.text.length, 0) > 131_072) fail("CodeContextBundle", `${path}.snippets`, "combined snippet text is too large");
+  const candidatePaths = new Set(value.candidates.map((candidate) => candidate.path));
+  const snippetPaths = value.snippets.map((snippet) => snippet.path);
+  if (new Set(snippetPaths).size !== snippetPaths.length) fail("CodeContextBundle", `${path}.snippets`, "must contain at most one snippet per path");
+  if (snippetPaths.some((snippetPath) => !candidatePaths.has(snippetPath))) fail("CodeContextBundle", `${path}.snippets`, "must belong to a candidate path");
   object(value.searchAudit, `${path}.searchAudit`, "CodeContextBundle");
   allowedKeys(value.searchAudit, ["queries", "strategies"], `${path}.searchAudit`, "CodeContextBundle");
-  recordArray(value.searchAudit.queries, `${path}.searchAudit.queries`, "CodeContextBundle");
-  stringArray(value.searchAudit.strategies, `${path}.searchAudit.strategies`, "CodeContextBundle");
+  array(value.searchAudit.queries, `${path}.searchAudit.queries`, "CodeContextBundle");
+  if (value.searchAudit.queries.length > 20) fail("CodeContextBundle", `${path}.searchAudit.queries`, "must contain at most 20 queries");
+  value.searchAudit.queries.forEach((query, index) => {
+    const queryPath = `${path}.searchAudit.queries[${index}]`;
+    object(query, queryPath, "CodeContextBundle");
+    allowedKeys(query, ["term", "reason"], queryPath, "CodeContextBundle");
+    boundedString(query.term, 200, `${queryPath}.term`, "CodeContextBundle");
+    oneOf(query.reason, codeMatchReasons, `${queryPath}.reason`, "CodeContextBundle");
+  });
+  const queryKeys = value.searchAudit.queries.map((query) => `${query.reason}\0${query.term}`);
+  if (new Set(queryKeys).size !== queryKeys.length) fail("CodeContextBundle", `${path}.searchAudit.queries`, "must be unique");
+  uniqueStringArray(value.searchAudit.strategies, `${path}.searchAudit.strategies`, "CodeContextBundle");
+  if (value.searchAudit.strategies.length > 10) fail("CodeContextBundle", `${path}.searchAudit.strategies`, "must contain at most 10 strategies");
+  value.searchAudit.strategies.forEach((strategy, index) => boundedString(strategy, 100, `${path}.searchAudit.strategies[${index}]`, "CodeContextBundle"));
 }
 
 function validateCodeCandidate(value, path) {
   object(value, path, "CodeContextBundle");
   allowedKeys(value, ["path", "symbol", "range", "relevanceScore", "matchReasons"], path, "CodeContextBundle");
-  string(value.path, `${path}.path`, "CodeContextBundle");
-  if (value.symbol !== undefined) string(value.symbol, `${path}.symbol`, "CodeContextBundle");
-  if (value.range !== undefined) object(value.range, `${path}.range`, "CodeContextBundle");
-  number(value.relevanceScore, `${path}.relevanceScore`, "CodeContextBundle");
+  repositoryPath(value.path, `${path}.path`, "CodeContextBundle");
+  if (value.symbol !== undefined) boundedString(value.symbol, 512, `${path}.symbol`, "CodeContextBundle");
+  if (value.range !== undefined) validateSourceRange(value.range, `${path}.range`, "CodeContextBundle");
+  probability(value.relevanceScore, `${path}.relevanceScore`, "CodeContextBundle");
   array(value.matchReasons, `${path}.matchReasons`, "CodeContextBundle");
-  value.matchReasons.forEach((reason, index) => oneOf(reason, ["TEST_ID_MATCH", "VISIBLE_TEXT_MATCH", "ROUTE_MATCH", "NETWORK_ENDPOINT_MATCH", "STACK_TRACE_MATCH", "RECENTLY_CHANGED", "DEPENDENCY_MATCH"], `${path}.matchReasons[${index}]`, "CodeContextBundle"));
+  value.matchReasons.forEach((reason, index) => oneOf(reason, codeMatchReasons, `${path}.matchReasons[${index}]`, "CodeContextBundle"));
+  if (value.matchReasons.length === 0 || new Set(value.matchReasons).size !== value.matchReasons.length) fail("CodeContextBundle", `${path}.matchReasons`, "must contain unique match reasons");
 }
 
-function validateRepairRecommendation(value, path) {
+function validateCodeSnippet(value, path) {
+  object(value, path, "CodeContextBundle");
+  allowedKeys(value, ["path", "range", "text", "contentHash"], path, "CodeContextBundle");
+  repositoryPath(value.path, `${path}.path`, "CodeContextBundle");
+  validateSourceRange(value.range, `${path}.range`, "CodeContextBundle");
+  boundedString(value.text, 32_768, `${path}.text`, "CodeContextBundle");
+  string(value.contentHash, `${path}.contentHash`, "CodeContextBundle");
+  if (!/^sha256:[0-9a-f]{64}$/i.test(value.contentHash)) fail("CodeContextBundle", `${path}.contentHash`, "must be a sha256 hash");
+  if (value.range.end.line - value.range.start.line + 1 > 120) fail("CodeContextBundle", `${path}.range`, "must contain at most 120 lines");
+}
+
+function validateRepairRecommendation(value, path, context = {}) {
   object(value, path, "RepairRecommendation");
   allowedKeys(value, ["schemaVersion", "recommendationId", "diagnosisId", "repositoryRevision", "title", "severity", "summary", "rootCause", "confidence", "locations", "changes", "verificationPlan", "evidenceRefs", "codeContextRefs", "patchEligibility"], path, "RepairRecommendation");
   exact(value.schemaVersion, REPAIR_RECOMMENDATION_VERSION, `${path}.schemaVersion`, "RepairRecommendation");
-  for (const key of ["recommendationId", "diagnosisId", "repositoryRevision", "title", "summary", "rootCause"]) string(value[key], `${path}.${key}`, "RepairRecommendation");
+  for (const key of ["recommendationId", "diagnosisId"]) boundedString(value[key], 512, `${path}.${key}`, "RepairRecommendation");
+  boundedString(value.repositoryRevision, 128, `${path}.repositoryRevision`, "RepairRecommendation");
+  boundedString(value.title, 500, `${path}.title`, "RepairRecommendation");
+  boundedString(value.summary, 4_096, `${path}.summary`, "RepairRecommendation");
+  boundedString(value.rootCause, 4_096, `${path}.rootCause`, "RepairRecommendation");
   oneOf(value.severity, ["BLOCKER", "HIGH", "MEDIUM", "LOW"], `${path}.severity`, "RepairRecommendation");
-  number(value.confidence, `${path}.confidence`, "RepairRecommendation");
-  recordArray(value.locations, `${path}.locations`, "RepairRecommendation");
-  recordArray(value.changes, `${path}.changes`, "RepairRecommendation");
-  recordArray(value.verificationPlan, `${path}.verificationPlan`, "RepairRecommendation");
-  stringArray(value.evidenceRefs, `${path}.evidenceRefs`, "RepairRecommendation");
-  stringArray(value.codeContextRefs, `${path}.codeContextRefs`, "RepairRecommendation");
+  probability(value.confidence, `${path}.confidence`, "RepairRecommendation");
+  array(value.locations, `${path}.locations`, "RepairRecommendation");
+  if (value.locations.length > 10) fail("RepairRecommendation", `${path}.locations`, "must contain at most 10 locations");
+  value.locations.forEach((location, index) => {
+    const locationPath = `${path}.locations[${index}]`;
+    object(location, locationPath, "RepairRecommendation");
+    allowedKeys(location, ["path", "symbol", "range", "reason"], locationPath, "RepairRecommendation");
+    repositoryPath(location.path, `${locationPath}.path`, "RepairRecommendation");
+    if (location.symbol !== undefined) boundedString(location.symbol, 512, `${locationPath}.symbol`, "RepairRecommendation");
+    if (location.range !== undefined) validateSourceRange(location.range, `${locationPath}.range`, "RepairRecommendation");
+    boundedString(location.reason, 1_000, `${locationPath}.reason`, "RepairRecommendation");
+  });
+  array(value.changes, `${path}.changes`, "RepairRecommendation");
+  if (value.changes.length > 10) fail("RepairRecommendation", `${path}.changes`, "must contain at most 10 changes");
+  value.changes.forEach((change, index) => {
+    const changePath = `${path}.changes[${index}]`;
+    object(change, changePath, "RepairRecommendation");
+    allowedKeys(change, ["path", "recommendation", "expectedEffect", "risks"], changePath, "RepairRecommendation");
+    repositoryPath(change.path, `${changePath}.path`, "RepairRecommendation");
+    boundedString(change.recommendation, 4_096, `${changePath}.recommendation`, "RepairRecommendation");
+    boundedString(change.expectedEffect, 4_096, `${changePath}.expectedEffect`, "RepairRecommendation");
+    uniqueStringArray(change.risks, `${changePath}.risks`, "RepairRecommendation");
+    if (change.risks.length > 20) fail("RepairRecommendation", `${changePath}.risks`, "must contain at most 20 risks");
+    change.risks.forEach((risk, riskIndex) => boundedString(risk, 2_000, `${changePath}.risks[${riskIndex}]`, "RepairRecommendation"));
+  });
+  array(value.verificationPlan, `${path}.verificationPlan`, "RepairRecommendation");
+  if (value.verificationPlan.length > 20) fail("RepairRecommendation", `${path}.verificationPlan`, "must contain at most 20 steps");
+  value.verificationPlan.forEach((step, index) => {
+    const stepPath = `${path}.verificationPlan[${index}]`;
+    object(step, stepPath, "RepairRecommendation");
+    allowedKeys(step, ["command", "purpose"], stepPath, "RepairRecommendation");
+    boundedString(step.command, 1_000, `${stepPath}.command`, "RepairRecommendation");
+    boundedString(step.purpose, 2_000, `${stepPath}.purpose`, "RepairRecommendation");
+  });
+  uniqueStringArray(value.evidenceRefs, `${path}.evidenceRefs`, "RepairRecommendation");
+  uniqueStringArray(value.codeContextRefs, `${path}.codeContextRefs`, "RepairRecommendation");
+  if (value.evidenceRefs.length > 100 || value.codeContextRefs.length > 10) fail("RepairRecommendation", path, "contains too many references");
+  value.evidenceRefs.forEach((ref, index) => boundedString(ref, 512, `${path}.evidenceRefs[${index}]`, "RepairRecommendation"));
+  value.codeContextRefs.forEach((ref, index) => boundedString(ref, 512, `${path}.codeContextRefs[${index}]`, "RepairRecommendation"));
   oneOf(value.patchEligibility, ["SUGGESTION_ONLY", "PATCH_ALLOWED", "MANUAL_REVIEW_REQUIRED"], `${path}.patchEligibility`, "RepairRecommendation");
+  if (value.patchEligibility === "PATCH_ALLOWED" && context.patchGateVerified !== true) fail("RepairRecommendation", `${path}.patchEligibility`, "PATCH_ALLOWED requires a verified patch gate");
+  if (context.diagnosis) {
+    validateFailureDiagnosis(context.diagnosis, "$.diagnosis");
+    exact(value.diagnosisId, context.diagnosis.diagnosisId, `${path}.diagnosisId`, "RepairRecommendation");
+    const diagnosisEvidence = new Set([...context.diagnosis.supportingEvidenceRefs, ...context.diagnosis.contradictingEvidenceRefs]);
+    if (value.evidenceRefs.some((ref) => !diagnosisEvidence.has(ref))) fail("RepairRecommendation", `${path}.evidenceRefs`, "must come from the diagnosis");
+    if (!context.diagnosis.remediationEligible && value.patchEligibility !== "MANUAL_REVIEW_REQUIRED") fail("RepairRecommendation", `${path}.patchEligibility`, "ineligible diagnoses require manual review");
+  }
+  if (context.codeContext) {
+    validateCodeContextBundle(context.codeContext, "$.codeContext");
+    exact(value.repositoryRevision, context.codeContext.revision, `${path}.repositoryRevision`, "RepairRecommendation");
+    if (!value.codeContextRefs.includes(context.codeContext.bundleId)) fail("RepairRecommendation", `${path}.codeContextRefs`, "must reference the CodeContextBundle");
+    const candidatePaths = new Set(context.codeContext.candidates.map((candidate) => candidate.path));
+    if (value.locations.some((location) => !candidatePaths.has(location.path)) || value.changes.some((change) => !candidatePaths.has(change.path))) {
+      fail("RepairRecommendation", path, "locations and changes must come from CodeContext candidates");
+    }
+    if (context.diagnosis) exact(context.codeContext.failureDiagnosisId, context.diagnosis.diagnosisId, "$.codeContext.failureDiagnosisId", "RepairRecommendation");
+  }
 }
 
 function validateSourceProvenance(value, path, contract) {
@@ -602,24 +720,32 @@ function validateSourceProvenance(value, path, contract) {
   if (value.repository !== undefined) string(value.repository, `${path}.repository`, contract);
   if (value.revision !== undefined) string(value.revision, `${path}.revision`, contract);
   string(value.path, `${path}.path`, contract);
-  object(value.range, `${path}.range`, contract);
-  object(value.range.start, `${path}.range.start`, contract);
-  object(value.range.end, `${path}.range.end`, contract);
-  number(value.range.start.line, `${path}.range.start.line`, contract);
-  number(value.range.start.column, `${path}.range.start.column`, contract);
-  number(value.range.end.line, `${path}.range.end.line`, contract);
-  number(value.range.end.column, `${path}.range.end.column`, contract);
+  validateSourceRange(value.range, `${path}.range`, contract);
   if (value.symbol !== undefined) string(value.symbol, `${path}.symbol`, contract);
-  allowedKeys(value.range, ["start", "end"], `${path}.range`, contract);
-  allowedKeys(value.range.start, ["line", "column", "offset"], `${path}.range.start`, contract);
-  allowedKeys(value.range.end, ["line", "column", "offset"], `${path}.range.end`, contract);
-  if (value.range.start.offset !== undefined) number(value.range.start.offset, `${path}.range.start.offset`, contract);
-  if (value.range.end.offset !== undefined) number(value.range.end.offset, `${path}.range.end.offset`, contract);
   object(value.adapter, `${path}.adapter`, contract);
   allowedKeys(value.adapter, ["name", "version"], `${path}.adapter`, contract);
   string(value.adapter.name, `${path}.adapter.name`, contract);
   string(value.adapter.version, `${path}.adapter.version`, contract);
   string(value.contentHash, `${path}.contentHash`, contract);
+}
+
+function validateSourceRange(value, path, contract) {
+  object(value, path, contract);
+  allowedKeys(value, ["start", "end"], path, contract);
+  for (const edge of ["start", "end"]) {
+    const edgePath = `${path}.${edge}`;
+    object(value[edge], edgePath, contract);
+    allowedKeys(value[edge], ["line", "column", "offset"], edgePath, contract);
+    number(value[edge].line, `${edgePath}.line`, contract);
+    number(value[edge].column, `${edgePath}.column`, contract);
+    if (!Number.isInteger(value[edge].line) || value[edge].line < 1) fail(contract, `${edgePath}.line`, "must be a positive integer");
+    if (!Number.isInteger(value[edge].column) || value[edge].column < 1) fail(contract, `${edgePath}.column`, "must be a positive integer");
+    if (value[edge].offset !== undefined) {
+      number(value[edge].offset, `${edgePath}.offset`, contract);
+      if (!Number.isInteger(value[edge].offset) || value[edge].offset < 0) fail(contract, `${edgePath}.offset`, "must be a non-negative integer");
+    }
+  }
+  if (value.end.line < value.start.line || (value.end.line === value.start.line && value.end.column < value.start.column)) fail(contract, path, "end must not precede start");
 }
 
 function checkpointContentHash(checkpoint) {
@@ -649,7 +775,10 @@ function rejectKeys(value, keys, path, contract) { for (const key of keys) if (O
 function object(value, path, contract) { if (!isRecord(value)) fail(contract, path, "must be an object"); }
 function array(value, path, contract) { if (!Array.isArray(value)) fail(contract, path, "must be an array"); }
 function stringArray(value, path, contract) { array(value, path, contract); value.forEach((item, index) => string(item, `${path}[${index}]`, contract)); }
+function uniqueStringArray(value, path, contract) { stringArray(value, path, contract); if (new Set(value).size !== value.length) fail(contract, path, "must contain unique strings"); }
 function string(value, path, contract) { if (typeof value !== "string" || value.length === 0) fail(contract, path, "must be a non-empty string"); }
+function boundedString(value, maxLength, path, contract) { string(value, path, contract); if (value.length > maxLength) fail(contract, path, `must contain at most ${maxLength} characters`); }
+function repositoryPath(value, path, contract) { boundedString(value, 4_096, path, contract); if (/^(?:[a-z]:[\\/]|[\\/])|(?:^|[\\/])\.\.(?:[\\/]|$)|[\0\r\n]/i.test(value)) fail(contract, path, "must be a safe repository-relative path"); }
 function number(value, path, contract) { if (typeof value !== "number" || Number.isNaN(value)) fail(contract, path, "must be a number"); }
 function probability(value, path, contract) { number(value, path, contract); if (!Number.isFinite(value) || value < 0 || value > 1) fail(contract, path, "must be between 0 and 1"); }
 function bool(value, path, contract) { if (typeof value !== "boolean") fail(contract, path, "must be a boolean"); }

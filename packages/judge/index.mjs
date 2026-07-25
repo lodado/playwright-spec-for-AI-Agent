@@ -7,7 +7,7 @@ import {
   canonicalHash,
   validateContract,
 } from "../contracts/index.mjs";
-import { verifyStoredEvidence } from "../evidence/index.mjs";
+import { redactSensitiveText, verifyStoredEvidence } from "../evidence/index.mjs";
 
 const DEFAULT_JUDGE = Object.freeze({
   provider: "deterministic",
@@ -324,14 +324,7 @@ function redactValue(value, secrets) {
 }
 
 function redactText(value, secrets) {
-  let redacted = value;
-  for (const secret of secrets.filter(Boolean).map(String)) redacted = redacted.split(secret).join("[REDACTED]");
-  return redacted
-    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s\/@]*@/gi, "$1[REDACTED]@")
-    .replace(/([?&](?:access[_-]?token|refresh[_-]?token|id[_-]?token|session(?:[_-]?id)?|api[_-]?key|password|secret)=)[^\s&#"']*/gi, "$1[REDACTED]")
-    .replace(/["']?\b(access[_-]?token|refresh[_-]?token|id[_-]?token|session(?:[_-]?id)?|api[_-]?key|client[_-]?secret|password|passwd|secret)\b["']?(\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,}&]+)/gi, "$1$2[REDACTED]")
-    .replace(/(["']?\b(?:proxy[-_\s]?)?authorization\b["']?\s*(?::|=|,\s*))(?:(?:"[^"\r\n]*"|'[^'\r\n]*')|[^\r\n,\]}]+)/gi, "$1[REDACTED]")
-    .replace(/(["']?\b(?:set[-_\s]?)?cookie\b["']?\s*(?::|=|,\s*))(?:(?:"[^"\r\n]*"|'[^'\r\n]*')|[^\r\n,\]}]+)/gi, "$1[REDACTED]");
+  return redactSensitiveText(value, secrets);
 }
 
 function sensitiveKey(key) {
