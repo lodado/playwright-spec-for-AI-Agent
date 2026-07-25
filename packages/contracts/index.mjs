@@ -1,0 +1,536 @@
+import { createHash } from "node:crypto";
+
+export const CONTRACT_VIOLATION = "CONTRACT_VIOLATION";
+export const ARTIFACT_VERSION = "artifact/0.1";
+export const QA_IR_VERSION = "qa-ir/0.1";
+export const COMPILE_RESULT_VERSION = "compile-result/0.1";
+export const DIAGNOSTIC_VERSION = "diagnostic/0.1";
+export const PROVIDER_CAPABILITIES_VERSION = "provider-capabilities/0.1";
+export const EXECUTION_PLAN_VERSION = "execution-plan/0.1";
+export const RUNTIME_OUTCOME_VERSION = "runtime-outcome/0.1";
+export const DETERMINISTIC_EVALUATION_VERSION = "deterministic-evaluation/0.1";
+export const EVIDENCE_BUNDLE_VERSION = "evidence-bundle/0.1";
+export const EVIDENCE_MANIFEST_VERSION = "evidence-manifest/0.1";
+export const JUDGE_RESULT_VERSION = "judge-result/0.1";
+export const FAILURE_DIAGNOSIS_VERSION = "failure-diagnosis/0.1";
+export const CODE_CONTEXT_VERSION = "code-context/0.1";
+export const REPAIR_RECOMMENDATION_VERSION = "repair-recommendation/0.1";
+
+export const VERDICTS = Object.freeze(["PASS", "FAIL", "SKIP", "MANUAL_REVIEW"]);
+export const EXPECTATION_STATUSES = Object.freeze(["MATCHED", "CONTRADICTED", "NOT_OBSERVED", "AMBIGUOUS", "NOT_APPLICABLE"]);
+export const RUNTIME_ERROR_CODES = Object.freeze([
+  "BROWSER_START_FAILED",
+  "AUTHENTICATION_FAILED",
+  CONTRACT_VIOLATION,
+  "EVIDENCE_STORAGE_FAILED",
+  "MODEL_PROVIDER_FAILED",
+  "POLICY_VIOLATION",
+  "UNKNOWN_RUNTIME_ERROR",
+]);
+
+const runtimeStages = ["compile", "plan", "execute", "evidence", "evaluate", "judge", "diagnose", "report"];
+const failureOrigins = ["PRODUCT_CODE", "TEST_CODE", "QA_SPEC", "API_CONTRACT", "FIXTURE_OR_MOCK", "TEST_DATA", "ENVIRONMENT", "THIRD_PARTY", "UNKNOWN"];
+const payloadHashNoise = new Set([
+  "appliedAt",
+  "capturedAt",
+  "createdAt",
+  "durationMs",
+  "endedAt",
+  "generatedAt",
+  "observedAt",
+  "providerLatencyMs",
+  "runtimeMetadata",
+  "sealedAt",
+  "startedAt",
+  "timestamp",
+  "timestamps",
+  "updatedAt",
+]);
+
+const schemas = {
+  ArtifactEnvelope: validateArtifactEnvelope,
+  QaIrDocument: validateQaIrDocument,
+  CompileResult: validateCompileResult,
+  Diagnostic: validateDiagnostic,
+  ProviderCapabilities: validateProviderCapabilities,
+  ExecutionPlan: validateExecutionPlan,
+  RuntimeOutcome: validateRuntimeOutcome,
+  DeterministicEvaluationResult: validateDeterministicEvaluationResult,
+  EvidenceBundle: validateEvidenceBundle,
+  EvidenceManifest: validateEvidenceManifest,
+  JudgeResult: validateJudgeResult,
+  FailureDiagnosis: validateFailureDiagnosis,
+  CodeContextBundle: validateCodeContextBundle,
+  RepairRecommendation: validateRepairRecommendation,
+};
+
+export class ContractViolationError extends Error {
+  constructor(contract, message, path = "$") {
+    super(`${contract}: ${path} ${message}`);
+    this.name = "ContractViolationError";
+    this.code = CONTRACT_VIOLATION;
+    this.contract = contract;
+    this.path = path;
+    this.diagnostic = {
+      schemaVersion: DIAGNOSTIC_VERSION,
+      code: CONTRACT_VIOLATION,
+      severity: "ERROR",
+      message: this.message,
+      path,
+    };
+  }
+}
+
+export function canonicalJson(value) {
+  return JSON.stringify(canonicalize(value));
+}
+
+export function canonicalHash(value) {
+  return `sha256:${createHash("sha256").update(canonicalJson(value)).digest("hex")}`;
+}
+
+export function payloadContentHash(payload) {
+  return canonicalHash(payload);
+}
+
+export function createArtifactEnvelope(payload, { artifactId, createdAt, producer }) {
+  return validateContract("ArtifactEnvelope", {
+    artifactVersion: ARTIFACT_VERSION,
+    artifactId,
+    contentHash: payloadContentHash(payload),
+    createdAt,
+    producer,
+    payload,
+  });
+}
+
+export function contractViolationOutcome(stage, error) {
+  return {
+    schemaVersion: RUNTIME_OUTCOME_VERSION,
+    stage,
+    type: "ERROR",
+    code: CONTRACT_VIOLATION,
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
+export function validateContract(contract, value, context = {}) {
+  const validate = schemas[contract];
+  if (!validate) fail(contract, "$", "is not a known contract");
+  validate(value, "$", context);
+  return value;
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .filter((key) => !payloadHashNoise.has(key))
+      .sort()
+      .map((key) => [key, canonicalize(value[key])]),
+  );
+}
+
+function validateArtifactEnvelope(value, path) {
+  object(value, path, "ArtifactEnvelope");
+  allowedKeys(value, ["artifactVersion", "artifactId", "contentHash", "createdAt", "producer", "payload"], path, "ArtifactEnvelope");
+  exact(value.artifactVersion, ARTIFACT_VERSION, `${path}.artifactVersion`, "ArtifactEnvelope");
+  string(value.artifactId, `${path}.artifactId`, "ArtifactEnvelope");
+  string(value.contentHash, `${path}.contentHash`, "ArtifactEnvelope");
+  string(value.createdAt, `${path}.createdAt`, "ArtifactEnvelope");
+  object(value.producer, `${path}.producer`, "ArtifactEnvelope");
+  allowedKeys(value.producer, ["name", "version"], `${path}.producer`, "ArtifactEnvelope");
+  string(value.producer.name, `${path}.producer.name`, "ArtifactEnvelope");
+  string(value.producer.version, `${path}.producer.version`, "ArtifactEnvelope");
+  present(value.payload, `${path}.payload`, "ArtifactEnvelope");
+  exact(value.contentHash, payloadContentHash(value.payload), `${path}.contentHash`, "ArtifactEnvelope");
+}
+
+function validateQaIrDocument(value, path) {
+  object(value, path, "QaIrDocument");
+  allowedKeys(value, ["schemaVersion", "id", "source", "suites", "extensions"], path, "QaIrDocument");
+  exact(value.schemaVersion, QA_IR_VERSION, `${path}.schemaVersion`, "QaIrDocument");
+  string(value.id, `${path}.id`, "QaIrDocument");
+  object(value.source, `${path}.source`, "QaIrDocument");
+  allowedKeys(value.source, ["adapter", "adapterVersion", "uri", "revision"], `${path}.source`, "QaIrDocument");
+  string(value.source.adapter, `${path}.source.adapter`, "QaIrDocument");
+  string(value.source.adapterVersion, `${path}.source.adapterVersion`, "QaIrDocument");
+  string(value.source.uri, `${path}.source.uri`, "QaIrDocument");
+  if (value.source.revision !== undefined) string(value.source.revision, `${path}.source.revision`, "QaIrDocument");
+  array(value.suites, `${path}.suites`, "QaIrDocument");
+  value.suites.forEach((suite, index) => validateQaSuite(suite, `${path}.suites[${index}]`));
+  if (value.extensions !== undefined) object(value.extensions, `${path}.extensions`, "QaIrDocument");
+}
+
+function validateQaSuite(value, path) {
+  object(value, path, "QaIrDocument");
+  allowedKeys(value, ["id", "title", "tags", "scenarios", "provenance"], path, "QaIrDocument");
+  string(value.id, `${path}.id`, "QaIrDocument");
+  string(value.title, `${path}.title`, "QaIrDocument");
+  stringArray(value.tags, `${path}.tags`, "QaIrDocument");
+  array(value.scenarios, `${path}.scenarios`, "QaIrDocument");
+  value.scenarios.forEach((scenario, index) => validateQaScenario(scenario, `${path}.scenarios[${index}]`));
+  array(value.provenance, `${path}.provenance`, "QaIrDocument");
+  value.provenance.forEach((item, index) => validateSourceProvenance(item, `${path}.provenance[${index}]`, "QaIrDocument"));
+}
+
+function validateQaScenario(value, path) {
+  object(value, path, "QaIrDocument");
+  allowedKeys(value, ["id", "title", "preconditions", "steps", "expectations", "policy", "provenance"], path, "QaIrDocument");
+  string(value.id, `${path}.id`, "QaIrDocument");
+  string(value.title, `${path}.title`, "QaIrDocument");
+  recordArray(value.preconditions, `${path}.preconditions`, "QaIrDocument");
+  array(value.steps, `${path}.steps`, "QaIrDocument");
+  value.steps.forEach((step, index) => validateQaStep(step, `${path}.steps[${index}]`));
+  recordArray(value.expectations, `${path}.expectations`, "QaIrDocument");
+  object(value.policy, `${path}.policy`, "QaIrDocument");
+  validateCapabilityPolicy(value.policy, `${path}.policy`, "QaIrDocument");
+  array(value.provenance, `${path}.provenance`, "QaIrDocument");
+  value.provenance.forEach((item, index) => validateSourceProvenance(item, `${path}.provenance[${index}]`, "QaIrDocument"));
+}
+
+function validateQaStep(value, path) {
+  object(value, path, "QaIrDocument");
+  string(value.id, `${path}.id`, "QaIrDocument");
+  oneOf(value.kind, ["NAVIGATE", "INTERACT", "OBSERVE", "CHECKPOINT"], `${path}.kind`, "QaIrDocument");
+  if (value.kind === "NAVIGATE") {
+    allowedKeys(value, ["id", "kind", "target"], path, "QaIrDocument");
+    object(value.target, `${path}.target`, "QaIrDocument");
+    allowedKeys(value.target, ["type", "value"], `${path}.target`, "QaIrDocument");
+    oneOf(value.target.type, ["PATH", "URL"], `${path}.target.type`, "QaIrDocument");
+    string(value.target.value, `${path}.target.value`, "QaIrDocument");
+  } else if (value.kind === "INTERACT") {
+    allowedKeys(value, ["id", "kind", "action", "target", "value"], path, "QaIrDocument");
+    oneOf(value.action, ["CLICK", "TYPE", "UPLOAD", "SELECT", "PRESS"], `${path}.action`, "QaIrDocument");
+    validateSemanticTarget(value.target, `${path}.target`);
+  } else if (value.kind === "OBSERVE") {
+    allowedKeys(value, ["id", "kind", "requests"], path, "QaIrDocument");
+    recordArray(value.requests, `${path}.requests`, "QaIrDocument");
+  } else {
+    allowedKeys(value, ["id", "kind", "checkpointId"], path, "QaIrDocument");
+    string(value.checkpointId, `${path}.checkpointId`, "QaIrDocument");
+  }
+}
+
+function validateCapabilityPolicy(value, path, contract) {
+  allowedKeys(value, ["navigation", "readDom", "readNetwork", "click", "type", "upload", "submit", "destructiveMutation", "confirmation", "secrets"], path, contract);
+  oneOf(value.navigation, ["ALLOWED", "BLOCKED"], `${path}.navigation`, contract);
+  bool(value.readDom, `${path}.readDom`, contract);
+  bool(value.readNetwork, `${path}.readNetwork`, contract);
+  oneOf(value.click, ["NONE", "SAFE_ONLY", "ALL"], `${path}.click`, contract);
+  oneOf(value.type, ["NONE", "NON_SECRET", "ALL"], `${path}.type`, contract);
+  bool(value.upload, `${path}.upload`, contract);
+  bool(value.submit, `${path}.submit`, contract);
+  exact(value.destructiveMutation, false, `${path}.destructiveMutation`, contract);
+  oneOf(value.confirmation, ["DENY", "ALLOW_SAFE"], `${path}.confirmation`, contract);
+  exact(value.secrets, "RUNTIME_INJECTED", `${path}.secrets`, contract);
+}
+
+function validateCompileResult(value, path) {
+  object(value, path, "CompileResult");
+  allowedKeys(value, ["schemaVersion", "ok", "qaIr", "diagnostics"], path, "CompileResult");
+  exact(value.schemaVersion, COMPILE_RESULT_VERSION, `${path}.schemaVersion`, "CompileResult");
+  bool(value.ok, `${path}.ok`, "CompileResult");
+  if (value.qaIr !== undefined) validateQaIrDocument(value.qaIr, `${path}.qaIr`);
+  diagnostics(value.diagnostics, `${path}.diagnostics`, "CompileResult");
+  if (value.ok === false && value.diagnostics.length === 0) fail("CompileResult", `${path}.diagnostics`, "failed compilation requires at least one diagnostic");
+}
+
+function validateDiagnostic(value, path) {
+  object(value, path, "Diagnostic");
+  allowedKeys(value, ["schemaVersion", "code", "severity", "message", "path"], path, "Diagnostic");
+  exact(value.schemaVersion, DIAGNOSTIC_VERSION, `${path}.schemaVersion`, "Diagnostic");
+  string(value.code, `${path}.code`, "Diagnostic");
+  oneOf(value.severity, ["INFO", "WARNING", "ERROR"], `${path}.severity`, "Diagnostic");
+  string(value.message, `${path}.message`, "Diagnostic");
+}
+
+function validateProviderCapabilities(value, path) {
+  object(value, path, "ProviderCapabilities");
+  allowedKeys(value, ["schemaVersion", "providerId", "actions", "evidence", "unsupportedEvidence"], path, "ProviderCapabilities");
+  exact(value.schemaVersion, PROVIDER_CAPABILITIES_VERSION, `${path}.schemaVersion`, "ProviderCapabilities");
+  string(value.providerId, `${path}.providerId`, "ProviderCapabilities");
+  stringArray(value.actions, `${path}.actions`, "ProviderCapabilities");
+  stringArray(value.evidence, `${path}.evidence`, "ProviderCapabilities");
+  if (value.unsupportedEvidence !== undefined) stringArray(value.unsupportedEvidence, `${path}.unsupportedEvidence`, "ProviderCapabilities");
+}
+
+function validateExecutionPlan(value, path) {
+  object(value, path, "ExecutionPlan");
+  allowedKeys(value, ["schemaVersion", "planId", "qaIrId", "nodes", "edges", "retryPolicy", "timeoutPolicy"], path, "ExecutionPlan");
+  exact(value.schemaVersion, EXECUTION_PLAN_VERSION, `${path}.schemaVersion`, "ExecutionPlan");
+  string(value.planId, `${path}.planId`, "ExecutionPlan");
+  string(value.qaIrId, `${path}.qaIrId`, "ExecutionPlan");
+  array(value.nodes, `${path}.nodes`, "ExecutionPlan");
+  value.nodes.forEach((node, index) => { object(node, `${path}.nodes[${index}]`, "ExecutionPlan"); string(node.nodeId, `${path}.nodes[${index}].nodeId`, "ExecutionPlan"); });
+  array(value.edges, `${path}.edges`, "ExecutionPlan");
+  value.edges.forEach((edge, index) => { object(edge, `${path}.edges[${index}]`, "ExecutionPlan"); string(edge.from, `${path}.edges[${index}].from`, "ExecutionPlan"); string(edge.to, `${path}.edges[${index}].to`, "ExecutionPlan"); });
+  object(value.retryPolicy, `${path}.retryPolicy`, "ExecutionPlan");
+  object(value.timeoutPolicy, `${path}.timeoutPolicy`, "ExecutionPlan");
+}
+
+function validateRuntimeOutcome(value, path) {
+  object(value, path, "RuntimeOutcome");
+  allowedKeys(value, value.type === "ERROR" ? ["schemaVersion", "stage", "type", "code", "message"] : ["schemaVersion", "stage", "type"], path, "RuntimeOutcome");
+  exact(value.schemaVersion, RUNTIME_OUTCOME_VERSION, `${path}.schemaVersion`, "RuntimeOutcome");
+  oneOf(value.stage, runtimeStages, `${path}.stage`, "RuntimeOutcome");
+  oneOf(value.type, ["COMPLETED", "ERROR"], `${path}.type`, "RuntimeOutcome");
+  if (value.verdict !== undefined) fail("RuntimeOutcome", `${path}.verdict`, "belongs in JudgeResult, not RuntimeOutcome");
+  if (value.type === "ERROR") {
+    oneOf(value.code, RUNTIME_ERROR_CODES, `${path}.code`, "RuntimeOutcome");
+    string(value.message, `${path}.message`, "RuntimeOutcome");
+  }
+}
+
+function validateDeterministicEvaluationResult(value, path) {
+  object(value, path, "DeterministicEvaluationResult");
+  allowedKeys(value, ["schemaVersion", "status", "resolvedChecks", "unresolvedChecks"], path, "DeterministicEvaluationResult");
+  exact(value.schemaVersion, DETERMINISTIC_EVALUATION_VERSION, `${path}.schemaVersion`, "DeterministicEvaluationResult");
+  oneOf(value.status, ["PASS", "FAIL", "MANUAL_REVIEW"], `${path}.status`, "DeterministicEvaluationResult");
+  recordArray(value.resolvedChecks, `${path}.resolvedChecks`, "DeterministicEvaluationResult");
+  recordArray(value.unresolvedChecks, `${path}.unresolvedChecks`, "DeterministicEvaluationResult");
+}
+
+function validateEvidenceBundle(value, path) {
+  object(value, path, "EvidenceBundle");
+  allowedKeys(value, ["schemaVersion", "bundleId", "runId", "scenarioId", "checkpointId", "capturedAt", "environment", "artifacts", "facts", "redaction"], path, "EvidenceBundle");
+  exact(value.schemaVersion, EVIDENCE_BUNDLE_VERSION, `${path}.schemaVersion`, "EvidenceBundle");
+  for (const key of ["bundleId", "runId", "scenarioId", "checkpointId", "capturedAt"]) string(value[key], `${path}.${key}`, "EvidenceBundle");
+  object(value.environment, `${path}.environment`, "EvidenceBundle");
+  allowedKeys(value.environment, ["targetUrl", "browser", "viewport", "locale", "timezone"], `${path}.environment`, "EvidenceBundle");
+  string(value.environment.targetUrl, `${path}.environment.targetUrl`, "EvidenceBundle");
+  string(value.environment.browser, `${path}.environment.browser`, "EvidenceBundle");
+  object(value.environment.viewport, `${path}.environment.viewport`, "EvidenceBundle");
+  allowedKeys(value.environment.viewport, ["width", "height"], `${path}.environment.viewport`, "EvidenceBundle");
+  number(value.environment.viewport.width, `${path}.environment.viewport.width`, "EvidenceBundle");
+  number(value.environment.viewport.height, `${path}.environment.viewport.height`, "EvidenceBundle");
+  if (value.environment.locale !== undefined) string(value.environment.locale, `${path}.environment.locale`, "EvidenceBundle");
+  if (value.environment.timezone !== undefined) string(value.environment.timezone, `${path}.environment.timezone`, "EvidenceBundle");
+  array(value.artifacts, `${path}.artifacts`, "EvidenceBundle");
+  value.artifacts.forEach((artifact, index) => validateEvidenceArtifact(artifact, `${path}.artifacts[${index}]`));
+  array(value.facts, `${path}.facts`, "EvidenceBundle");
+  value.facts.forEach((fact, index) => validateObservedFact(fact, `${path}.facts[${index}]`));
+  object(value.redaction, `${path}.redaction`, "EvidenceBundle");
+  allowedKeys(value.redaction, ["rules", "replacements"], `${path}.redaction`, "EvidenceBundle");
+  stringArray(value.redaction.rules, `${path}.redaction.rules`, "EvidenceBundle");
+  number(value.redaction.replacements, `${path}.redaction.replacements`, "EvidenceBundle");
+}
+
+function validateObservedFact(value, path) {
+  object(value, path, "EvidenceBundle");
+  allowedKeys(value, ["id", "kind", "value"], path, "EvidenceBundle");
+  string(value.id, `${path}.id`, "EvidenceBundle");
+  string(value.kind, `${path}.kind`, "EvidenceBundle");
+  present(value.value, `${path}.value`, "EvidenceBundle");
+}
+
+function validateEvidenceArtifact(value, path) {
+  object(value, path, "EvidenceBundle");
+  allowedKeys(value, ["id", "type", "contentType", "contentHash", "size", "storageRef"], path, "EvidenceBundle");
+  string(value.id, `${path}.id`, "EvidenceBundle");
+  oneOf(value.type, ["SCREENSHOT", "DOM_SNAPSHOT", "ARIA_SNAPSHOT", "VISIBLE_TEXT", "NETWORK_LOG", "CONSOLE_LOG", "TRACE", "ACTION_LOG"], `${path}.type`, "EvidenceBundle");
+  string(value.contentType, `${path}.contentType`, "EvidenceBundle");
+  string(value.contentHash, `${path}.contentHash`, "EvidenceBundle");
+  number(value.size, `${path}.size`, "EvidenceBundle");
+  string(value.storageRef, `${path}.storageRef`, "EvidenceBundle");
+}
+
+function validateEvidenceManifest(value, path) {
+  object(value, path, "EvidenceManifest");
+  allowedKeys(value, ["schemaVersion", "runId", "checkpoints"], path, "EvidenceManifest");
+  exact(value.schemaVersion, EVIDENCE_MANIFEST_VERSION, `${path}.schemaVersion`, "EvidenceManifest");
+  string(value.runId, `${path}.runId`, "EvidenceManifest");
+  array(value.checkpoints, `${path}.checkpoints`, "EvidenceManifest");
+  const checkpointIds = new Set();
+  let previousStage = -1;
+  value.checkpoints.forEach((checkpoint, index) => {
+    const checkpointPath = `${path}.checkpoints[${index}]`;
+    object(checkpoint, checkpointPath, "EvidenceManifest");
+    allowedKeys(checkpoint, ["checkpointId", "stage", "evidenceBundleId", "sealed", "contentHash", "producer"], checkpointPath, "EvidenceManifest");
+    string(checkpoint.checkpointId, `${checkpointPath}.checkpointId`, "EvidenceManifest");
+    if (checkpointIds.has(checkpoint.checkpointId)) fail("EvidenceManifest", `${checkpointPath}.checkpointId`, "must be unique");
+    checkpointIds.add(checkpoint.checkpointId);
+    oneOf(checkpoint.stage, runtimeStages, `${checkpointPath}.stage`, "EvidenceManifest");
+    const stageIndex = runtimeStages.indexOf(checkpoint.stage);
+    if (stageIndex < previousStage) fail("EvidenceManifest", `${checkpointPath}.stage`, "must be non-decreasing");
+    previousStage = stageIndex;
+    string(checkpoint.evidenceBundleId, `${checkpointPath}.evidenceBundleId`, "EvidenceManifest");
+    exact(checkpoint.sealed, true, `${checkpointPath}.sealed`, "EvidenceManifest");
+    string(checkpoint.contentHash, `${checkpointPath}.contentHash`, "EvidenceManifest");
+    object(checkpoint.producer, `${checkpointPath}.producer`, "EvidenceManifest");
+    allowedKeys(checkpoint.producer, ["name", "version"], `${checkpointPath}.producer`, "EvidenceManifest");
+    string(checkpoint.producer.name, `${checkpointPath}.producer.name`, "EvidenceManifest");
+    string(checkpoint.producer.version, `${checkpointPath}.producer.version`, "EvidenceManifest");
+    exact(checkpoint.contentHash, checkpointContentHash(checkpoint), `${checkpointPath}.contentHash`, "EvidenceManifest");
+  });
+}
+
+function validateJudgeResult(value, path, context) {
+  object(value, path, "JudgeResult");
+  allowedKeys(value, ["schemaVersion", "resultId", "qaIrId", "evidenceBundleId", "verdict", "confidence", "expectationResults", "uncertainty", "judge", "inputHash"], path, "JudgeResult");
+  exact(value.schemaVersion, JUDGE_RESULT_VERSION, `${path}.schemaVersion`, "JudgeResult");
+  for (const key of ["resultId", "qaIrId", "evidenceBundleId", "inputHash"]) string(value[key], `${path}.${key}`, "JudgeResult");
+  oneOf(value.verdict, VERDICTS, `${path}.verdict`, "JudgeResult");
+  number(value.confidence, `${path}.confidence`, "JudgeResult");
+  array(value.expectationResults, `${path}.expectationResults`, "JudgeResult");
+  const evidenceIds = context.evidenceBundle ? collectEvidenceIds(context.evidenceBundle, value.evidenceBundleId) : undefined;
+  value.expectationResults.forEach((item, index) => validateExpectationJudgment(item, `${path}.expectationResults[${index}]`, value.verdict, evidenceIds));
+  array(value.uncertainty, `${path}.uncertainty`, "JudgeResult");
+  value.uncertainty.forEach((item, index) => {
+    object(item, `${path}.uncertainty[${index}]`, "JudgeResult");
+    allowedKeys(item, ["code", "description"], `${path}.uncertainty[${index}]`, "JudgeResult");
+    string(item.code, `${path}.uncertainty[${index}].code`, "JudgeResult");
+    string(item.description, `${path}.uncertainty[${index}].description`, "JudgeResult");
+  });
+  object(value.judge, `${path}.judge`, "JudgeResult");
+  allowedKeys(value.judge, ["provider", "model", "modelVersion", "promptVersion"], `${path}.judge`, "JudgeResult");
+  for (const key of ["provider", "model", "promptVersion"]) string(value.judge[key], `${path}.judge.${key}`, "JudgeResult");
+  if (value.judge.modelVersion !== undefined) string(value.judge.modelVersion, `${path}.judge.modelVersion`, "JudgeResult");
+}
+
+function validateExpectationJudgment(value, path, verdict, evidenceIds) {
+  object(value, path, "JudgeResult");
+  allowedKeys(value, ["expectationId", "status", "confidence", "evidenceRefs", "rationale"], path, "JudgeResult");
+  string(value.expectationId, `${path}.expectationId`, "JudgeResult");
+  oneOf(value.status, EXPECTATION_STATUSES, `${path}.status`, "JudgeResult");
+  number(value.confidence, `${path}.confidence`, "JudgeResult");
+  stringArray(value.evidenceRefs, `${path}.evidenceRefs`, "JudgeResult");
+  string(value.rationale, `${path}.rationale`, "JudgeResult");
+  if (verdict === "PASS" && !["MATCHED", "NOT_APPLICABLE"].includes(value.status)) fail("JudgeResult", `${path}.status`, "PASS requires all applicable expectations to be matched");
+  if (verdict !== "SKIP" && value.evidenceRefs.length === 0) fail("JudgeResult", `${path}.evidenceRefs`, "Every non-skipped expectation judgment requires evidence");
+  if (evidenceIds) for (const ref of value.evidenceRefs) if (!evidenceIds.has(ref)) fail("JudgeResult", `${path}.evidenceRefs`, `unknown evidence ref ${ref}`);
+}
+
+function validateSemanticTarget(value, path) {
+  object(value, path, "QaIrDocument");
+  allowedKeys(value, ["role", "accessibleName", "text", "testId", "hints"], path, "QaIrDocument");
+  if (value.role !== undefined) string(value.role, `${path}.role`, "QaIrDocument");
+  if (value.accessibleName !== undefined) present(value.accessibleName, `${path}.accessibleName`, "QaIrDocument");
+  if (value.text !== undefined) present(value.text, `${path}.text`, "QaIrDocument");
+  if (value.testId !== undefined) string(value.testId, `${path}.testId`, "QaIrDocument");
+  if (value.hints !== undefined) {
+    array(value.hints, `${path}.hints`, "QaIrDocument");
+    value.hints.forEach((hint, index) => {
+      object(hint, `${path}.hints[${index}]`, "QaIrDocument");
+      allowedKeys(hint, ["adapter", "data"], `${path}.hints[${index}]`, "QaIrDocument");
+      string(hint.adapter, `${path}.hints[${index}].adapter`, "QaIrDocument");
+      present(hint.data, `${path}.hints[${index}].data`, "QaIrDocument");
+    });
+  }
+}
+
+function validateFailureDiagnosis(value, path) {
+  object(value, path, "FailureDiagnosis");
+  allowedKeys(value, ["schemaVersion", "diagnosisId", "judgeResultId", "origin", "confidence", "symptom", "likelyCause", "supportingEvidenceRefs", "contradictingEvidenceRefs", "remediationEligible", "manualReviewReasons"], path, "FailureDiagnosis");
+  exact(value.schemaVersion, FAILURE_DIAGNOSIS_VERSION, `${path}.schemaVersion`, "FailureDiagnosis");
+  for (const key of ["diagnosisId", "judgeResultId", "symptom", "likelyCause"]) string(value[key], `${path}.${key}`, "FailureDiagnosis");
+  oneOf(value.origin, failureOrigins, `${path}.origin`, "FailureDiagnosis");
+  number(value.confidence, `${path}.confidence`, "FailureDiagnosis");
+  stringArray(value.supportingEvidenceRefs, `${path}.supportingEvidenceRefs`, "FailureDiagnosis");
+  stringArray(value.contradictingEvidenceRefs, `${path}.contradictingEvidenceRefs`, "FailureDiagnosis");
+  bool(value.remediationEligible, `${path}.remediationEligible`, "FailureDiagnosis");
+  stringArray(value.manualReviewReasons, `${path}.manualReviewReasons`, "FailureDiagnosis");
+  if (["UNKNOWN", "ENVIRONMENT", "THIRD_PARTY"].includes(value.origin) && value.remediationEligible) fail("FailureDiagnosis", `${path}.remediationEligible`, `${value.origin} diagnoses cannot auto-patch`);
+}
+
+function validateCodeContextBundle(value, path) {
+  object(value, path, "CodeContextBundle");
+  allowedKeys(value, ["schemaVersion", "bundleId", "repositoryId", "revision", "failureDiagnosisId", "candidates", "snippets", "searchAudit"], path, "CodeContextBundle");
+  exact(value.schemaVersion, CODE_CONTEXT_VERSION, `${path}.schemaVersion`, "CodeContextBundle");
+  for (const key of ["bundleId", "repositoryId", "revision", "failureDiagnosisId"]) string(value[key], `${path}.${key}`, "CodeContextBundle");
+  array(value.candidates, `${path}.candidates`, "CodeContextBundle");
+  value.candidates.forEach((candidate, index) => validateCodeCandidate(candidate, `${path}.candidates[${index}]`));
+  recordArray(value.snippets, `${path}.snippets`, "CodeContextBundle");
+  object(value.searchAudit, `${path}.searchAudit`, "CodeContextBundle");
+  allowedKeys(value.searchAudit, ["queries", "strategies"], `${path}.searchAudit`, "CodeContextBundle");
+  recordArray(value.searchAudit.queries, `${path}.searchAudit.queries`, "CodeContextBundle");
+  stringArray(value.searchAudit.strategies, `${path}.searchAudit.strategies`, "CodeContextBundle");
+}
+
+function validateCodeCandidate(value, path) {
+  object(value, path, "CodeContextBundle");
+  allowedKeys(value, ["path", "symbol", "range", "relevanceScore", "matchReasons"], path, "CodeContextBundle");
+  string(value.path, `${path}.path`, "CodeContextBundle");
+  if (value.symbol !== undefined) string(value.symbol, `${path}.symbol`, "CodeContextBundle");
+  if (value.range !== undefined) object(value.range, `${path}.range`, "CodeContextBundle");
+  number(value.relevanceScore, `${path}.relevanceScore`, "CodeContextBundle");
+  array(value.matchReasons, `${path}.matchReasons`, "CodeContextBundle");
+  value.matchReasons.forEach((reason, index) => oneOf(reason, ["TEST_ID_MATCH", "VISIBLE_TEXT_MATCH", "ROUTE_MATCH", "NETWORK_ENDPOINT_MATCH", "STACK_TRACE_MATCH", "RECENTLY_CHANGED", "DEPENDENCY_MATCH"], `${path}.matchReasons[${index}]`, "CodeContextBundle"));
+}
+
+function validateRepairRecommendation(value, path) {
+  object(value, path, "RepairRecommendation");
+  allowedKeys(value, ["schemaVersion", "recommendationId", "diagnosisId", "repositoryRevision", "title", "severity", "summary", "rootCause", "confidence", "locations", "changes", "verificationPlan", "evidenceRefs", "codeContextRefs", "patchEligibility"], path, "RepairRecommendation");
+  exact(value.schemaVersion, REPAIR_RECOMMENDATION_VERSION, `${path}.schemaVersion`, "RepairRecommendation");
+  for (const key of ["recommendationId", "diagnosisId", "repositoryRevision", "title", "summary", "rootCause"]) string(value[key], `${path}.${key}`, "RepairRecommendation");
+  oneOf(value.severity, ["BLOCKER", "HIGH", "MEDIUM", "LOW"], `${path}.severity`, "RepairRecommendation");
+  number(value.confidence, `${path}.confidence`, "RepairRecommendation");
+  recordArray(value.locations, `${path}.locations`, "RepairRecommendation");
+  recordArray(value.changes, `${path}.changes`, "RepairRecommendation");
+  recordArray(value.verificationPlan, `${path}.verificationPlan`, "RepairRecommendation");
+  stringArray(value.evidenceRefs, `${path}.evidenceRefs`, "RepairRecommendation");
+  stringArray(value.codeContextRefs, `${path}.codeContextRefs`, "RepairRecommendation");
+  oneOf(value.patchEligibility, ["SUGGESTION_ONLY", "PATCH_ALLOWED", "MANUAL_REVIEW_REQUIRED"], `${path}.patchEligibility`, "RepairRecommendation");
+}
+
+function validateSourceProvenance(value, path, contract) {
+  object(value, path, contract);
+  allowedKeys(value, ["repository", "revision", "path", "range", "symbol", "adapter", "contentHash"], path, contract);
+  if (value.repository !== undefined) string(value.repository, `${path}.repository`, contract);
+  if (value.revision !== undefined) string(value.revision, `${path}.revision`, contract);
+  string(value.path, `${path}.path`, contract);
+  object(value.range, `${path}.range`, contract);
+  object(value.range.start, `${path}.range.start`, contract);
+  object(value.range.end, `${path}.range.end`, contract);
+  number(value.range.start.line, `${path}.range.start.line`, contract);
+  number(value.range.start.column, `${path}.range.start.column`, contract);
+  number(value.range.end.line, `${path}.range.end.line`, contract);
+  number(value.range.end.column, `${path}.range.end.column`, contract);
+  if (value.symbol !== undefined) string(value.symbol, `${path}.symbol`, contract);
+  allowedKeys(value.range, ["start", "end"], `${path}.range`, contract);
+  allowedKeys(value.range.start, ["line", "column", "offset"], `${path}.range.start`, contract);
+  allowedKeys(value.range.end, ["line", "column", "offset"], `${path}.range.end`, contract);
+  if (value.range.start.offset !== undefined) number(value.range.start.offset, `${path}.range.start.offset`, contract);
+  if (value.range.end.offset !== undefined) number(value.range.end.offset, `${path}.range.end.offset`, contract);
+  object(value.adapter, `${path}.adapter`, contract);
+  allowedKeys(value.adapter, ["name", "version"], `${path}.adapter`, contract);
+  string(value.adapter.name, `${path}.adapter.name`, contract);
+  string(value.adapter.version, `${path}.adapter.version`, contract);
+  string(value.contentHash, `${path}.contentHash`, contract);
+}
+
+function checkpointContentHash(checkpoint) {
+  return canonicalHash({
+    checkpointId: checkpoint.checkpointId,
+    stage: checkpoint.stage,
+    evidenceBundleId: checkpoint.evidenceBundleId,
+    sealed: checkpoint.sealed,
+    producer: checkpoint.producer,
+  });
+}
+
+function collectEvidenceIds(bundle, expectedBundleId) {
+  validateEvidenceBundle(bundle, "$.evidenceBundle");
+  exact(bundle.bundleId, expectedBundleId, "$.evidenceBundle.bundleId", "JudgeResult");
+  return new Set([
+    ...bundle.artifacts.map((artifact) => artifact.id),
+    ...bundle.facts.filter((fact) => fact.id !== undefined).map((fact) => fact.id),
+  ]);
+}
+
+function diagnostics(value, path, contract) { array(value, path, contract); value.forEach((item, index) => validateDiagnostic(item, `${path}[${index}]`)); }
+function recordArray(value, path, contract) { array(value, path, contract); value.forEach((item, index) => object(item, `${path}[${index}]`, contract)); }
+function allowedKeys(value, allowed, path, contract) { rejectKeys(value, Object.keys(value).filter((key) => !allowed.includes(key)), path, contract); }
+function rejectKeys(value, keys, path, contract) { for (const key of keys) if (Object.hasOwn(value, key)) fail(contract, `${path}.${key}`, "is not allowed"); }
+function object(value, path, contract) { if (!isRecord(value)) fail(contract, path, "must be an object"); }
+function array(value, path, contract) { if (!Array.isArray(value)) fail(contract, path, "must be an array"); }
+function stringArray(value, path, contract) { array(value, path, contract); value.forEach((item, index) => string(item, `${path}[${index}]`, contract)); }
+function string(value, path, contract) { if (typeof value !== "string" || value.length === 0) fail(contract, path, "must be a non-empty string"); }
+function number(value, path, contract) { if (typeof value !== "number" || Number.isNaN(value)) fail(contract, path, "must be a number"); }
+function bool(value, path, contract) { if (typeof value !== "boolean") fail(contract, path, "must be a boolean"); }
+function present(value, path, contract) { if (value === undefined) fail(contract, path, "is required"); }
+function exact(value, expected, path, contract) { if (value !== expected) fail(contract, path, `must equal ${JSON.stringify(expected)}`); }
+function oneOf(value, allowed, path, contract) { if (!allowed.includes(value)) fail(contract, path, `must be one of: ${allowed.join(", ")}`); }
+function isRecord(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
+function fail(contract, path, message) { throw new ContractViolationError(contract, message, path); }
