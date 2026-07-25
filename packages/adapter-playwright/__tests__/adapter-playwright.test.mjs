@@ -55,7 +55,8 @@ describe("compilePlaywrightSpec", () => {
     expect(expectation.expected).toEqual({ kind: "literal", value: "Dashboard" });
     expect(expectation.target.selector).toBeUndefined();
     expect(expectation.target.hints).toEqual([{ adapter: "playwright", data: { kind: "testId", value: "heading" } }]);
-    expect(scenario.steps.map(step => step.kind)).toEqual(["NAVIGATE", "CHECKPOINT"]);
+    expect(scenario.steps.map(step => step.kind)).toEqual(["NAVIGATE", "OBSERVE", "CHECKPOINT"]);
+    expect(scenario.steps[1].requests).toEqual([{ type: "VISIBLE_TEXT" }]);
 
     const regexSource = source.replace("toContainText(\"Dashboard\")", "toContainText(/Dash.+/) ");
     const regexExpectation = compilePlaywrightSpec({ source: regexSource, sourcePath: "dashboard.spec.ts" }).qaIr.suites[0].scenarios[0].expectations[0];
@@ -75,7 +76,7 @@ describe("compilePlaywrightSpec", () => {
   it("omits navigate steps when no qa page is present", () => {
     const noPage = source.replace("// @qa-page: /dashboard\n", "");
     const scenario = compilePlaywrightSpec({ source: noPage, sourcePath: "dashboard.spec.ts" }).qaIr.suites[0].scenarios[0];
-    expect(scenario.steps.map(step => step.kind)).toEqual(["CHECKPOINT"]);
+    expect(scenario.steps.map(step => step.kind)).toEqual(["OBSERVE", "CHECKPOINT"]);
   });
 
   it("uses deterministic discriminators for duplicate titles", () => {

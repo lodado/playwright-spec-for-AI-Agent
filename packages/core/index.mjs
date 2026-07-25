@@ -36,7 +36,7 @@ export function createExecutionPlan({ qaIr, providerCapabilities, retryPolicy = 
     retryPolicy: { ...retryPolicy },
     timeoutPolicy: { ...timeoutPolicy },
   };
-  const plan = { ...body, planId: stableId("plan", body) };
+  const plan = { ...body, planId: stableId("plan", { ...body, qaIrHash: canonicalHash(qaIr) }) };
 
   validatePlanShape(plan, "plan");
   validatePolicyAndCapabilities(plan, providerCapabilities, "plan");
@@ -64,6 +64,20 @@ export async function executePlan({ plan, providerCapabilities, executeNode } = 
     if (error?.code === "TIMEOUT") return runtimeError("execute", "UNKNOWN_RUNTIME_ERROR", "Execution timed out");
     return runtimeError("execute", runtimeErrorCode(error?.code), "Execution provider failed");
   }
+}
+
+export function validateExecutionPlanBinding({ qaIr, plan, providerCapabilities } = {}) {
+  validateContract("QaIrDocument", qaIr);
+  validateContract("ExecutionPlan", plan);
+  validateProviderCapabilitiesInput(providerCapabilities);
+  const expected = createExecutionPlan({
+    qaIr,
+    providerCapabilities,
+    retryPolicy: plan.retryPolicy,
+    timeoutPolicy: plan.timeoutPolicy,
+  });
+  if (canonicalHash(plan) !== canonicalHash(expected)) throw contractError("execute", "execution plan does not match QA IR and provider capabilities");
+  return plan;
 }
 
 function nodesForScenario(suite, scenario) {

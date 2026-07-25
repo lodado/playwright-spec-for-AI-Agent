@@ -97,17 +97,20 @@ function scenarioFromLegacyTest(legacy, test, index, block, source, sourcePath, 
     id: stableId("scenario", legacy.scenarioId, test.checkId, discriminator),
     title: test.title,
     preconditions: [],
-    steps: stepsFromLegacy(legacy, test, discriminator),
+    steps: stepsFromLegacy(legacy, test, discriminator, expectations),
     expectations,
     policy: clonePolicy(POLICY_BY_LIVE_RUN[test.liveRunPolicy] ?? blockedPolicy()),
     provenance: [clone(provenance)],
   };
 }
 
-function stepsFromLegacy(legacy, test, discriminator) {
+function stepsFromLegacy(legacy, test, discriminator, expectations) {
   const steps = [];
   if (legacy.page) {
     steps.push({ id: stableId("step-navigate", legacy.scenarioId, test.checkId, discriminator), kind: "NAVIGATE", target: { type: "PATH", value: legacy.page } });
+  }
+  if (expectations.length > 0) {
+    steps.push({ id: stableId("step-observe", legacy.scenarioId, test.checkId, discriminator), kind: "OBSERVE", requests: [{ type: "VISIBLE_TEXT" }] });
   }
   steps.push({ id: stableId("step-checkpoint", legacy.scenarioId, test.checkId, discriminator), kind: "CHECKPOINT", checkpointId: stableId("checkpoint", legacy.scenarioId, test.checkId, discriminator) });
   return steps;

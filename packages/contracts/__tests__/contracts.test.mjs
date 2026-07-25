@@ -182,6 +182,18 @@ function checkpoint(fields) {
 }
 
 describe("documented runtime contracts", () => {
+  it("requires globally unique QA IR scenario ids", () => {
+    const value = qaIr();
+    value.suites.push({ ...structuredClone(value.suites[0]), id: "suite-other" });
+    expect(() => validateContract("QaIrDocument", value)).toThrow(/scenario ids must be globally unique/);
+  });
+
+  it("requires unique step ids within each QA IR scenario", () => {
+    const value = qaIr();
+    value.suites[0].scenarios[0].steps[1].id = value.suites[0].scenarios[0].steps[0].id;
+    expect(() => validateContract("QaIrDocument", value)).toThrow(/step ids must be unique/);
+  });
+
   it("validates documented core shapes and exact versions", () => {
     const diagnostic = {
       schemaVersion: DIAGNOSTIC_VERSION,
