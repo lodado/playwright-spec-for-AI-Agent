@@ -1,4 +1,4 @@
-import { chmodSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -141,14 +141,21 @@ describe("qa-native CLI security foundation", () => {
     writeFileSync(join(cwd, "a.spec.ts"), "test('a', () => {})");
     const key = Buffer.alloc(32, 0x61).toString("base64");
     const handler = vi.fn(() => 0);
-    const handlers = { execute: handler, judge: handler, replay: handler, report: handler };
+    const handlers = { execute: handler, judge: handler, replay: handler, diagnose: handler, "suggest-fix": handler, report: handler };
     const shared = { cwd, env: { QA_NATIVE_INTEGRITY_KEY: key }, handlers, stdout: vi.fn(), stderr: vi.fn() };
     expect(await runQaNative(["execute", "--spec=a.spec.ts", "--base-url=https://example.test", "--run-dir=.qa/runs/new"], shared)).toBe(0);
     createExclusiveQaDirectory(".qa/runs/existing", { cwd });
     expect(await runQaNative(["judge", "--run-dir=.qa/runs/existing"], shared)).toBe(0);
     expect(await runQaNative(["replay", "--run-dir=.qa/runs/existing"], shared)).toBe(0);
+    expect(await runQaNative(["diagnose", "--run-dir=.qa/runs/existing", "--repository-root=."], shared)).toBe(0);
+    expect(await runQaNative(["suggest-fix", "--run-dir=.qa/runs/existing", "--repository-root=."], shared)).toBe(0);
     expect(await runQaNative(["report", "--run-dir=.qa/runs/existing", "--repository-root=."], shared)).toBe(0);
-    expect(handler).toHaveBeenCalledTimes(4);
+    expect(handler).toHaveBeenCalledTimes(6);
+    expect(handler.mock.calls.at(-2)[0]).toMatchObject({
+      command: "suggest-fix",
+      repositoryRoot: realpathSync(cwd),
+      revision: "HEAD",
+    });
   });
 
   it("removes the raw key from the process environment before dispatch", async () => {

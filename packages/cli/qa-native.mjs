@@ -6,16 +6,22 @@ const INTEGRITY_KEY_ENV = "QA_NATIVE_INTEGRITY_KEY";
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 const MAX_PRIVATE_JSON_BYTES = 4 * 1024 * 1024;
+const REPORT_OPTIONS = new Set(["run-dir", "repository-root", "revision", "judgment"]);
+const REPORT_COMMANDS = new Set(["diagnose", "suggest-fix", "report"]);
 const COMMAND_OPTIONS = Object.freeze({
   execute: new Set(["spec", "base-url", "run-dir"]),
   judge: new Set(["run-dir"]),
   replay: new Set(["run-dir"]),
-  report: new Set(["run-dir", "repository-root", "revision", "judgment"]),
+  diagnose: REPORT_OPTIONS,
+  "suggest-fix": REPORT_OPTIONS,
+  report: REPORT_OPTIONS,
 });
 const COMMAND_USAGE = Object.freeze({
   execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id>",
   judge: "qa-native judge --run-dir=.qa/runs/<id>",
   replay: "qa-native replay --run-dir=.qa/runs/<id>",
+  diagnose: "qa-native diagnose --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
+  "suggest-fix": "qa-native suggest-fix --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
   report: "qa-native report --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
 });
 
@@ -181,7 +187,7 @@ function parseRequest(argv) {
   const command = parsed.positionals[0];
   const supplied = Object.keys(parsed.values).filter((key) => key !== "help");
   if (supplied.some((key) => !COMMAND_OPTIONS[command].has(key))) throw new CliError("invalid command arguments");
-  const required = command === "execute" ? ["spec", "base-url", "run-dir"] : command === "report" ? ["run-dir", "repository-root"] : ["run-dir"];
+  const required = command === "execute" ? ["spec", "base-url", "run-dir"] : REPORT_COMMANDS.has(command) ? ["run-dir", "repository-root"] : ["run-dir"];
   if (required.some((key) => typeof parsed.values[key] !== "string" || parsed.values[key].length === 0)) throw new CliError("required command argument is missing");
   return { command, options: Object.freeze({ ...parsed.values }) };
 }
@@ -200,7 +206,7 @@ function normalizeRequest(request, cwd) {
   }
 
   assertPrivateDirectory(runDirectory);
-  if (request.command !== "report") return Object.freeze({ command: request.command, cwd, runDirectory });
+  if (!REPORT_COMMANDS.has(request.command)) return Object.freeze({ command: request.command, cwd, runDirectory });
   const repositoryRoot = resolveRepositoryRoot(request.options["repository-root"], cwd);
   const judgmentPath = request.options.judgment === undefined ? undefined : resolveRegularInput(request.options.judgment, { root: runDirectory, label: "judgment" });
   return Object.freeze({
