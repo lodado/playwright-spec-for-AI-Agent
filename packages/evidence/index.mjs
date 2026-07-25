@@ -15,8 +15,8 @@ const REDACTION_RULES = Object.freeze([
 
 const CREDENTIAL_PATTERN =
   /["']?\b(access[_-]?token|refresh[_-]?token|id[_-]?token|session(?:[_-]?id)?|token|api[_-]?key|client[_-]?secret|password|passwd|secret)\b["']?(\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,}&]+)/gi;
-const AUTHORIZATION_PATTERN = /["']?\b((?:proxy[-_\s]?)?authorization)\b["']?(\s*:\s*)[^\r\n]+/gi;
-const COOKIE_PATTERN = /["']?\b((?:set[-_\s]?)?cookie)\b["']?(\s*:\s*)[^\r\n]+/gi;
+const AUTHORIZATION_PATTERN = /(["']?\b(?:proxy[-_\s]?)?authorization\b["']?\s*(?::|=|,\s*))(?:(?:"[^"\r\n]*"|'[^'\r\n]*')|[^\r\n,\]}]+)/gi;
+const COOKIE_PATTERN = /(["']?\b(?:set[-_\s]?)?cookie\b["']?\s*(?::|=|,\s*))(?:(?:"[^"\r\n]*"|'[^'\r\n]*')|[^\r\n,\]}]+)/gi;
 const URL_USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s\/@]*@/gi;
 const BINARY_ARTIFACT_TYPES = new Set(["SCREENSHOT", "TRACE"]);
 
@@ -372,6 +372,13 @@ function artifactRefs(value) {
 function redact(value, secrets) {
   if (typeof value === "string") return redactString(value, secrets);
   if (Array.isArray(value)) {
+    if (typeof value[0] === "string" && isSensitiveKey(value[0]) && value.length > 1) {
+      const tail = value.slice(2).map((item) => redact(item, secrets));
+      return {
+        value: [value[0], "[REDACTED]", ...tail.map((item) => item.value)],
+        replacements: 1 + sumReplacements(tail),
+      };
+    }
     const items = value.map((item) => redact(item, secrets));
     return { value: items.map((item) => item.value), replacements: sumReplacements(items) };
   }
@@ -425,13 +432,13 @@ function redactString(value, secrets) {
     replacements += 1;
     return `${key}${separator}[REDACTED]`;
   });
-  redacted = redacted.replace(AUTHORIZATION_PATTERN, (_, key, separator) => {
+  redacted = redacted.replace(AUTHORIZATION_PATTERN, (_, prefix) => {
     replacements += 1;
-    return `${key}${separator}[REDACTED]`;
+    return `${prefix}[REDACTED]`;
   });
-  redacted = redacted.replace(COOKIE_PATTERN, (_, key, separator) => {
+  redacted = redacted.replace(COOKIE_PATTERN, (_, prefix) => {
     replacements += 1;
-    return `${key}${separator}[REDACTED]`;
+    return `${prefix}[REDACTED]`;
   });
   redacted = redacted.replace(URL_USERINFO_PATTERN, (_, scheme) => {
     replacements += 1;

@@ -11,6 +11,8 @@ import {
   EXECUTION_PLAN_VERSION,
   FAILURE_DIAGNOSIS_VERSION,
   JUDGE_RESULT_VERSION,
+  SEMANTIC_JUDGE_DECISION_VERSION,
+  SEMANTIC_JUDGE_INPUT_VERSION,
   PROVIDER_CAPABILITIES_VERSION,
   QA_IR_VERSION,
   REPAIR_RECOMMENDATION_VERSION,
@@ -127,6 +129,46 @@ function judgeResult(overrides = {}) {
   };
 }
 
+
+function semanticJudgeInput(overrides = {}) {
+  return {
+    schemaVersion: SEMANTIC_JUDGE_INPUT_VERSION,
+    qaIrId: "qa-ir-dashboard",
+    evidenceBundleId: "bundle-1",
+    scenario: { id: "scenario-dashboard-loads", title: "Dashboard loads" },
+    expectations: [
+      {
+        id: "expect-heading",
+        kind: "VISIBLE_TEXT",
+        target: { text: "Dashboard" },
+        expected: { kind: "TEXT", value: "Dashboard" },
+      },
+    ],
+    evidence: [
+      { id: "artifact-visible-text", kind: "VISIBLE_TEXT", content: "Dashboard", truncated: false },
+    ],
+    ...overrides,
+  };
+}
+
+function semanticJudgeDecision(overrides = {}) {
+  return {
+    schemaVersion: SEMANTIC_JUDGE_DECISION_VERSION,
+    expectationResults: [
+      {
+        expectationId: "expect-heading",
+        status: "MATCHED",
+        confidence: 0.99,
+        evidenceRefs: ["artifact-visible-text"],
+        rationale: "Visible text includes Dashboard.",
+      },
+    ],
+    uncertainty: [],
+    judge: { provider: "hermes", model: "judge-model", promptVersion: "semantic-judge-prompt/0.1" },
+    ...overrides,
+  };
+}
+
 function checkpoint(fields) {
   const body = {
     checkpointId: fields.checkpointId,
@@ -177,8 +219,8 @@ describe("documented runtime contracts", () => {
       DeterministicEvaluationResult: {
         schemaVersion: DETERMINISTIC_EVALUATION_VERSION,
         status: "MANUAL_REVIEW",
-        resolvedChecks: [{ expectationId: "expect-url", status: "PASS" }],
-        unresolvedChecks: [{ expectationId: "expect-heading" }],
+        resolvedChecks: [{ expectationId: "expect-url", status: "MATCHED", evidenceRefs: ["fact-url"], rationale: "URL fact is deterministic evidence." }],
+        unresolvedChecks: [{ expectationId: "expect-heading", reason: "visible text requires semantic judgment" }],
       },
       EvidenceBundle: bundle,
       EvidenceManifest: {
@@ -190,6 +232,8 @@ describe("documented runtime contracts", () => {
         ],
       },
       JudgeResult: judgeResult(),
+      SemanticJudgeInput: semanticJudgeInput(),
+      SemanticJudgeDecision: semanticJudgeDecision(),
       FailureDiagnosis: {
         schemaVersion: FAILURE_DIAGNOSIS_VERSION,
         diagnosisId: "diagnosis-1",
@@ -270,7 +314,7 @@ describe("documented runtime contracts", () => {
   it("rejects lowercase JudgeResult verdicts and invalid PASS/non-skip evidence invariants", () => {
     expect(() => validateContract("JudgeResult", judgeResult({ verdict: "pass" }))).toThrow(/PASS/);
     expect(() => validateContract("JudgeResult", judgeResult({ expectationResults: [{ ...judgeResult().expectationResults[0], status: "CONTRADICTED" }] }))).toThrow(/PASS requires/);
-    expect(() => validateContract("JudgeResult", judgeResult({ verdict: "FAIL", expectationResults: [{ ...judgeResult().expectationResults[0], evidenceRefs: [] }] }))).toThrow(/requires evidence/);
+    expect(() => validateContract("JudgeResult", judgeResult({ verdict: "FAIL", expectationResults: [{ ...judgeResult().expectationResults[0], evidenceRefs: [] }] }))).toThrow(/evidenceRefs/);
   });
 
   it("validates judge evidence refs against an optional EvidenceBundle context", () => {
@@ -328,4 +372,67 @@ describe("documented runtime contracts", () => {
     };
     for (const [contract, value] of Object.entries(invalid)) expect(() => validateContract(contract, value), contract).toThrow();
   });
+
+  it("rejects DeterministicEvaluationResult drift", () => {
+    const result = {
+      schemaVersion: DETERMINISTIC_EVALUATION_VERSION,
+      status: "MANUAL_REVIEW",
+      resolvedChecks: [{ expectationId: "expect-url", status: "MATCHED", evidenceRefs: ["fact-url"], rationale: "URL fact is deterministic evidence." }],
+      unresolvedChecks: [{ expectationId: "expect-heading", reason: "visible text requires semantic judgment" }],
+    };
+
+    expect(() => validateContract("DeterministicEvaluationResult", {
+      ...result,
+      resolvedChecks: [{ ...result.resolvedChecks[0], status: "PASS" }],
+    })).toThrow(/MATCHED/);
+    expect(() => validateContract("DeterministicEvaluationResult", {
+      ...result,
+      resolvedChecks: [{ ...result.resolvedChecks[0], evidenceRefs: [] }],
+    })).toThrow(/require evidence/);
+    expect(() => validateContract("DeterministicEvaluationResult", {
+      ...result,
+      unresolvedChecks: [{ expectationId: "expect-url", reason: "duplicate" }],
+    })).toThrow(/unique/);
+    expect(() => validateContract("DeterministicEvaluationResult", { ...result, status: "PASS" })).toThrow(/must equal/);
+  });
+
+  it("rejects SemanticJudgeInput and SemanticJudgeDecision drift", () => {
+    const input = semanticJudgeInput();
+    const decision = semanticJudgeDecision();
+
+    expect(validateContract("SemanticJudgeInput", input)).toMatchObject({ schemaVersion: SEMANTIC_JUDGE_INPUT_VERSION });
+    expect(validateContract("SemanticJudgeDecision", decision, { semanticJudgeInput: input })).toMatchObject({ schemaVersion: SEMANTIC_JUDGE_DECISION_VERSION });
+    expect(() => validateContract("SemanticJudgeInput", { ...input, prompt: "leak" })).toThrow(/not allowed/);
+    expect(() => validateContract("SemanticJudgeInput", {
+      ...input,
+      expectations: [...input.expectations, { ...input.expectations[0] }],
+    })).toThrow(/unique/);
+    expect(() => validateContract("SemanticJudgeDecision", {
+      ...decision,
+      expectationResults: [{ ...decision.expectationResults[0], evidenceRefs: ["missing"] }],
+    }, { semanticJudgeInput: input })).toThrow(/unknown evidence ref missing/);
+    expect(() => validateContract("SemanticJudgeDecision", {
+      ...decision,
+      expectationResults: [{ ...decision.expectationResults[0], expectationId: "missing" }],
+    }, { semanticJudgeInput: input })).toThrow(/unknown expectation missing/);
+    expect(() => validateContract("SemanticJudgeDecision", {
+      ...decision,
+      expectationResults: [{ ...decision.expectationResults[0], verdict: "PASS" }],
+    }, { semanticJudgeInput: input })).toThrow(/not allowed/);
+    expect(() => validateContract("SemanticJudgeDecision", {
+      ...decision,
+      expectationResults: [{ ...decision.expectationResults[0], confidence: -1 }],
+    }, { semanticJudgeInput: input })).toThrow(/between 0 and 1/);
+  });
+
+  it("rejects ambiguous evidence ids and out-of-range judge confidence", () => {
+    const bundle = evidenceBundle();
+    bundle.facts[0].id = bundle.artifacts[0].id;
+    expect(() => validateContract("EvidenceBundle", bundle)).toThrow(/globally unique/);
+    expect(() => validateContract("JudgeResult", judgeResult({ confidence: 2 }))).toThrow(/between 0 and 1/);
+    expect(() => validateContract("JudgeResult", judgeResult({
+      expectationResults: [{ ...judgeResult().expectationResults[0], confidence: -1 }],
+    }))).toThrow(/between 0 and 1/);
+  });
+
 });

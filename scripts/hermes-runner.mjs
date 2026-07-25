@@ -15,9 +15,14 @@ export const HERMES_QA_COMMAND =
   process.env.HERMES_QA_COMMAND?.trim() || REQUIRED_HERMES_AGENT_BIN;
 
 /** Disable browsing/terminal for abstract-ai and review (JSON-in, JSON-out). */
-export const HERMES_QA_TEXT_ONLY_DISABLED_TOOLSETS =
-  process.env.HERMES_QA_DISABLED_TOOLSETS?.trim() ||
-  "browser,web,terminal";
+export function resolveTextOnlyDisabledToolsets(configured = process.env.HERMES_QA_DISABLED_TOOLSETS) {
+  return [...new Set([
+    "*",
+    ...(configured ?? "").split(",").map(item => item.trim()).filter(Boolean),
+  ])].join(",");
+}
+
+export const HERMES_QA_TEXT_ONLY_DISABLED_TOOLSETS = resolveTextOnlyDisabledToolsets();
 
 /**
  * Hermes memory toolset, disabled on every QA run so the agent cannot write
@@ -292,7 +297,7 @@ function throwIfHermesAuthRejected(output, rawOutputPath = null) {
 
 /**
  * @param {"browse"|"text-only"} [options.mode]
- *   text-only — disable browser/terminal toolsets (abstract-ai, review)
+ *   text-only — disable every toolset (offline semantic judgment)
  *   browse — full toolsets (judge)
  */
 export function runHermes(

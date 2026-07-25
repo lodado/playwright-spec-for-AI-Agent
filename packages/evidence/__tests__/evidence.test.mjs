@@ -323,7 +323,9 @@ describe("evidence store", () => {
       content: [
         "Authorization: Basic dXNlcjpwYXNz",
         '"Authorization" : "Bearer quoted-secret"',
+        "Authorization = Basic equals-secret",
         "Cookie: session=raw-cookie",
+        "Cookie = SID=equals-cookie",
         "GET https://example.test/?access_token=url-token&safe=true",
         'client_secret="hello world"',
         "'client_secret' = 'quoted-key-secret'",
@@ -349,6 +351,7 @@ describe("evidence store", () => {
             "ssh://git-secret@example.test/repo",
             "https://:password-secret@example.test/",
           ],
+          headers: [["Authorization", "Bearer pair-secret"], ["Cookie", "SID=pair-cookie"]],
         },
       }],
     });
@@ -357,6 +360,8 @@ describe("evidence store", () => {
       "dXNlcjpwYXNz",
       "raw-cookie",
       "quoted-secret",
+      "equals-secret",
+      "equals-cookie",
       "url-token",
       "hello world",
       "quoted-key-secret",
@@ -366,6 +371,8 @@ describe("evidence store", () => {
       "token-secret",
       "git-secret",
       "password-secret",
+      "pair-secret",
+      "pair-cookie",
     ]) {
       expect(persisted).not.toContain(secret);
     }

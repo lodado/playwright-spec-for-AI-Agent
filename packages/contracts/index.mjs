@@ -12,6 +12,8 @@ export const DETERMINISTIC_EVALUATION_VERSION = "deterministic-evaluation/0.1";
 export const EVIDENCE_BUNDLE_VERSION = "evidence-bundle/0.1";
 export const EVIDENCE_MANIFEST_VERSION = "evidence-manifest/0.1";
 export const JUDGE_RESULT_VERSION = "judge-result/0.1";
+export const SEMANTIC_JUDGE_INPUT_VERSION = "semantic-judge-input/0.1";
+export const SEMANTIC_JUDGE_DECISION_VERSION = "semantic-judge-decision/0.1";
 export const FAILURE_DIAGNOSIS_VERSION = "failure-diagnosis/0.1";
 export const CODE_CONTEXT_VERSION = "code-context/0.1";
 export const REPAIR_RECOMMENDATION_VERSION = "repair-recommendation/0.1";
@@ -59,6 +61,8 @@ const schemas = {
   EvidenceBundle: validateEvidenceBundle,
   EvidenceManifest: validateEvidenceManifest,
   JudgeResult: validateJudgeResult,
+  SemanticJudgeInput: validateSemanticJudgeInput,
+  SemanticJudgeDecision: validateSemanticJudgeDecision,
   FailureDiagnosis: validateFailureDiagnosis,
   CodeContextBundle: validateCodeContextBundle,
   RepairRecommendation: validateRepairRecommendation,
@@ -227,6 +231,24 @@ function validateCapabilityPolicy(value, path, contract) {
   exact(value.secrets, "RUNTIME_INJECTED", `${path}.secrets`, contract);
 }
 
+function validateSemanticTarget(value, path) {
+  object(value, path, "QaIrDocument");
+  allowedKeys(value, ["role", "accessibleName", "text", "testId", "hints"], path, "QaIrDocument");
+  if (value.role !== undefined) string(value.role, `${path}.role`, "QaIrDocument");
+  if (value.accessibleName !== undefined) present(value.accessibleName, `${path}.accessibleName`, "QaIrDocument");
+  if (value.text !== undefined) present(value.text, `${path}.text`, "QaIrDocument");
+  if (value.testId !== undefined) string(value.testId, `${path}.testId`, "QaIrDocument");
+  if (value.hints !== undefined) {
+    array(value.hints, `${path}.hints`, "QaIrDocument");
+    value.hints.forEach((hint, index) => {
+      object(hint, `${path}.hints[${index}]`, "QaIrDocument");
+      allowedKeys(hint, ["adapter", "data"], `${path}.hints[${index}]`, "QaIrDocument");
+      string(hint.adapter, `${path}.hints[${index}].adapter`, "QaIrDocument");
+      present(hint.data, `${path}.hints[${index}].data`, "QaIrDocument");
+    });
+  }
+}
+
 function validateCompileResult(value, path) {
   object(value, path, "CompileResult");
   allowedKeys(value, ["schemaVersion", "ok", "qaIr", "diagnostics"], path, "CompileResult");
@@ -288,8 +310,36 @@ function validateDeterministicEvaluationResult(value, path) {
   allowedKeys(value, ["schemaVersion", "status", "resolvedChecks", "unresolvedChecks"], path, "DeterministicEvaluationResult");
   exact(value.schemaVersion, DETERMINISTIC_EVALUATION_VERSION, `${path}.schemaVersion`, "DeterministicEvaluationResult");
   oneOf(value.status, ["PASS", "FAIL", "MANUAL_REVIEW"], `${path}.status`, "DeterministicEvaluationResult");
-  recordArray(value.resolvedChecks, `${path}.resolvedChecks`, "DeterministicEvaluationResult");
-  recordArray(value.unresolvedChecks, `${path}.unresolvedChecks`, "DeterministicEvaluationResult");
+  array(value.resolvedChecks, `${path}.resolvedChecks`, "DeterministicEvaluationResult");
+  array(value.unresolvedChecks, `${path}.unresolvedChecks`, "DeterministicEvaluationResult");
+  const expectationIds = new Set();
+  value.resolvedChecks.forEach((item, index) => {
+    const itemPath = `${path}.resolvedChecks[${index}]`;
+    object(item, itemPath, "DeterministicEvaluationResult");
+    allowedKeys(item, ["expectationId", "status", "evidenceRefs", "rationale"], itemPath, "DeterministicEvaluationResult");
+    string(item.expectationId, `${itemPath}.expectationId`, "DeterministicEvaluationResult");
+    if (expectationIds.has(item.expectationId)) fail("DeterministicEvaluationResult", `${itemPath}.expectationId`, "must be unique");
+    expectationIds.add(item.expectationId);
+    oneOf(item.status, ["MATCHED", "CONTRADICTED", "NOT_APPLICABLE"], `${itemPath}.status`, "DeterministicEvaluationResult");
+    stringArray(item.evidenceRefs, `${itemPath}.evidenceRefs`, "DeterministicEvaluationResult");
+    if (item.evidenceRefs.length === 0) fail("DeterministicEvaluationResult", `${itemPath}.evidenceRefs`, "resolved checks require evidence");
+    string(item.rationale, `${itemPath}.rationale`, "DeterministicEvaluationResult");
+  });
+  value.unresolvedChecks.forEach((item, index) => {
+    const itemPath = `${path}.unresolvedChecks[${index}]`;
+    object(item, itemPath, "DeterministicEvaluationResult");
+    allowedKeys(item, ["expectationId", "reason"], itemPath, "DeterministicEvaluationResult");
+    string(item.expectationId, `${itemPath}.expectationId`, "DeterministicEvaluationResult");
+    if (expectationIds.has(item.expectationId)) fail("DeterministicEvaluationResult", `${itemPath}.expectationId`, "must be unique");
+    expectationIds.add(item.expectationId);
+    string(item.reason, `${itemPath}.reason`, "DeterministicEvaluationResult");
+  });
+  const expectedStatus = value.resolvedChecks.some((item) => item.status === "CONTRADICTED")
+    ? "FAIL"
+    : value.unresolvedChecks.length > 0 || value.resolvedChecks.length === 0
+      ? "MANUAL_REVIEW"
+      : "PASS";
+  exact(value.status, expectedStatus, `${path}.status`, "DeterministicEvaluationResult");
 }
 
 function validateEvidenceBundle(value, path) {
@@ -311,6 +361,8 @@ function validateEvidenceBundle(value, path) {
   value.artifacts.forEach((artifact, index) => validateEvidenceArtifact(artifact, `${path}.artifacts[${index}]`));
   array(value.facts, `${path}.facts`, "EvidenceBundle");
   value.facts.forEach((fact, index) => validateObservedFact(fact, `${path}.facts[${index}]`));
+  const evidenceIds = [...value.artifacts, ...value.facts].map((item) => item.id);
+  if (new Set(evidenceIds).size !== evidenceIds.length) fail("EvidenceBundle", path, "artifact and fact ids must be globally unique");
   object(value.redaction, `${path}.redaction`, "EvidenceBundle");
   allowedKeys(value.redaction, ["rules", "replacements"], `${path}.redaction`, "EvidenceBundle");
   stringArray(value.redaction.rules, `${path}.redaction.rules`, "EvidenceBundle");
@@ -367,13 +419,99 @@ function validateEvidenceManifest(value, path) {
   });
 }
 
+function validateSemanticJudgeInput(value, path) {
+  object(value, path, "SemanticJudgeInput");
+  allowedKeys(value, ["schemaVersion", "qaIrId", "evidenceBundleId", "scenario", "expectations", "evidence"], path, "SemanticJudgeInput");
+  exact(value.schemaVersion, SEMANTIC_JUDGE_INPUT_VERSION, `${path}.schemaVersion`, "SemanticJudgeInput");
+  string(value.qaIrId, `${path}.qaIrId`, "SemanticJudgeInput");
+  string(value.evidenceBundleId, `${path}.evidenceBundleId`, "SemanticJudgeInput");
+  object(value.scenario, `${path}.scenario`, "SemanticJudgeInput");
+  allowedKeys(value.scenario, ["id", "title"], `${path}.scenario`, "SemanticJudgeInput");
+  string(value.scenario.id, `${path}.scenario.id`, "SemanticJudgeInput");
+  string(value.scenario.title, `${path}.scenario.title`, "SemanticJudgeInput");
+  array(value.expectations, `${path}.expectations`, "SemanticJudgeInput");
+  const expectationIds = new Set();
+  value.expectations.forEach((item, index) => {
+    const itemPath = `${path}.expectations[${index}]`;
+    object(item, itemPath, "SemanticJudgeInput");
+    allowedKeys(item, ["id", "kind", "target", "expected", "text", "attribute"], itemPath, "SemanticJudgeInput");
+    string(item.id, `${itemPath}.id`, "SemanticJudgeInput");
+    if (expectationIds.has(item.id)) fail("SemanticJudgeInput", `${itemPath}.id`, "must be unique");
+    expectationIds.add(item.id);
+    string(item.kind, `${itemPath}.kind`, "SemanticJudgeInput");
+    if (item.target !== undefined) validatePromptSemanticTarget(item.target, `${itemPath}.target`);
+    for (const key of ["expected", "text", "attribute"]) if (item[key] !== undefined) present(item[key], `${itemPath}.${key}`, "SemanticJudgeInput");
+  });
+  array(value.evidence, `${path}.evidence`, "SemanticJudgeInput");
+  const evidenceIds = new Set();
+  value.evidence.forEach((item, index) => {
+    const itemPath = `${path}.evidence[${index}]`;
+    object(item, itemPath, "SemanticJudgeInput");
+    allowedKeys(item, ["id", "kind", "content", "truncated"], itemPath, "SemanticJudgeInput");
+    string(item.id, `${itemPath}.id`, "SemanticJudgeInput");
+    if (evidenceIds.has(item.id)) fail("SemanticJudgeInput", `${itemPath}.id`, "must be unique");
+    evidenceIds.add(item.id);
+    string(item.kind, `${itemPath}.kind`, "SemanticJudgeInput");
+    string(item.content, `${itemPath}.content`, "SemanticJudgeInput");
+    bool(item.truncated, `${itemPath}.truncated`, "SemanticJudgeInput");
+  });
+}
+
+function validatePromptSemanticTarget(value, path) {
+  object(value, path, "SemanticJudgeInput");
+  allowedKeys(value, ["role", "accessibleName", "text", "testId", "hints"], path, "SemanticJudgeInput");
+  if (value.role !== undefined) string(value.role, `${path}.role`, "SemanticJudgeInput");
+  if (value.accessibleName !== undefined) present(value.accessibleName, `${path}.accessibleName`, "SemanticJudgeInput");
+  if (value.text !== undefined) present(value.text, `${path}.text`, "SemanticJudgeInput");
+  if (value.testId !== undefined) string(value.testId, `${path}.testId`, "SemanticJudgeInput");
+  if (value.hints !== undefined) {
+    array(value.hints, `${path}.hints`, "SemanticJudgeInput");
+    value.hints.forEach((hint, index) => {
+      object(hint, `${path}.hints[${index}]`, "SemanticJudgeInput");
+      allowedKeys(hint, ["adapter", "data"], `${path}.hints[${index}]`, "SemanticJudgeInput");
+      string(hint.adapter, `${path}.hints[${index}].adapter`, "SemanticJudgeInput");
+      present(hint.data, `${path}.hints[${index}].data`, "SemanticJudgeInput");
+    });
+  }
+}
+
+function validateSemanticJudgeDecision(value, path, context = {}) {
+  object(value, path, "SemanticJudgeDecision");
+  allowedKeys(value, ["schemaVersion", "expectationResults", "uncertainty", "judge"], path, "SemanticJudgeDecision");
+  exact(value.schemaVersion, SEMANTIC_JUDGE_DECISION_VERSION, `${path}.schemaVersion`, "SemanticJudgeDecision");
+  array(value.expectationResults, `${path}.expectationResults`, "SemanticJudgeDecision");
+  const input = context.semanticJudgeInput;
+  if (input) validateSemanticJudgeInput(input, "$.semanticJudgeInput");
+  const evidenceIds = input ? new Set(input.evidence.map((item) => item.id)) : context.evidenceIds ? new Set(context.evidenceIds) : undefined;
+  const expectationIds = input ? new Set(input.expectations.map((item) => item.id)) : context.expectationIds ? new Set(context.expectationIds) : undefined;
+  const seen = new Set();
+  value.expectationResults.forEach((item, index) => {
+    const itemPath = `${path}.expectationResults[${index}]`;
+    validateExpectationJudgment(item, itemPath, undefined, evidenceIds, "SemanticJudgeDecision", expectationIds);
+    if (seen.has(item.expectationId)) fail("SemanticJudgeDecision", `${itemPath}.expectationId`, "must be unique");
+    seen.add(item.expectationId);
+  });
+  array(value.uncertainty, `${path}.uncertainty`, "SemanticJudgeDecision");
+  value.uncertainty.forEach((item, index) => {
+    const itemPath = `${path}.uncertainty[${index}]`;
+    object(item, itemPath, "SemanticJudgeDecision");
+    allowedKeys(item, ["code", "description"], itemPath, "SemanticJudgeDecision");
+    string(item.code, `${itemPath}.code`, "SemanticJudgeDecision");
+    string(item.description, `${itemPath}.description`, "SemanticJudgeDecision");
+  });
+  object(value.judge, `${path}.judge`, "SemanticJudgeDecision");
+  allowedKeys(value.judge, ["provider", "model", "modelVersion", "promptVersion"], `${path}.judge`, "SemanticJudgeDecision");
+  for (const key of ["provider", "model", "promptVersion"]) string(value.judge[key], `${path}.judge.${key}`, "SemanticJudgeDecision");
+  if (value.judge.modelVersion !== undefined) string(value.judge.modelVersion, `${path}.judge.modelVersion`, "SemanticJudgeDecision");
+}
+
 function validateJudgeResult(value, path, context) {
   object(value, path, "JudgeResult");
   allowedKeys(value, ["schemaVersion", "resultId", "qaIrId", "evidenceBundleId", "verdict", "confidence", "expectationResults", "uncertainty", "judge", "inputHash"], path, "JudgeResult");
   exact(value.schemaVersion, JUDGE_RESULT_VERSION, `${path}.schemaVersion`, "JudgeResult");
   for (const key of ["resultId", "qaIrId", "evidenceBundleId", "inputHash"]) string(value[key], `${path}.${key}`, "JudgeResult");
   oneOf(value.verdict, VERDICTS, `${path}.verdict`, "JudgeResult");
-  number(value.confidence, `${path}.confidence`, "JudgeResult");
+  probability(value.confidence, `${path}.confidence`, "JudgeResult");
   array(value.expectationResults, `${path}.expectationResults`, "JudgeResult");
   const evidenceIds = context.evidenceBundle ? collectEvidenceIds(context.evidenceBundle, value.evidenceBundleId) : undefined;
   value.expectationResults.forEach((item, index) => validateExpectationJudgment(item, `${path}.expectationResults[${index}]`, value.verdict, evidenceIds));
@@ -390,35 +528,18 @@ function validateJudgeResult(value, path, context) {
   if (value.judge.modelVersion !== undefined) string(value.judge.modelVersion, `${path}.judge.modelVersion`, "JudgeResult");
 }
 
-function validateExpectationJudgment(value, path, verdict, evidenceIds) {
-  object(value, path, "JudgeResult");
-  allowedKeys(value, ["expectationId", "status", "confidence", "evidenceRefs", "rationale"], path, "JudgeResult");
-  string(value.expectationId, `${path}.expectationId`, "JudgeResult");
-  oneOf(value.status, EXPECTATION_STATUSES, `${path}.status`, "JudgeResult");
-  number(value.confidence, `${path}.confidence`, "JudgeResult");
-  stringArray(value.evidenceRefs, `${path}.evidenceRefs`, "JudgeResult");
-  string(value.rationale, `${path}.rationale`, "JudgeResult");
-  if (verdict === "PASS" && !["MATCHED", "NOT_APPLICABLE"].includes(value.status)) fail("JudgeResult", `${path}.status`, "PASS requires all applicable expectations to be matched");
-  if (verdict !== "SKIP" && value.evidenceRefs.length === 0) fail("JudgeResult", `${path}.evidenceRefs`, "Every non-skipped expectation judgment requires evidence");
-  if (evidenceIds) for (const ref of value.evidenceRefs) if (!evidenceIds.has(ref)) fail("JudgeResult", `${path}.evidenceRefs`, `unknown evidence ref ${ref}`);
-}
-
-function validateSemanticTarget(value, path) {
-  object(value, path, "QaIrDocument");
-  allowedKeys(value, ["role", "accessibleName", "text", "testId", "hints"], path, "QaIrDocument");
-  if (value.role !== undefined) string(value.role, `${path}.role`, "QaIrDocument");
-  if (value.accessibleName !== undefined) present(value.accessibleName, `${path}.accessibleName`, "QaIrDocument");
-  if (value.text !== undefined) present(value.text, `${path}.text`, "QaIrDocument");
-  if (value.testId !== undefined) string(value.testId, `${path}.testId`, "QaIrDocument");
-  if (value.hints !== undefined) {
-    array(value.hints, `${path}.hints`, "QaIrDocument");
-    value.hints.forEach((hint, index) => {
-      object(hint, `${path}.hints[${index}]`, "QaIrDocument");
-      allowedKeys(hint, ["adapter", "data"], `${path}.hints[${index}]`, "QaIrDocument");
-      string(hint.adapter, `${path}.hints[${index}].adapter`, "QaIrDocument");
-      present(hint.data, `${path}.hints[${index}].data`, "QaIrDocument");
-    });
-  }
+function validateExpectationJudgment(value, path, verdict, evidenceIds, contract = "JudgeResult", expectationIds) {
+  object(value, path, contract);
+  allowedKeys(value, ["expectationId", "status", "confidence", "evidenceRefs", "rationale"], path, contract);
+  string(value.expectationId, `${path}.expectationId`, contract);
+  if (expectationIds && !expectationIds.has(value.expectationId)) fail(contract, `${path}.expectationId`, `unknown expectation ${value.expectationId}`);
+  oneOf(value.status, EXPECTATION_STATUSES, `${path}.status`, contract);
+  probability(value.confidence, `${path}.confidence`, contract);
+  stringArray(value.evidenceRefs, `${path}.evidenceRefs`, contract);
+  string(value.rationale, `${path}.rationale`, contract);
+  if (verdict === "PASS" && !["MATCHED", "NOT_APPLICABLE"].includes(value.status)) fail(contract, `${path}.status`, "PASS requires all applicable expectations to be matched");
+  if (verdict !== "SKIP" && value.evidenceRefs.length === 0) fail(contract, `${path}.evidenceRefs`, "Every non-skipped expectation judgment requires evidence");
+  if (evidenceIds) for (const ref of value.evidenceRefs) if (!evidenceIds.has(ref)) fail(contract, `${path}.evidenceRefs`, `unknown evidence ref ${ref}`);
 }
 
 function validateFailureDiagnosis(value, path) {
@@ -530,6 +651,7 @@ function array(value, path, contract) { if (!Array.isArray(value)) fail(contract
 function stringArray(value, path, contract) { array(value, path, contract); value.forEach((item, index) => string(item, `${path}[${index}]`, contract)); }
 function string(value, path, contract) { if (typeof value !== "string" || value.length === 0) fail(contract, path, "must be a non-empty string"); }
 function number(value, path, contract) { if (typeof value !== "number" || Number.isNaN(value)) fail(contract, path, "must be a number"); }
+function probability(value, path, contract) { number(value, path, contract); if (!Number.isFinite(value) || value < 0 || value > 1) fail(contract, path, "must be between 0 and 1"); }
 function bool(value, path, contract) { if (typeof value !== "boolean") fail(contract, path, "must be a boolean"); }
 function present(value, path, contract) { if (value === undefined) fail(contract, path, "is required"); }
 function exact(value, expected, path, contract) { if (value !== expected) fail(contract, path, `must equal ${JSON.stringify(expected)}`); }
