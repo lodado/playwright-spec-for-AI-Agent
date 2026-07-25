@@ -1,20 +1,6 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { LEGACY_COMMANDS, runLegacyCommand } from "../packages/cli/index.mjs";
 import { printProjectConfigHelp } from "../scripts/hermes-qa-project-config.mjs";
-
-const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const SCRIPTS_DIR = join(PACKAGE_ROOT, "scripts");
-
-const COMMANDS = {
-  spec: "extract-page-e2e-spec.mjs",
-  "abstract-ai": "run-hermes-spec-abstractor.mjs",
-  judge: "run-hermes-page-judge.mjs",
-  review: "run-hermes-judge-review.mjs",
-  slack: "slack-page-qa-report.mjs",
-  nightly: "run-page-qa-nightly.mjs",
-};
 
 const HELP = `playwright-spec-for-AI-Agent — AI staging QA for Playwright specs
 
@@ -54,16 +40,6 @@ function printHelp() {
   printProjectConfigHelp();
 }
 
-function runScript(scriptName, args) {
-  const scriptPath = join(SCRIPTS_DIR, scriptName);
-  const result = spawnSync(process.execPath, [scriptPath, ...args], {
-    stdio: "inherit",
-    env: process.env,
-    cwd: process.cwd(),
-  });
-  process.exit(result.status ?? 1);
-}
-
 function main() {
   const argv = process.argv.slice(2);
 
@@ -79,14 +55,13 @@ function main() {
     process.exit(0);
   }
 
-  const script = COMMANDS[command];
-  if (!script) {
+  if (!LEGACY_COMMANDS[command]) {
     console.error(`Unknown command: ${command}\n`);
     printHelp();
     process.exit(1);
   }
 
-  runScript(script, rest);
+  process.exit(runLegacyCommand(command, rest));
 }
 
 main();
