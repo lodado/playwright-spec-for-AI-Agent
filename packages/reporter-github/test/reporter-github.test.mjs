@@ -13,6 +13,7 @@ test("maps product, manual, warning, and infrastructure outcomes to GitHub concl
   assert.equal(classifyReporterOutcome({ findings: [criticalBehavioral()] }).conclusion, "failure");
   assert.equal(classifyReporterOutcome({ findings: [{ ...criticalBehavioral(), confidence: { overall: "medium" } }], sampleCount: 1 }).conclusion, "neutral");
   assert.equal(classifyReporterOutcome({ comparisonStatus: "unstable" }).conclusion, "action_required");
+  assert.equal(classifyReporterOutcome({ comparisonStatus: "baseline_better" }).conclusion, "neutral");
   assert.deepEqual(classifyReporterOutcome({ runtimeError: { code: "MODEL_TIMEOUT", message: "model timed out" } }), { kind: "infrastructure", conclusion: "neutral", summary: "model timed out" });
   assert.equal(classifyReporterOutcome({ runtimeError: { code: "BROWSER_START_FAILED" }, releaseGate: { infrastructureFailureConclusion: "failure" } }).conclusion, "failure");
 });
@@ -65,7 +66,7 @@ test("GitHub CLI transport uses bounded gh payloads, safe env, and marker idempo
     { id: 4, html_url: "https://github.com/owner/repo/issues/7#issuecomment-4", body: `${marker}\nnew` },
     { id: 88, conclusion: "neutral", html_url: "https://github.com/owner/repo/runs/88" },
   ]);
-  const transport = createGitHubCliTransport({ spawn });
+  const transport = createGitHubCliTransport({ spawn, botLogin: "bot" });
   assert.equal((await transport.findPrComment({ repository: "owner/repo", prNumber: 7, studyId: "signup-flow" })).id, 4);
   await transport.updatePrComment({ repository: "owner/repo", commentId: 4, body: `${marker}\nnew` });
   await transport.createCheckRun({ repository: "owner/repo", headSha: "a".repeat(40), conclusion: "neutral", summary: "ok", detailsUrl: "https://github.com/owner/repo/actions/runs/1" });
@@ -77,10 +78,26 @@ test("GitHub CLI transport uses bounded gh payloads, safe env, and marker idempo
   assert.equal(JSON.parse(spawn.mock.calls[2][2].input).conclusion, "neutral");
 });
 
-test("rejects unsafe artifact URLs and ambiguous marker comments", async () => {
+test("matches markers only from the configured bot and ignores foreign duplicates", async () => {
+  const marker = markerLine("signup-flow");
+  const transport = createGitHubCliTransport({
+    botLogin: "trusted-bot[bot]",
+    spawn: mockSpawn([[
+      { id: 1, html_url: "https://github.com/owner/repo/issues/7#issuecomment-1", body: marker, user: { login: "attacker" } },
+      { id: 2, html_url: "https://github.com/owner/repo/issues/7#issuecomment-2", body: marker, user: { login: "attacker-2" } },
+      { id: 3, html_url: "https://github.com/owner/repo/issues/7#issuecomment-3", body: `${marker}\n${marker}`, user: { login: "Trusted-Bot[bot]" } },
+    ]]),
+  });
+  assert.equal((await transport.findPrComment({ repository: "owner/repo", prNumber: 7, studyId: "signup-flow" })).id, 3);
+});
+
+test("rejects unsafe artifact URLs and ambiguous trusted-bot marker comments", async () => {
   assert.throws(() => renderBehavioralPrComment({ studyId: "signup-flow", outcome: {}, artifactLinks: [{ label: "bad", url: "javascript:alert(1)" }] }), /HTTPS/);
   const marker = markerLine("signup-flow");
-  const transport = createGitHubCliTransport({ spawn: mockSpawn([[{ id: 1, html_url: "https://github.com/owner/repo/issues/7#issuecomment-1", body: marker }, { id: 2, html_url: "https://github.com/owner/repo/issues/7#issuecomment-2", body: marker }]]) });
+  const transport = createGitHubCliTransport({ botLogin: "bot", spawn: mockSpawn([[
+    { id: 1, html_url: "https://github.com/owner/repo/issues/7#issuecomment-1", body: marker, user: { login: "bot" } },
+    { id: 2, html_url: "https://github.com/owner/repo/issues/7#issuecomment-2", body: marker, user: { login: "bot" } },
+  ]]) });
   await assert.rejects(() => transport.findPrComment({ repository: "owner/repo", prNumber: 7, studyId: "signup-flow" }), /ambiguous/);
 });
 

@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, extname, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { lstat, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
+import { dirname, extname, relative, resolve } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
   FUNCTIONAL_EVALUATION_VERSION,
@@ -44,6 +45,8 @@ Usage:
   persona-runtime compare <study.yaml> --baseline=<url> --candidate=<url> [--output=.qa/run]
   persona-runtime import-playwright --spec-dir=<dir> --base-url=<url> --output=<study.yaml>
 `;
+const MAX_ORACLE_REGEX_PATTERN_LENGTH = 256;
+const MAX_ORACLE_REGEX_INPUT_LENGTH = 10_000;
 
 export async function loadStudy(path) {
   const text = await readFile(path, "utf8");
@@ -55,7 +58,7 @@ export async function runPersonaStudy({ study, outputDir, driverFactory, policyF
   const validatedStudy = validateStudySpec(structuredClone(study));
   const runRoot = resolve(outputDir ?? `.qa/runs/run-${Date.now()}`);
   await mkdir(runRoot, { recursive: true });
-  await atomicJson(`${runRoot}/study.json`, validatedStudy);
+  await atomicJson(`${runRoot}/study.json`, redactStudyForPersistence(validatedStudy));
 
   const result = await runStudy({
     study: validatedStudy,
@@ -72,7 +75,9 @@ export async function runPersonaStudy({ study, outputDir, driverFactory, policyF
     const task = validatedStudy.tasks.find(item => item.id === session.taskId);
     let functionalEvaluation;
     try {
+      await verifyManifestFiles(runRoot, sessionResult.manifest);
       functionalEvaluation = await evaluateFunctionalSession({
+        study: validatedStudy,
         task,
         session,
         observations: sessionResult.observations,
@@ -239,6 +244,7 @@ function liveOracleSatisfied(oracle, observation, events) {
       (!oracle.role || element.role === oracle.role) && (!oracle.name || element.name === oracle.name || element.text === oracle.name));
     if (oracle.state === "hidden") return matches.length === 0;
     if (oracle.state === "disabled") return matches.some(element => element.enabled === false);
+    if (oracle.state === "checked") return matches.some(element => element.checked === true);
     return matches.some(element => element.visible !== false && (oracle.state !== "enabled" || element.enabled !== false));
   }
   if (oracle.type === "event") return events.some(event => event.action?.type === oracle.name);
@@ -249,7 +255,83 @@ function compareText(actual, operation, expected) {
   if (operation === "equals") return actual === expected;
   if (operation === "contains") return actual.includes(expected);
   if (operation === "not_contains") return !actual.includes(expected);
-  if (operation === "matches") return new RegExp(expected).test(actual);
+  if (operation === "matches") return matchesSafeRegex(actual, expected);
+  return false;
+}
+
+function matchesSafeRegex(actual, pattern) {
+  if (pattern.length > MAX_ORACLE_REGEX_PATTERN_LENGTH) throw new Error(`Regex oracle pattern exceeds ${MAX_ORACLE_REGEX_PATTERN_LENGTH} characters`);
+  if (actual.length > MAX_ORACLE_REGEX_INPUT_LENGTH) throw new Error(`Regex oracle input exceeds ${MAX_ORACLE_REGEX_INPUT_LENGTH} characters`);
+  if (hasNestedOrRepeatedQuantifier(pattern)) throw new Error("Regex oracle pattern contains nested or repeated quantifiers");
+  return new RegExp(pattern).test(actual);
+}
+
+function hasNestedOrRepeatedQuantifier(pattern) {
+  const groups = [];
+  let escaped = false;
+  let inCharacterClass = false;
+  let lastAtomContainsQuantifier = false;
+  let lastWasQuantifier = false;
+
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index];
+    if (escaped) {
+      escaped = false;
+      lastAtomContainsQuantifier = false;
+      lastWasQuantifier = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (inCharacterClass) {
+      if (character === "]") inCharacterClass = false;
+      continue;
+    }
+    if (character === "[") {
+      inCharacterClass = true;
+      lastAtomContainsQuantifier = false;
+      lastWasQuantifier = false;
+      continue;
+    }
+    if (character === "(") {
+      groups.push(false);
+      lastAtomContainsQuantifier = false;
+      lastWasQuantifier = false;
+      continue;
+    }
+    if (character === ")") {
+      const containsQuantifier = groups.pop() ?? false;
+      if (containsQuantifier && groups.length) groups[groups.length - 1] = true;
+      lastAtomContainsQuantifier = containsQuantifier;
+      lastWasQuantifier = false;
+      continue;
+    }
+
+    let quantifierEnd = index;
+    let isQuantifier = character === "*" || character === "+" || character === "?";
+    if (character === "{" && /^\{\d+(?:,\d*)?\}/.test(pattern.slice(index))) {
+      quantifierEnd = pattern.indexOf("}", index);
+      isQuantifier = true;
+    }
+    if (isQuantifier && character === "?" && pattern[index - 1] === "(") continue;
+    if (isQuantifier) {
+      if (character === "?" && lastWasQuantifier) {
+        lastWasQuantifier = false;
+        continue;
+      }
+      if (lastWasQuantifier || lastAtomContainsQuantifier) return true;
+      if (groups.length) groups[groups.length - 1] = true;
+      lastAtomContainsQuantifier = true;
+      lastWasQuantifier = true;
+      index = quantifierEnd;
+      continue;
+    }
+
+    lastAtomContainsQuantifier = false;
+    lastWasQuantifier = false;
+  }
   return false;
 }
 
@@ -284,7 +366,7 @@ function buildReport({ study, evaluatedSessions, validity, findings, variant }) 
   return {
     summary: {
       title: study.study.name,
-      status: evaluatedSessions.some(item => item.session.status === "runtime_error") ? "runtime_error" : "complete",
+      status: evaluatedSessions.some(item => item.session.status === "runtime_error" || item.functionalEvaluation.status === "runtime_error") ? "runtime_error" : "complete",
       humanValidation: validity.recommendedUse,
     },
     validity,
@@ -304,11 +386,34 @@ function buildReport({ study, evaluatedSessions, validity, findings, variant }) 
   };
 }
 
+function redactStudyForPersistence(study) {
+  const copy = structuredClone(study);
+  if (copy.environment.fixtures) copy.environment.fixtures = Object.fromEntries(Object.keys(copy.environment.fixtures).map(key => [key, "[REDACTED]"]));
+  return copy;
+}
+
 async function atomicJson(path, value) {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.${process.pid}.tmp`;
   await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   await rename(temporary, path);
+}
+
+async function verifyManifestFiles(runRoot, manifest) {
+  const sessionRoot = await realpath(resolve(runRoot, "sessions", manifest.sessionId));
+  for (const entry of manifest.entries) {
+    if (!entry.relativePath) continue;
+    const artifactPath = resolve(sessionRoot, entry.relativePath);
+    const contained = relative(sessionRoot, artifactPath);
+    if (contained.startsWith("..") || contained === "" || contained.startsWith("/")) throw new Error("evidence path escapes session directory");
+    if ((await lstat(artifactPath)).isSymbolicLink()) throw new Error("evidence symlinks are not allowed");
+    const resolvedPath = await realpath(artifactPath);
+    if (relative(sessionRoot, resolvedPath).startsWith("..")) throw new Error("evidence path escapes session directory");
+    const content = await readFile(resolvedPath);
+    if (entry.byteSize !== undefined && entry.byteSize !== content.byteLength) throw new Error(`evidence byte size mismatch: ${entry.id}`);
+    const contentHash = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+    if (entry.contentHash !== contentHash) throw new Error(`evidence content hash mismatch: ${entry.id}`);
+  }
 }
 
 function parseOptions(args) {

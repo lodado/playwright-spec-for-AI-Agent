@@ -67,6 +67,102 @@ test("fake sessions generate sealed JSON and HTML without a model", async () => 
   await rm(root, { recursive: true, force: true });
 });
 
+test("checked oracle requires captured checked state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "persona-checked-"));
+  const checkedStudy = structuredClone(study);
+  checkedStudy.personas = [{ preset: "careful_business_buyer" }];
+  checkedStudy.tasks[0].successOracles = [{ id: "accepted", type: "element", role: "checkbox", state: "checked" }];
+  const completed = await runPersonaStudy({
+    study: checkedStudy,
+    outputDir: root,
+    driverFactory: () => ({
+      ...fakeDriver(),
+      async observe() {
+        const observation = await fakeDriver().observe();
+        observation.semantic.interactiveElements = [{ id: "terms", role: "checkbox", checked: false, visible: true }];
+        return observation;
+      },
+    }),
+    policyFactory: () => ({ sampledPolicy: { seed: 1 }, decide: () => ({ type: "finish", reasonCode: "done" }) }),
+  });
+  assert.notEqual(completed.sessions[0].session.status, "success");
+  await rm(root, { recursive: true, force: true });
+});
+
+test("study artifacts redact fixture secrets while drivers receive in-memory values", async () => {
+  const root = await mkdtemp(join(tmpdir(), "persona-secret-"));
+  const secretStudy = structuredClone(study);
+  secretStudy.environment.fixtures = { "secret:email": "private@example.test" };
+  const receivedValueRefs = [];
+  await runPersonaStudy({
+    study: secretStudy,
+    outputDir: root,
+    driverFactory: () => ({
+      ...fakeDriver(),
+      async start(input) { receivedValueRefs.push(input.valueRefs); return {}; },
+    }),
+    policyFactory: () => ({ sampledPolicy: { seed: 1 }, decide: () => ({ type: "finish", reasonCode: "done" }) }),
+  });
+  const persisted = JSON.parse(await readFile(join(root, "study.json"), "utf8"));
+  assert.deepEqual(persisted.environment.fixtures, { "secret:email": "[REDACTED]" });
+  assert.equal(JSON.stringify(persisted).includes("private@example.test"), false);
+  assert.equal(receivedValueRefs[0]["secret:email"], "private@example.test");
+  await rm(root, { recursive: true, force: true });
+});
+
+test("tampered file evidence becomes runtime_error instead of pass", async () => {
+  const root = await mkdtemp(join(tmpdir(), "persona-tampered-file-"));
+  const oneSessionStudy = structuredClone(study);
+  oneSessionStudy.personas = [{ preset: "careful_business_buyer" }];
+  let evidenceDir;
+  const completed = await runPersonaStudy({
+    study: oneSessionStudy,
+    outputDir: root,
+    driverFactory: () => ({
+      ...fakeDriver(),
+      async start(input) {
+        evidenceDir = input.evidenceDir;
+        await writeFile(join(evidenceDir, "artifact.txt"), "tampered", "utf8");
+        return {};
+      },
+      async observe() {
+        const observation = await fakeDriver().observe();
+        observation.evidence[0] = { ...observation.evidence[0], relativePath: "artifact.txt", byteSize: 8 };
+        return observation;
+      },
+    }),
+    policyFactory: () => ({ sampledPolicy: { seed: 1 }, decide: () => ({ type: "finish", reasonCode: "done" }) }),
+  });
+  assert.equal(completed.sessions[0].functionalEvaluation.status, "runtime_error");
+  assert.equal(completed.report.summary.status, "runtime_error");
+  await rm(root, { recursive: true, force: true });
+});
+
+test("regex oracles reject nested quantifiers and oversized patterns or inputs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "persona-regex-"));
+  const cases = [
+    { pattern: "(a+)+$", text: "a".repeat(1_000), error: /nested or repeated quantifiers/ },
+    { pattern: "a++", text: "a", error: /nested or repeated quantifiers/ },
+    { pattern: "a".repeat(257), text: "a", error: /pattern exceeds 256/ },
+    { pattern: "a", text: "a".repeat(10_001), error: /input exceeds 10000/ },
+  ];
+  for (const [index, fixture] of cases.entries()) {
+    const regexStudy = structuredClone(study);
+    regexStudy.tasks[0].successOracles = [{ id: "unsafe", type: "visible_text", operation: "matches", value: fixture.pattern }];
+    const completed = await runPersonaStudy({
+      study: regexStudy,
+      outputDir: join(root, String(index)),
+      driverFactory: () => ({
+        ...fakeDriver(),
+        async observe() { return { ...(await fakeDriver().observe()), semantic: { visibleText: [fixture.text], headings: [], landmarks: [], interactiveElements: [] } }; },
+      }),
+    });
+    assert.ok(completed.sessions.every(item => item.session.status === "runtime_error"));
+    assert.match(completed.sessions[0].session.terminalReason.message, fixture.error);
+  }
+  await rm(root, { recursive: true, force: true });
+});
+
 test("real browser sessions cannot click the below-fold CTA before scrolling", async (context) => {
   try {
     const browser = await chromium.launch();

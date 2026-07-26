@@ -39,7 +39,7 @@ export function classifyReporterOutcome({ runtimeError, findings = [], releaseGa
   const normalizedFindings = findings.map(normalizeFinding);
   const blocking = normalizedFindings.filter((finding) => isBlockingFinding(finding, releaseGate));
   const manualGate = comparisonStatus === "unstable" || normalizedFindings.some((finding) => finding.humanValidation?.level === "required");
-  const warning = normalizedFindings.some((finding) => ["critical", "high", "medium"].includes(finding.severity)) || comparisonStatus === "insufficient_evidence";
+  const warning = normalizedFindings.some((finding) => ["critical", "high", "medium"].includes(finding.severity)) || ["baseline_better", "insufficient_evidence"].includes(comparisonStatus);
   const uncalibratedSingleSession = sampleCount <= 1 && normalizedFindings.some((finding) => finding.category === "behavioral");
 
   if (blocking.length > 0) return Object.freeze({ kind: "product", conclusion: "failure", summary: `${blocking.length} blocking regression${blocking.length === 1 ? "" : "s"} detected` });
@@ -100,8 +100,9 @@ export function markerLine(studyId) {
   return `<!-- ${BEHAVIORAL_COMMENT_MARKER_PREFIX}: study=${markerStudyId(studyId)} -->`;
 }
 
-export function createGitHubCliTransport({ spawn = spawnSync } = {}) {
+export function createGitHubCliTransport({ spawn = spawnSync, botLogin = "github-actions[bot]" } = {}) {
   if (typeof spawn !== "function") throw new TypeError("GitHub CLI spawn must be a function");
+  const trustedBotLogin = githubLogin(botLogin);
   return Object.freeze({
     async createCheckRun({ repository, headSha, name = DEFAULT_CHECK_NAME, conclusion, title, summary, detailsUrl }) {
       const repo = repositorySlug(repository);
@@ -123,7 +124,7 @@ export function createGitHubCliTransport({ spawn = spawnSync } = {}) {
       const marker = markerLine(studyId);
       const comments = runGhJson(spawn, ["api", "--method", "GET", `repos/${repo}/issues/${issueNumber(prNumber)}/comments`, "-f", `per_page=${MAX_GH_ITEMS}`, "--paginate", "--slurp", "--jq", "[.[][]|{id,html_url,body,user:{login:.user.login}}]"]);
       if (!Array.isArray(comments) || comments.length > 500) throw new GitHubReporterError(GITHUB_REPORTER_ERROR_CODES.GITHUB_TRANSPORT_FAILED, "GitHub comment search returned invalid data");
-      const matches = comments.filter((comment) => Number.isSafeInteger(comment?.id) && typeof comment.body === "string" && comment.body.split("\n").some((line) => line.trim() === marker));
+      const matches = comments.filter((comment) => typeof comment?.user?.login === "string" && comment.user.login.toLowerCase() === trustedBotLogin && Number.isSafeInteger(comment.id) && typeof comment.body === "string" && comment.body.split("\n").some((line) => line.trim() === marker));
       if (matches.length > 1) throw new GitHubReporterError(GITHUB_REPORTER_ERROR_CODES.GITHUB_TRANSPORT_FAILED, "GitHub behavioral PR comment marker is ambiguous");
       return matches[0] ? Object.freeze({ id: matches[0].id, url: safeGithubCommentUrl(matches[0].html_url), body: matches[0].body }) : undefined;
     },
@@ -212,6 +213,11 @@ function commitSha(value) {
 function issueNumber(value) {
   if (!Number.isSafeInteger(value) || value < 1) throw new GitHubReporterError(GITHUB_REPORTER_ERROR_CODES.INPUT_INVALID, "GitHub issue number must be a positive integer");
   return value;
+}
+
+function githubLogin(value) {
+  if (typeof value !== "string" || value.length > 100 || !/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(value)) throw new GitHubReporterError(GITHUB_REPORTER_ERROR_CODES.INPUT_INVALID, "GitHub bot login is invalid");
+  return value.toLowerCase();
 }
 
 function checkConclusion(value) {

@@ -12,7 +12,7 @@
     "test": "turbo run test",
     "pack:compat": "pnpm --filter playwright-spec-for-ai-agent pack",
     "package:smoke": "node scripts/package-smoke.mjs",
-    "persona-runtime": "node apps/persona-runtime-cli/bin/persona-runtime.mjs",
+    "persona-runtime": "pnpm --filter @persona-runtime/persona-policy build && node apps/persona-runtime-cli/bin/persona-runtime.mjs",
     "fixture:hidden-cta": "node fixtures/hidden-below-fold-cta/server.mjs"
   },
   "devDependencies": {
