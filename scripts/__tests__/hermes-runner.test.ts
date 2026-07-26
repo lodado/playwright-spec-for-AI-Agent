@@ -1,13 +1,15 @@
-import { existsSync, readdirSync } from "node:fs";
-import { basename } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildHermesAgentArgs,
+  buildHermesChildEnv,
   extractHermesFinalResponseText,
   extractJsonFromHermesOutput,
   prepareEphemeralHermesHome,
   prepareHermesJsonParseSurface,
+  resolveTextOnlyDisabledToolsets,
   unwrapHermesEnvelope,
 } from "../hermes-runner.mjs";
 
@@ -24,6 +26,14 @@ describe("buildHermesAgentArgs", () => {
     });
     expect(args).toContain('--disabled_toolsets="browser,web,terminal"');
     expect(args).toContain("--model=test-model");
+  });
+
+  it("cannot remove mandatory text-only tool restrictions", () => {
+    expect(resolveTextOnlyDisabledToolsets("browser,custom").split(",")).toEqual([
+      "*",
+      "browser",
+      "custom",
+    ]);
   });
 });
 
@@ -44,6 +54,59 @@ describe("prepareEphemeralHermesHome", () => {
       cleanup();
     }
     expect(existsSync(path)).toBe(false);
+  });
+
+  it("does not seed generic env or persona files into text-only runs", () => {
+    const { path, cleanup } = prepareEphemeralHermesHome({ mode: "text-only" });
+    try {
+      const entries = readdirSync(path);
+      expect(entries).not.toContain(".env");
+      expect(entries).not.toContain("SOUL.md");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("removes partial credential homes when boot-file copying fails", () => {
+    const root = mkdtempSync(join(tmpdir(), "hermes-home-failure-"));
+    const sourceHome = join(root, "source");
+    const destination = join(root, "destination");
+    try {
+      mkdirSync(sourceHome);
+      mkdirSync(join(sourceHome, "auth.json"));
+      expect(() => prepareEphemeralHermesHome({
+        mode: "text-only",
+        sourceHome,
+        makeTemporaryHome: () => {
+          mkdirSync(destination);
+          return destination;
+        },
+      })).toThrow();
+      expect(existsSync(destination)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("buildHermesChildEnv", () => {
+  it("isolates text-only Hermes from unrelated process credentials", () => {
+    const source = {
+      PATH: "/usr/bin",
+      HTTPS_PROXY: "https://proxy.example",
+      STAGING_QA_PASSWORD: "staging-secret",
+      SLACK_WEBHOOK_URL: "slack-secret",
+      GITHUB_TOKEN: "github-secret",
+      OPENAI_API_KEY: "provider-secret",
+    };
+    expect(buildHermesChildEnv("text-only", "/tmp/hermes", source)).toEqual({
+      PATH: "/usr/bin",
+      HTTPS_PROXY: "https://proxy.example",
+      HOME: "/tmp/hermes",
+      USERPROFILE: "/tmp/hermes",
+      HERMES_HOME: "/tmp/hermes",
+    });
+    expect(buildHermesChildEnv("browse", "/tmp/hermes", source)).toMatchObject({ STAGING_QA_PASSWORD: "staging-secret", HERMES_HOME: "/tmp/hermes" });
   });
 });
 

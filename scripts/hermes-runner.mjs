@@ -15,9 +15,14 @@ export const HERMES_QA_COMMAND =
   process.env.HERMES_QA_COMMAND?.trim() || REQUIRED_HERMES_AGENT_BIN;
 
 /** Disable browsing/terminal for abstract-ai and review (JSON-in, JSON-out). */
-export const HERMES_QA_TEXT_ONLY_DISABLED_TOOLSETS =
-  process.env.HERMES_QA_DISABLED_TOOLSETS?.trim() ||
-  "browser,web,terminal";
+export function resolveTextOnlyDisabledToolsets(configured = process.env.HERMES_QA_DISABLED_TOOLSETS) {
+  return [...new Set([
+    "*",
+    ...(configured ?? "").split(",").map(item => item.trim()).filter(Boolean),
+  ])].join(",");
+}
+
+export const HERMES_QA_TEXT_ONLY_DISABLED_TOOLSETS = resolveTextOnlyDisabledToolsets();
 
 /**
  * Hermes memory toolset, disabled on every QA run so the agent cannot write
@@ -26,21 +31,50 @@ export const HERMES_QA_TEXT_ONLY_DISABLED_TOOLSETS =
  */
 export const HERMES_QA_STATELESS_DISABLED_TOOLSETS = "memory";
 
-/** Boot-critical files copied into the ephemeral home. Never memories/sessions. */
+/** Browse keeps legacy boot files; text-only receives only provider auth and model config. */
 const HERMES_HOME_BOOT_FILES = ["auth.json", "config.yaml", ".env", "SOUL.md"];
+const HERMES_TEXT_ONLY_HOME_BOOT_FILES = ["auth.json", "config.yaml"];
+const HERMES_TEXT_ONLY_ENV_KEYS = [
+  "ALL_PROXY",
+  "ComSpec",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "NO_PROXY",
+  "PATH",
+  "PATHEXT",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
+  "SystemRoot",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "WINDIR",
+];
 
 /**
  * Seed a throwaway HERMES_HOME so every Hermes run boots stateless: empty
  * memories/ and sessions/, so nothing from one QA run leaks into the next.
- * Only boot-critical, non-learned files (auth, model config, persona) are
- * copied from the real ~/.hermes. Returns the path plus cleanup() to delete it.
+ * Only mode-specific boot files are copied from the real ~/.hermes. Returns
+ * the path plus cleanup() to delete it.
  */
-export function prepareEphemeralHermesHome() {
-  const realHome = join(homedir(), ".hermes");
-  const path = mkdtempSync(join(tmpdir(), "hermes-qa-home-"));
-  for (const name of HERMES_HOME_BOOT_FILES) {
-    const src = join(realHome, name);
-    if (existsSync(src)) cpSync(src, join(path, name));
+export function prepareEphemeralHermesHome({
+  mode = "browse",
+  sourceHome = join(homedir(), ".hermes"),
+  makeTemporaryHome = () => mkdtempSync(join(tmpdir(), "hermes-qa-home-")),
+} = {}) {
+  const path = makeTemporaryHome();
+  const bootFiles = mode === "text-only" ? HERMES_TEXT_ONLY_HOME_BOOT_FILES : HERMES_HOME_BOOT_FILES;
+  try {
+    for (const name of bootFiles) {
+      const src = join(sourceHome, name);
+      if (existsSync(src)) cpSync(src, join(path, name));
+    }
+  } catch (error) {
+    rmSync(path, { recursive: true, force: true });
+    throw error;
   }
   return {
     path,
@@ -48,6 +82,12 @@ export function prepareEphemeralHermesHome() {
       rmSync(path, { recursive: true, force: true });
     },
   };
+}
+
+export function buildHermesChildEnv(mode, hermesHome, source = process.env) {
+  if (mode !== "text-only") return { ...source, HERMES_HOME: hermesHome };
+  const env = Object.fromEntries(HERMES_TEXT_ONLY_ENV_KEYS.filter((key) => source[key] !== undefined).map((key) => [key, source[key]]));
+  return { ...env, HOME: hermesHome, USERPROFILE: hermesHome, HERMES_HOME: hermesHome };
 }
 
 export function resolveHermesAgentInvocation() {
@@ -292,7 +332,7 @@ function throwIfHermesAuthRejected(output, rawOutputPath = null) {
 
 /**
  * @param {"browse"|"text-only"} [options.mode]
- *   text-only — disable browser/terminal toolsets (abstract-ai, review)
+ *   text-only — disable every toolset (offline semantic judgment)
  *   browse — full toolsets (judge)
  */
 export function runHermes(
@@ -330,7 +370,7 @@ export function runHermes(
 
   // Fresh HERMES_HOME per run: empty memories/ and sessions/ so nothing learned
   // in one QA run carries into the next. Torn down as soon as Hermes exits.
-  const hermesHome = prepareEphemeralHermesHome();
+  const hermesHome = prepareEphemeralHermesHome({ mode });
   let result;
   try {
     result = spawnSync(
@@ -343,7 +383,7 @@ export function runHermes(
         shell: false,
         encoding: "utf8",
         maxBuffer: 1024 * 1024 * 10,
-        env: { ...process.env, HERMES_HOME: hermesHome.path },
+        env: buildHermesChildEnv(mode, hermesHome.path),
       }
     );
   } finally {
