@@ -34,7 +34,7 @@ const GATEWAY_ARIA_LIMIT = 512 * 1024;
 const GATEWAY_MAX_ELEMENTS = 128;
 const GATEWAY_ELEMENT_TEXT_LIMIT = 1024;
 const GATEWAY_CLEANUP_TIMEOUT_MS = 1_000;
-const GATEWAY_ACTIONS = Object.freeze(["get_current_url", "observe_dom", "observe_aria", "navigate", "click_observed_element", "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state"]);
+const GATEWAY_ACTIONS = Object.freeze(["get_current_url", "observe_dom", "observe_aria", "navigate", "go_back", "reload_page", "click_observed_element", "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state"]);
 
 export function playwrightExecutionCapabilities() {
   return providerCapabilities({
@@ -143,7 +143,7 @@ export async function openPlaywrightBrowserToolGateway({
         const authorization = createAdaptiveActionAuthorizer({ input: beforeInput, now: clock }).authorize({ proposal, tokensUsed });
         usedProposalIds.add(authorization.proposal.proposalId);
         remainingBudget = { ...authorization.remainingBudget };
-        if (authorization.proposal.action === "navigate" && interactionStarted) throw new Error("browser navigation is denied after an interaction");
+        if (["navigate", "go_back", "reload_page"].includes(authorization.proposal.action) && interactionStarted) throw new Error("browser navigation is denied after an interaction");
         operationStarted = true;
         const before = await captureGatewayPage(page, currentPage, initialInput.capabilityLease.allowedOrigins, { deadline, clock }, secrets);
         let observation;
@@ -151,6 +151,13 @@ export async function openPlaywrightBrowserToolGateway({
           // URL is captured in the mandatory pre/post evidence.
         } else if (authorization.proposal.action === "navigate") {
           await runGatewayBrowserOperation({ deadline, clock }, (timeout) => page.goto(authorization.proposal.parameters.url, { waitUntil: "domcontentloaded", timeout }));
+          invalidateGatewayObservations();
+        } else if (authorization.proposal.action === "go_back") {
+          const response = await runGatewayBrowserOperation({ deadline, clock }, (timeout) => page.goBack({ waitUntil: "domcontentloaded", timeout }));
+          if (response === null) throw new Error("browser history has no previous page");
+          invalidateGatewayObservations();
+        } else if (authorization.proposal.action === "reload_page") {
+          await runGatewayBrowserOperation({ deadline, clock }, (timeout) => page.reload({ waitUntil: "domcontentloaded", timeout }));
           invalidateGatewayObservations();
         } else if (authorization.proposal.action === "observe_dom" || authorization.proposal.action === "observe_aria") {
           observation = await observeGatewayElements({ page, input: beforeInput, currentPage, sequence: ++observationSequence, secrets: [...secrets, ...before.sensitiveValues], deadline, clock });
@@ -196,7 +203,7 @@ export async function openPlaywrightBrowserToolGateway({
         }
         if (policyViolation) throw new Error("browser tool policy was violated");
         const nextUrl = gatewayUrl(page, initialInput.capabilityLease.allowedOrigins);
-        if (authorization.proposal.action === "navigate" || nextUrl !== currentPage.url) {
+        if (["navigate", "go_back", "reload_page"].includes(authorization.proposal.action) || nextUrl !== currentPage.url) {
           currentPage = { pageId: `page-${canonicalHash({ proposalId: authorization.proposal.proposalId, nextUrl }).slice("sha256:".length, "sha256:".length + 12)}`, domGeneration: 1, url: nextUrl };
           recentObservations = [];
           handles.clear();

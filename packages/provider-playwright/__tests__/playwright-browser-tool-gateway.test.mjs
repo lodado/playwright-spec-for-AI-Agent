@@ -63,6 +63,7 @@ function fakeBrowser({
   protectedElement = false,
   requestAfterClick = false,
   routeNavigationRequests = false,
+  historyMissing = false,
 } = {}) {
   const calls = [];
   const screenshots = [];
@@ -129,6 +130,16 @@ function fakeBrowser({
           continue: vi.fn(async () => calls.push(["continue"])),
         });
       }
+    }),
+    goBack: vi.fn(async () => {
+      if (historyMissing) return null;
+      pageUrl = "https://example.test/previous";
+      calls.push(["go-back"]);
+      return {};
+    }),
+    reload: vi.fn(async () => {
+      calls.push(["reload", pageUrl]);
+      return {};
     }),
     mainFrame: vi.fn(() => mainFrame),
     url: vi.fn(() => pageUrl),
@@ -246,7 +257,7 @@ describe("Playwright browser tool gateway", () => {
       expect.arrayContaining(["get_current_url", "observe_dom", "observe_aria", "click_observed_element", "press_key"]),
     );
     expect(gateway.capabilities.actions).toContain("navigate");
-    expect(gateway.capabilities.actions).toEqual(expect.arrayContaining(["hover_observed_element", "scroll_view", "wait_for_element_state"]));
+    expect(gateway.capabilities.actions).toEqual(expect.arrayContaining(["go_back", "reload_page", "hover_observed_element", "scroll_view", "wait_for_element_state"]));
     expect(agentInput.capabilityLease.actions).not.toContain("observe_screenshot");
 
     const execution = await gateway.execute({ proposal: proposal(agentInput, "get_current_url"), tokensUsed: 11 });
@@ -308,6 +319,46 @@ describe("Playwright browser tool gateway", () => {
     await gateway.close();
   });
 
+  it("goes back and reloads before interaction with fresh page identities", async () => {
+    const fixture = fakeBrowser();
+    const input = executionAgentInput();
+    input.milestones[0].status = "COMPLETED";
+    input.currentMilestoneId = "dialog-visible";
+    input.capabilityLease.actions.push("go_back", "reload_page");
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
+
+    const backed = await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "go_back"),
+      tokensUsed: 1,
+    });
+    const reloaded = await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "reload_page"),
+      tokensUsed: 1,
+    });
+
+    expect(backed.result.page.url).toBe("https://example.test/previous");
+    expect(reloaded.result.page.pageId).not.toBe(backed.result.page.pageId);
+    expect(fixture.calls).toContainEqual(["go-back"]);
+    expect(fixture.calls).toContainEqual(["reload", "https://example.test/previous"]);
+    await gateway.close();
+  });
+
+  it("fails closed when browser history has no previous page", async () => {
+    const fixture = fakeBrowser({ historyMissing: true });
+    const input = executionAgentInput();
+    input.milestones[0].status = "COMPLETED";
+    input.currentMilestoneId = "dialog-visible";
+    input.capabilityLease.actions.push("go_back");
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
+
+    await expect(
+      gateway.execute({ proposal: proposal(gateway.agentInput(), "go_back"), tokensUsed: 1 }),
+    ).rejects.toThrow(/no previous page/i);
+    await expect(
+      gateway.execute({ proposal: proposal(gateway.agentInput(), "get_current_url"), tokensUsed: 1 }),
+    ).rejects.toThrow(/closed/i);
+  });
+
   it("rejects navigation after an interaction", async () => {
     const fixture = fakeBrowser();
     const input = executionAgentInput();
@@ -318,7 +369,7 @@ describe("Playwright browser tool gateway", () => {
       description: "Reach settings.",
       target: { testId: "settings" },
     }];
-    input.capabilityLease.actions.push("navigate");
+    input.capabilityLease.actions.push("navigate", "go_back", "reload_page");
     const gateway = await openGateway({ input, browserType: fixture.browserType });
     const observed = await gateway.execute({
       proposal: proposal(gateway.agentInput(), "observe_dom"),
@@ -333,16 +384,20 @@ describe("Playwright browser tool gateway", () => {
       tokensUsed: 1,
     });
 
-    await expect(
-      gateway.execute({
-        proposal: proposal(gateway.agentInput(), "navigate", { url: "https://example.test/settings" }),
-        tokensUsed: 1,
-      }),
-    ).rejects.toThrow(/denied after an interaction/i);
+    for (const [action, parameters] of [
+      ["navigate", { url: "https://example.test/settings" }],
+      ["go_back", {}],
+      ["reload_page", {}],
+    ]) {
+      await expect(
+        gateway.execute({ proposal: proposal(gateway.agentInput(), action, parameters), tokensUsed: 1 }),
+      ).rejects.toThrow(/denied after an interaction/i);
+    }
 
     expect(fixture.calls.filter(([action]) => action === "goto")).toEqual([
       ["goto", "https://example.test/dashboard"],
     ]);
+    expect(fixture.calls.filter(([action]) => action === "go-back" || action === "reload")).toEqual([]);
     await gateway.close();
   });
 
