@@ -23,10 +23,28 @@ export function buildHermesExecutionQuery(input, { secrets = [] } = {}) {
     "Choose only a leased action. Exact milestones must preserve their required action and observed milestone binding.",
     "Return JSON only, using the ExecutionActionProposal shape already identified by schemaVersion/runId/scenarioId/milestoneId/leaseId/action/parameters.",
     `Prompt version: ${EXECUTION_PROMPT_VERSION}`,
-    redactSensitiveText(JSON.stringify(snapshot), secrets),
+    JSON.stringify(redactExecutionValue(snapshot, secrets)),
   ].join("\n\n");
   if (query.length > MAX_QUERY_CHARS) throw new Error("Hermes execution query exceeds size limit");
   return query;
+}
+
+function redactExecutionValue(value, secrets) {
+  if (typeof value === "string") {
+    try {
+      const suppliedSecretsRemoved = redactSensitiveText(value, secrets);
+      return JSON.parse(redactSensitiveText(JSON.stringify(suppliedSecretsRemoved)));
+    } catch {
+      return "[REDACTED]";
+    }
+  }
+  if (Array.isArray(value)) return value.map((item) => redactExecutionValue(item, secrets));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item], index) => {
+    const redactedKey = redactExecutionValue(key, secrets);
+    const sensitiveKey = redactedKey !== key || /(?:authorization|cookie|token|password|passwd|secret|api[-_ ]?key|session(?:id)?)$/i.test(key.replace(/[-_\s]/g, ""));
+    return sensitiveKey ? [`[REDACTED_KEY_${index}]`, "[REDACTED]"] : [key, redactExecutionValue(item, secrets)];
+  }));
+  return value;
 }
 
 export function createHermesExecutionProposer({ transport = runHermes, secrets = [] } = {}) {

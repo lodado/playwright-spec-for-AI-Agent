@@ -154,8 +154,14 @@ describe("Hermes judge provider", () => {
   });
 
   it("builds a bounded execution prompt from a validated agent input", () => {
-    const query = buildHermesExecutionQuery(executionAgentInput());
+    const input = executionAgentInput();
+    const escapedSecret = "quote\"slash\\line\nsecret";
+    input.milestones[0].target.hints = [{ adapter: "fixture", data: { password: "hunter2", "secret-key-name": "marker", [escapedSecret]: "dynamic-key", opaque: "a".repeat(64), escaped: `prefix ${escapedSecret} suffix` } }];
+    const query = buildHermesExecutionQuery(input, { secrets: ["SESSION-SECRET", "secret-key-name", escapedSecret] });
     expect(query).toContain("ExecutionActionProposal");
+    const promptInput = JSON.parse(query.split("\n\n").at(-1));
+    expect(JSON.stringify(promptInput)).not.toMatch(/SESSION-SECRET|secret-key-name|hunter2|marker|a{64}/);
+    expect(JSON.stringify(promptInput)).not.toContain(JSON.stringify(escapedSecret).slice(1, -1));
     const oversized = executionAgentInput();
     oversized.goal.description = "large goal ".repeat(372).slice(0, 4_096);
     oversized.milestones = Array.from({ length: 64 }, (_, index) => ({ ...oversized.milestones[0], id: `milestone-${index}`, description: `milestone ${index} ${"large description ".repeat(240)}`.slice(0, 4_096) }));
