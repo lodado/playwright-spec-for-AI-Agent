@@ -138,10 +138,26 @@ describe("adaptive execution authorization", () => {
     expect(authorizer.remainingBudget().timeMs).toBe(29_500);
   });
 
-  it("bounds recovery actions by exact-action identity and the remaining deadline", () => {
+  it("allows bounded reversible recovery without completing the required exact action", () => {
     const wrongElement = executionAgentInput();
-    wrongElement.recentObservations[0].elements[0].milestoneIds = ["dialog-visible"];
-    expect(() => createAdaptiveActionAuthorizer({ input: wrongElement }).authorize({ proposal: clickProposal() })).toThrow(/current milestone/);
+    wrongElement.milestones.push({ id: "dismiss-cookie", class: "OPTIONAL_HINT", status: "PENDING", description: "Dismiss the cookie banner if it blocks progress.", target: { testId: "cookie-close" } });
+    wrongElement.recentObservations[0].elements[0].milestoneIds = ["dismiss-cookie"];
+    const proposal = clickProposal();
+    const authorization = createAdaptiveActionAuthorizer({ input: wrongElement }).authorize({ proposal });
+    expect(authorization.proposal).toEqual(proposal);
+    expect(advanceAdaptiveMilestone({ input: wrongElement, proposal, result: acceptedResult(wrongElement, proposal) })).toBeUndefined();
+
+    const undeclared = executionAgentInput();
+    undeclared.recentObservations[0].elements[0].milestoneIds = ["dialog-visible"];
+    expect(() => createAdaptiveActionAuthorizer({ input: undeclared }).authorize({ proposal: clickProposal() })).toThrow(/outside exact and optional milestone boundaries/);
+
+    for (const [action, parameters] of [["hover_observed_element", { observationId: "observation-3", elementId: "element-settings" }], ["press_key", { key: "Escape" }]]) {
+      const recoveryInput = executionAgentInput();
+      recoveryInput.capabilityLease.actions.push(action);
+      if (action === "hover_observed_element") recoveryInput.recentObservations[0].elements[0].allowedActions.push(action);
+      const recovery = { ...clickProposal(), proposalId: `proposal-${action}`, action, parameters };
+      expect(createAdaptiveActionAuthorizer({ input: recoveryInput }).authorize({ proposal: recovery }).proposal).toEqual(recovery);
+    }
 
     for (const action of ["go_back", "reload_page"]) {
       const input = executionAgentInput();

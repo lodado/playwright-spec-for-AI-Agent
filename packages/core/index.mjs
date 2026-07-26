@@ -121,15 +121,18 @@ export function createAdaptiveActionAuthorizer({ input, now = Date.now } = {}) {
     if (proposalSnapshot.action === "wait_for_element_state" && proposalSnapshot.parameters.timeoutMs > remainingBudget().timeMs) throw contractError("execute", "wait exceeds the remaining time budget");
 
     const milestone = inputSnapshot.milestones.find((item) => item.id === inputSnapshot.currentMilestoneId);
-    const passiveRecoveryActions = ["observe_dom", "observe_aria", "get_current_url", "scroll_view", "wait_for_element_state"];
-    if (milestone.class === "REQUIRED_EXACT_ACTION" && proposalSnapshot.action !== milestone.requiredAction && !passiveRecoveryActions.includes(proposalSnapshot.action)) throw contractError("execute", "action does not match the required exact action");
+    const safeRecoveryActions = ["observe_dom", "observe_aria", "get_current_url", "click_observed_element", "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state"];
+    if (milestone.class === "REQUIRED_EXACT_ACTION" && proposalSnapshot.action !== milestone.requiredAction && !safeRecoveryActions.includes(proposalSnapshot.action)) throw contractError("execute", "action does not match the required exact action");
     if (["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposalSnapshot.action)) {
       const observation = inputSnapshot.recentObservations.find((item) => item.observationId === proposalSnapshot.parameters.observationId);
       if (!observation || observation.pageId !== inputSnapshot.currentPage.pageId || observation.domGeneration !== inputSnapshot.currentPage.domGeneration) throw contractError("execute", "stale observation cannot authorize an action");
       const element = observation.elements.find((item) => item.elementId === proposalSnapshot.parameters.elementId);
       if (!element) throw contractError("execute", "unknown element cannot authorize an action");
       if (!element.allowedActions.includes(proposalSnapshot.action)) throw contractError("execute", "element does not allow the proposed action");
-      if (["click_observed_element", "hover_observed_element"].includes(proposalSnapshot.action) && !element.milestoneIds.includes(milestone.id)) throw contractError("execute", "observed element does not match the current milestone");
+      if (proposalSnapshot.action === "click_observed_element" && !element.milestoneIds.includes(milestone.id)) {
+        const optionalRecovery = element.milestoneIds.some((id) => inputSnapshot.milestones.some((item) => item.id === id && item.class === "OPTIONAL_HINT"));
+        if (!optionalRecovery) throw contractError("execute", "observed click is outside exact and optional milestone boundaries");
+      }
     }
     if (proposalSnapshot.action === "navigate" && !inputSnapshot.capabilityLease.allowedOrigins.includes(new URL(proposalSnapshot.parameters.url).origin)) throw contractError("execute", "navigation origin is outside the capability lease");
     return Object.freeze({ proposal: proposalSnapshot, remainingBudget: remainingBudget() });

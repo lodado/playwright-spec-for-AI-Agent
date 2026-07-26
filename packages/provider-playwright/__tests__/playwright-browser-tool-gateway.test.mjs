@@ -538,6 +538,27 @@ describe("Playwright browser tool gateway", () => {
     await gateway.close();
   });
 
+  it("audits a safe recovery click without satisfying an unrelated exact milestone", async () => {
+    const fixture = fakeBrowser();
+    const input = executionAgentInput();
+    input.milestones[0].target = { testId: "required-settings" };
+    input.milestones.push({ id: "settings-recovery", class: "OPTIONAL_HINT", status: "PENDING", description: "Use Settings as a declared recovery target.", target: { testId: "settings" } });
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
+    const observed = await gateway.execute({ proposal: proposal(gateway.agentInput(), "observe_dom"), tokensUsed: 1 });
+    const element = observed.observation.elements[0];
+
+    expect(element.milestoneIds).toEqual(["settings-recovery"]);
+    await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "click_observed_element", { observationId: observed.observation.observationId, elementId: element.elementId }),
+      tokensUsed: 1,
+    });
+
+    expect(fixture.calls).toContainEqual(["click", "settings"]);
+    expect(gateway.agentInput().currentMilestoneId).toBe("open-settings");
+    expect(gateway.agentInput().milestones[0]).toMatchObject({ id: "open-settings", status: "PENDING" });
+    await gateway.close();
+  });
+
   it("returns a non-verdict outcome when the final semantic milestone is observed", async () => {
     const fixture = fakeBrowser();
     const input = executionAgentInput();
