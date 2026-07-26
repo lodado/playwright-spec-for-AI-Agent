@@ -209,13 +209,14 @@ describe("documented runtime contracts", () => {
   });
 
   it("validates bounded GitHub Issue publication results", () => {
-    const result = { schemaVersion: GITHUB_PUBLICATION_RESULT_VERSION, repository: "owner/repository", publication: "ISSUE", action: "CREATED", target: { publication: "ISSUE", number: 42, url: "https://github.com/owner/repository/issues/42" }, occurrence: { count: 1, firstSeen: "2026-07-26T00:00:00.000Z", lastSeen: "2026-07-26T00:00:00.000Z" }, source: { runId: "run-1", judgeResultId: "judge-1", failureDiagnosisId: "diagnosis-1", codeContextBundleId: "context-1" }, publicationFingerprint: `sha256:${"a".repeat(64)}` };
+    const result = { schemaVersion: GITHUB_PUBLICATION_RESULT_VERSION, repository: "owner/repository", publication: "ISSUE", action: "CREATED", target: { publication: "ISSUE", number: 42, url: "https://github.com/owner/repository/issues/42" }, occurrence: { count: 1, firstSeen: "2026-07-26T00:00:00.000Z", lastSeen: "2026-07-26T00:00:00.000Z" }, source: { runId: "run-1", evidenceBundleId: "evidence-1", judgeResultId: "judge-1", failureDiagnosisId: "diagnosis-1", codeContextBundleId: "context-1" }, publicationFingerprint: `sha256:${"a".repeat(64)}` };
     expect(validateContract("GitHubPublicationResult", result)).toBe(result);
     expect(() => validateContract("GitHubPublicationResult", { ...result, target: { ...result.target, url: "https://attacker.test/42" } })).toThrow(/GitHub publication/);
     const { target: _target, occurrence: _occurrence, ...common } = result;
     const ambiguous = { ...common, publication: "UNRESOLVED", action: "AMBIGUOUS", matches: [result.target, { publication: "DRAFT_PR", number: 43, url: "https://github.com/owner/repository/pull/43" }] };
     expect(validateContract("GitHubPublicationResult", ambiguous)).toBe(ambiguous);
     expect(() => validateContract("GitHubPublicationResult", { ...ambiguous, matches: [result.target, result.target] })).toThrow(/unique/);
+    expect(() => validateContract("GitHubPublicationResult", { ...ambiguous, matches: [result.target, { publication: "DRAFT_PR", number: 42, url: "https://github.com/owner/repository/pull/42" }] })).toThrow(/unique/);
   });
 
   it("requires globally unique QA IR scenario ids", () => {

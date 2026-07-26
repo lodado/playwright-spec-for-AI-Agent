@@ -234,6 +234,8 @@ The report pins `HEAD` to an exact Git commit before locating likely files and l
 Publish one failed or manual-review result as an evidence-backed GitHub Issue after authenticating `gh`:
 
 ```bash
+# Generate once, store in CI secrets, and reuse the same value across nightly runs.
+export QA_NATIVE_PUBLICATION_KEY="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64'))")"
 npx qa-native publish-issue \
   --run-dir=.qa/runs/dashboard-1 \
   --repository-root=. \
@@ -241,7 +243,7 @@ npx qa-native publish-issue \
   --revision=HEAD
 ```
 
-Before publication, the runtime verifies the pinned commit and Code Context file hashes against the target repository. The command rejects passing and ambiguous multi-failure inputs, publishes no source snippets or credentials, and stores only the bounded publication result under the private run directory. It cannot create branches, patches, pull requests, or merges.
+Before publication, the runtime verifies the pinned commit and Code Context file hashes against the target repository. A credential-safe canonical fingerprint excludes run IDs, model wording, query strings, evidence IDs, and raw path segments. The publisher scans a bounded set of open Issues and Draft PRs for the exact hidden marker: no match creates an Issue, one match appends an HMAC-authenticated occurrence comment, the same source run is a no-op, and multiple matches fail as ambiguous without selecting one. `QA_NATIVE_PUBLICATION_KEY` authenticates managed publication state and must remain stable across runs; it is removed before invoking `gh` and is never persisted. The command rejects passing and ambiguous multi-failure inputs, publishes no source snippets or credentials, and stores only the bounded publication result under the private run directory. It cannot create branches, patches, pull requests, or merges.
 
 ## Recommended workflow
 

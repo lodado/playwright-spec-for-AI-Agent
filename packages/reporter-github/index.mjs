@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { GITHUB_PUBLICATION_RESULT_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
 import { redactSensitiveText, verifyEvidenceBundleIdentity } from "../evidence/index.mjs";
@@ -6,11 +6,45 @@ import { diagnoseFailure, recommendRepair } from "../remediation/index.mjs";
 
 const DEFAULT_LABELS = ["qa-runtime", "auto-generated"];
 const MAX_GITHUB_RESPONSE_BYTES = 1024 * 1024;
+const MAX_PUBLICATION_MATCHES = 10;
+const MAX_SEEN_PUBLICATION_SOURCES = 50;
+const PUBLICATION_KEY_ID = "publication-v1";
 const GITHUB_ENV_KEYS = ["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GH_HOST", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "LANG", "LC_ALL", "LC_CTYPE"];
 
 export function createGitHubCliIssueTransport({ spawn = spawnSync } = {}) {
   if (typeof spawn !== "function") throw new TypeError("GitHub CLI spawn must be a function");
   return Object.freeze({
+    async findOpenPublications({ repository, fingerprint }) {
+      const target = repositorySlug(repository);
+      if (!/^sha256:[0-9a-f]{64}$/.test(fingerprint)) throw new Error("GitHub publication fingerprint is invalid");
+      const matches = [];
+      const seen = new Set();
+      const search = runGhJson(spawn, ["api", "--method", "GET", "search/issues", "-f", `q=repo:${target} is:open in:body label:qa-runtime \"qa-fingerprint: ${fingerprint}\"`, "-f", `per_page=${MAX_PUBLICATION_MATCHES}`, "--jq", "{total_count,items:[.items[]|{number,state,html_url,pull_request}]}" ]);
+      if (!search || !Number.isSafeInteger(search.total_count) || search.total_count < 0 || search.total_count > MAX_PUBLICATION_MATCHES || !Array.isArray(search.items) || search.items.length > MAX_PUBLICATION_MATCHES) throw new Error("GitHub publication search is ambiguous");
+      for (const item of search.items) {
+        if (!item || item.state !== "open" || !Number.isSafeInteger(item.number) || item.number < 1 || seen.has(item.number)) continue;
+        const publication = item.pull_request === undefined ? "ISSUE" : "DRAFT_PR";
+        const found = awaitGitHubPublication(spawn, target, { publication, number: item.number, url: item.html_url });
+        if (!hasFingerprintMarker(found.body, fingerprint)) continue;
+        matches.push(found);
+        seen.add(item.number);
+      }
+      return matches;
+    },
+    async findRecentPublications({ repository, fingerprint, since }) {
+      const target = repositorySlug(repository);
+      if (!/^sha256:[0-9a-f]{64}$/.test(fingerprint) || !Number.isFinite(Date.parse(since))) throw new Error("GitHub recent publication search input is invalid");
+      const items = runGhJson(spawn, ["api", "--method", "GET", `repos/${target}/issues`, "-f", "state=open", "-f", "labels=qa-runtime", "-f", `since=${since}`, "-f", "per_page=100", "--jq", "[.[]|{number,state,html_url,pull_request,body:([.body|split(\"\\n\")[]|select(startswith(\"<!-- qa-fingerprint:\"))|.[:128]][:11]|join(\"\\n\"))}]"]);
+      if (!Array.isArray(items) || items.length >= 100) throw new Error("GitHub recent publication search is ambiguous");
+      return items.flatMap((item) => {
+        if (!item || item.state !== "open" || !Number.isSafeInteger(item.number) || item.number < 1 || typeof item.body !== "string" || !hasFingerprintMarker(item.body, fingerprint)) return [];
+        const publication = item.pull_request === undefined ? "ISSUE" : "DRAFT_PR";
+        return [awaitGitHubPublication(spawn, target, { publication, number: item.number, url: item.html_url })];
+      });
+    },
+    async readPublication({ repository, publication, number, url }) {
+      return awaitGitHubPublication(spawn, repositorySlug(repository), { publication, number, url });
+    },
     async verifyCodeContext({ repository, revision, files }) {
       const target = repositorySlug(repository);
       if (typeof revision !== "string" || !/^[0-9a-f]{40,64}$/i.test(revision) || !Array.isArray(files) || files.length > 10) throw new Error("GitHub Code Context verification input is invalid");
@@ -34,6 +68,26 @@ export function createGitHubCliIssueTransport({ spawn = spawnSync } = {}) {
       if (!match) throw new Error("GitHub CLI returned an invalid Issue URL");
       return { number: Number(match[1]), url };
     },
+    async listOccurrenceRecords({ repository, publication, number, url }) {
+      const target = repositorySlug(repository);
+      publicationTarget({ repository: target, publication, number, url });
+      const login = runGh(spawn, ["api", "--method", "GET", "user", "--jq", ".login"]).toString("utf8").trim();
+      if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,98}[A-Za-z0-9])?(?:\[bot\])?$/.test(login)) throw new Error("GitHub authenticated actor is invalid");
+      const records = runGhJson(spawn, ["api", "--method", "GET", `repos/${target}/issues/${number}/comments`, "-f", "per_page=100", "--paginate", "--slurp", "--jq", `[.[][]|select(.user.login==${JSON.stringify(login)} and (.body|contains(\"qa-occurrence:\")))|{id,html_url,body:([.body|split(\"\\n\")[]|select(startswith(\"<!-- qa-occurrence:\"))|.[:2048]][:1]|join(\"\\n\")),created_at}]`]);
+      if (!Array.isArray(records) || records.length > 500) throw new Error("GitHub occurrence search returned invalid data");
+      return records;
+    },
+    async createOccurrenceRecord({ repository, publication, number, url, body }) {
+      const target = repositorySlug(repository);
+      publicationTarget({ repository: target, publication, number, url });
+      if (typeof body !== "string" || body.length === 0 || body.length > 8_192) throw new Error("GitHub occurrence record is invalid");
+      const created = runGhJson(spawn, ["api", "--method", "POST", `repos/${target}/issues/${number}/comments`, "--input", "-"], Buffer.from(JSON.stringify({ body })));
+      if (!Number.isSafeInteger(created?.id) || created.id < 1 || typeof created.html_url !== "string" || created.body !== body || typeof created.created_at !== "string") throw new Error("GitHub occurrence record creation returned invalid data");
+      const createdUrl = new URL(created.html_url);
+      const createdAt = Date.parse(created.created_at);
+      if (createdUrl.protocol !== "https:" || createdUrl.hostname !== "github.com" || createdUrl.port || createdUrl.username || createdUrl.password || createdUrl.search || createdUrl.pathname.toLowerCase() !== `/${target}/issues/${number}`.toLowerCase() || createdUrl.hash !== `#issuecomment-${created.id}` || !Number.isFinite(createdAt) || new Date(createdAt).toISOString() !== created.created_at) throw new Error("GitHub occurrence record creation returned invalid data");
+      return { id: created.id, url: created.html_url, body: created.body, createdAt: created.created_at };
+    },
   });
 }
 
@@ -47,39 +101,60 @@ export async function publishGitHubFailureIssue({
   recommendation,
   labels,
   secrets = [],
+  stateAuthenticationKey,
   verifyCodeContext,
+  findOpenPublications,
+  findRecentPublications,
+  readPublication,
+  listOccurrenceRecords,
+  createOccurrenceRecord,
   transport,
 } = {}) {
   if (typeof transport !== "function") throw new TypeError("GitHub Issue transport must be a function");
   if (typeof verifyCodeContext !== "function") throw new TypeError("GitHub Code Context verifier must be a function");
+  if ([findOpenPublications, findRecentPublications, readPublication, listOccurrenceRecords, createOccurrenceRecord].some((value) => typeof value !== "function")) throw new TypeError("GitHub publication upsert transport is incomplete");
+  assertStateAuthenticationKey(stateAuthenticationKey);
   const input = jsonSnapshot({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, recommendation });
   const targetRepository = repositorySlug(repository);
   validateInputs(input, secrets, targetRepository);
-  const safeLabels = validateLabels(labels ?? issueLabels(input, secrets), secrets);
+  const safeLabels = validateLabels([...new Set(["qa-runtime", ...(labels ?? issueLabels(input, secrets))])], secrets);
   const publicationFingerprint = createFailureFingerprint({ ...input, secrets });
   const title = issueTitle(input, secrets);
-  const occurrence = { count: 1, firstSeen: input.evidenceBundle.capturedAt, lastSeen: input.evidenceBundle.capturedAt };
-  const body = renderGitHubFailureIssue({ ...input, publicationFingerprint, occurrence, secrets });
+  const firstSeen = occurrenceTimestamp(input.evidenceBundle.capturedAt);
+  const occurrence = { count: 1, firstSeen, lastSeen: firstSeen };
+  const source = publicationSource(input);
+  const sourceId = publicationSourceId(source);
+  const body = renderGitHubFailureIssue({ ...input, publicationFingerprint, occurrence, seenSourceIds: [sourceId], stateAuthenticationKey, secrets });
+  const occurrenceBody = renderGitHubOccurrenceRecord({ repository: targetRepository, publicationFingerprint, source, occurredAt: firstSeen, stateAuthenticationKey, secrets });
   const files = input.codeContext.snippets.map(({ path, contentHash }) => ({ path, contentHash }));
   if (await verifyCodeContext({ repository: targetRepository, revision: input.codeContext.revision, files }) !== true) throw new Error("GitHub repository does not match the pinned Code Context");
+  const matches = publicationMatches(await findOpenPublications({ repository: targetRepository, fingerprint: publicationFingerprint }), targetRepository, publicationFingerprint, stateAuthenticationKey);
+  if (matches.length > 1) return ambiguousPublicationResult({ repository: targetRepository, source, publicationFingerprint, matches });
+  if (matches.length === 1) {
+    const match = matches[0];
+    const records = occurrenceRecords(await listOccurrenceRecords({ repository: targetRepository, ...match }), targetRepository, publicationFingerprint, stateAuthenticationKey);
+    if (records.some((record) => record.sourceId === sourceId)) return publicationResult({ repository: targetRepository, publication: match.publication, action: "NOOP", target: match, occurrence: occurrenceFromRecords(records), source, publicationFingerprint });
+    await createOccurrenceRecord({ repository: targetRepository, ...match, body: occurrenceBody });
+    const confirmedRecords = occurrenceRecords(await listOccurrenceRecords({ repository: targetRepository, ...match }), targetRepository, publicationFingerprint, stateAuthenticationKey);
+    if (!confirmedRecords.some((record) => record.sourceId === sourceId)) throw new Error("GitHub occurrence record could not be confirmed");
+    const confirmed = publicationMatches(await findOpenPublications({ repository: targetRepository, fingerprint: publicationFingerprint }), targetRepository, publicationFingerprint, stateAuthenticationKey);
+    if (confirmed.length > 1) return ambiguousPublicationResult({ repository: targetRepository, source, publicationFingerprint, matches: confirmed });
+    return publicationResult({ repository: targetRepository, publication: match.publication, action: "UPDATED", target: match, occurrence: occurrenceFromRecords(confirmedRecords), source, publicationFingerprint });
+  }
+  const recentSince = new Date(Date.now() - 5 * 60_000).toISOString();
   const published = await transport({ repository: targetRepository, title, body, labels: safeLabels });
-  if (!published || !Number.isInteger(published.number) || published.number < 1 || typeof published.url !== "string") throw new Error("GitHub Issue transport returned an invalid result");
-  return validateContract("GitHubPublicationResult", {
-    schemaVersion: GITHUB_PUBLICATION_RESULT_VERSION,
-    repository,
-    publication: "ISSUE",
-    action: "CREATED",
-    target: { publication: "ISSUE", number: published.number, url: published.url },
-    occurrence,
-    source: {
-      runId: input.evidenceBundle.runId,
-      judgeResultId: input.judgeResult.resultId,
-      failureDiagnosisId: input.diagnosis.diagnosisId,
-      codeContextBundleId: input.codeContext.bundleId,
-      ...(input.recommendation ? { repairRecommendationId: input.recommendation.recommendationId } : {}),
-    },
-    publicationFingerprint,
-  });
+  const target = publicationTarget({ repository: targetRepository, publication: "ISSUE", number: published?.number, url: published?.url });
+  const created = await readPublication({ repository: targetRepository, ...target });
+  const confirmedTarget = publicationMatch({ repository: targetRepository, publication: created?.publication, number: created?.number, url: created?.url, body: created?.body });
+  const createdState = parsePublicationState(confirmedTarget.body, targetRepository, publicationFingerprint, stateAuthenticationKey);
+  if (confirmedTarget.publication !== target.publication || confirmedTarget.number !== target.number || createdState.occurrence.count !== 1 || !createdState.seenSourceIds.includes(sourceId)) throw new Error("GitHub Issue creation could not be confirmed");
+  await createOccurrenceRecord({ repository: targetRepository, ...target, body: occurrenceBody });
+  const records = occurrenceRecords(await listOccurrenceRecords({ repository: targetRepository, ...target }), targetRepository, publicationFingerprint, stateAuthenticationKey);
+  if (!records.some((record) => record.sourceId === sourceId)) throw new Error("GitHub occurrence record could not be confirmed");
+  const reconciled = publicationMatches(await findRecentPublications({ repository: targetRepository, fingerprint: publicationFingerprint, since: recentSince }), targetRepository, publicationFingerprint, stateAuthenticationKey);
+  const conflicts = reconciled.filter((match) => match.publication !== target.publication || match.number !== target.number);
+  if (conflicts.length > 0) return ambiguousPublicationResult({ repository: targetRepository, source, publicationFingerprint, matches: [target, ...conflicts] });
+  return publicationResult({ repository: targetRepository, publication: "ISSUE", action: "CREATED", target, occurrence: occurrenceFromRecords(records), source, publicationFingerprint });
 }
 
 export function createFailureFingerprint({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, secrets = [] } = {}) {
@@ -99,11 +174,15 @@ export function createFailureFingerprint({ qaIr, judgeResult, evidenceBundle, di
   });
 }
 
-export function renderGitHubFailureIssue({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, recommendation, publicationFingerprint = createFailureFingerprint({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, secrets }), occurrence = { count: 1, firstSeen: evidenceBundle?.capturedAt, lastSeen: evidenceBundle?.capturedAt }, secrets = [] } = {}) {
+export function renderGitHubFailureIssue({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, recommendation, secrets = [], stateAuthenticationKey, publicationFingerprint = createFailureFingerprint({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, secrets }), occurrence = { count: 1, firstSeen: evidenceBundle?.capturedAt, lastSeen: evidenceBundle?.capturedAt }, seenSourceIds } = {}) {
+  assertStateAuthenticationKey(stateAuthenticationKey);
   if (!/^sha256:[0-9a-f]{64}$/.test(publicationFingerprint)) throw new Error("GitHub publication fingerprint is invalid");
-  if (!occurrence || !Number.isSafeInteger(occurrence.count) || occurrence.count < 1 || occurrence.count > Number.MAX_SAFE_INTEGER || typeof occurrence.firstSeen !== "string" || occurrence.firstSeen.length === 0 || occurrence.firstSeen.length > 128 || typeof occurrence.lastSeen !== "string" || occurrence.lastSeen.length === 0 || occurrence.lastSeen.length > 128) throw new Error("GitHub publication occurrence is invalid");
+  if (!validOccurrence(occurrence)) throw new Error("GitHub publication occurrence is invalid");
   const input = jsonSnapshot({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, recommendation });
   validateInputs(input, secrets);
+  const source = publicationSource(input);
+  const normalizedSeenSourceIds = seenSourceIds ?? [publicationSourceId(source)];
+  if (!validSeenSourceIds(normalizedSeenSourceIds) || normalizedSeenSourceIds.length !== occurrence.count) throw new Error("GitHub publication occurrence history is invalid");
   const scenario = input.qaIr.suites.flatMap((suite) => suite.scenarios).find((item) => item.id === input.evidenceBundle.scenarioId);
   const unresolved = input.judgeResult.expectationResults.filter((item) => !["MATCHED", "NOT_APPLICABLE"].includes(item.status));
   const expected = unresolved.map((result) => {
@@ -117,6 +196,7 @@ export function renderGitHubFailureIssue({ qaIr, judgeResult, evidenceBundle, di
   });
   const finalUrl = safeUrl(input.evidenceBundle.environment.targetUrl, secrets);
   const lines = [
+    "<!-- qa-runtime:start -->",
     "## QA failure",
     "",
     `- Scenario: **${safeText(scenario.title, secrets)}** (${code(scenario.id, secrets)})`,
@@ -125,6 +205,7 @@ export function renderGitHubFailureIssue({ qaIr, judgeResult, evidenceBundle, di
     `- Confidence: **${input.diagnosis.confidence.toFixed(2)}**`,
     `- Run: ${code(input.evidenceBundle.runId, secrets)}`,
     `- Judge Result: ${code(input.judgeResult.resultId, secrets)}`,
+    `- Evidence Bundle: ${code(input.evidenceBundle.bundleId, secrets)}`,
     `- Repository revision: ${code(input.codeContext.revision, secrets)}`,
     `- Occurrence count: **${occurrence.count}**`,
     `- First seen: ${code(occurrence.firstSeen, secrets)}`,
@@ -168,6 +249,8 @@ export function renderGitHubFailureIssue({ qaIr, judgeResult, evidenceBundle, di
     ...(input.recommendation ? [`Repair recommendation: ${code(input.recommendation.recommendationId, secrets)}`] : []),
     "",
     `<!-- qa-fingerprint: ${publicationFingerprint} -->`,
+    publicationStateMarker({ repository: input.codeContext.repositoryId, publicationFingerprint, occurrence, seenSourceIds: normalizedSeenSourceIds, source, stateAuthenticationKey }),
+    "<!-- qa-runtime:end -->",
   ];
   const body = lines.join("\n");
   if (body.length > 65_536) throw new Error("GitHub Issue body exceeds size limit");
@@ -255,6 +338,136 @@ function fingerprintRoute(value) {
   }
 }
 
+function publicationSource(input) {
+  return {
+    runId: input.evidenceBundle.runId,
+    evidenceBundleId: input.evidenceBundle.bundleId,
+    judgeResultId: input.judgeResult.resultId,
+    failureDiagnosisId: input.diagnosis.diagnosisId,
+    codeContextBundleId: input.codeContext.bundleId,
+    ...(input.recommendation ? { repairRecommendationId: input.recommendation.recommendationId } : {}),
+  };
+}
+
+function publicationSourceId(source) {
+  return canonicalHash({ runId: source.runId, judgeResultId: source.judgeResultId, evidenceBundleId: source.evidenceBundleId });
+}
+
+function publicationResult({ repository, publication, action, target, occurrence, source, publicationFingerprint }) {
+  return validateContract("GitHubPublicationResult", { schemaVersion: GITHUB_PUBLICATION_RESULT_VERSION, repository, publication, action, target: { publication: target.publication, number: target.number, url: target.url }, occurrence, source, publicationFingerprint });
+}
+
+function ambiguousPublicationResult({ repository, source, publicationFingerprint, matches }) {
+  const targets = [...new Map(matches.map((match) => [match.number, match])).values()].map(({ publication, number, url }) => ({ publication, number, url }));
+  if (targets.length < 2) throw new Error("GitHub publication search is inconsistent");
+  return validateContract("GitHubPublicationResult", { schemaVersion: GITHUB_PUBLICATION_RESULT_VERSION, repository, publication: "UNRESOLVED", action: "AMBIGUOUS", matches: targets, source, publicationFingerprint });
+}
+
+function publicationMatches(value, repository, fingerprint, stateAuthenticationKey) {
+  if (!Array.isArray(value) || value.length > MAX_PUBLICATION_MATCHES) throw new Error("GitHub publication search returned invalid data");
+  return value.flatMap((match) => {
+    const normalized = publicationMatch({ repository, publication: match?.publication, number: match?.number, url: match?.url, body: match?.body });
+    if (!hasFingerprintMarker(normalized.body, fingerprint)) throw new Error("GitHub publication search returned an unbound match");
+    try { parsePublicationState(normalized.body, repository, fingerprint, stateAuthenticationKey); } catch { return []; }
+    return [normalized];
+  });
+}
+
+function publicationTarget({ repository, publication, number, url }) {
+  return publicationMatch({ repository, publication, number, url, body: "bounded" });
+}
+
+function publicationStateMarker({ repository, publicationFingerprint, occurrence, seenSourceIds, source, stateAuthenticationKey }) {
+  const state = { schemaVersion: "qa-publication-state/0.2", keyId: PUBLICATION_KEY_ID, repository: repositorySlug(repository).toLowerCase(), publicationFingerprint, occurrence, seenSourceIds, initialSourceId: publicationSourceId(source) };
+  const authentication = publicationAuthentication("state", state, stateAuthenticationKey);
+  return `<!-- qa-publication-state: ${Buffer.from(JSON.stringify({ ...state, authentication })).toString("base64url")} -->`;
+}
+
+function parsePublicationState(body, repository, fingerprint, stateAuthenticationKey) {
+  assertStateAuthenticationKey(stateAuthenticationKey);
+  const matches = [...body.matchAll(/<!-- qa-publication-state: ([A-Za-z0-9_-]{1,8192}) -->/g)];
+  if (matches.length !== 1) throw new Error("GitHub publication occurrence state is missing or ambiguous");
+  let state;
+  try {
+    const bytes = Buffer.from(matches[0][1], "base64url");
+    if (bytes.toString("base64url") !== matches[0][1]) throw new Error();
+    state = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    throw new Error("GitHub publication occurrence state is invalid");
+  }
+  if (!state || Object.keys(state).sort().join(",") !== "authentication,initialSourceId,keyId,occurrence,publicationFingerprint,repository,schemaVersion,seenSourceIds" || state.schemaVersion !== "qa-publication-state/0.2" || state.keyId !== PUBLICATION_KEY_ID || state.repository !== repositorySlug(repository).toLowerCase() || state.publicationFingerprint !== fingerprint || !validOccurrence(state.occurrence) || !validSeenSourceIds(state.seenSourceIds) || state.seenSourceIds.length !== state.occurrence.count || state.initialSourceId !== state.seenSourceIds[0] || typeof state.authentication !== "string" || !/^hmac-sha256:[0-9a-f]{64}$/.test(state.authentication)) throw new Error("GitHub publication occurrence state is invalid");
+  const { authentication, ...authenticated } = state;
+  const actual = Buffer.from(authentication.slice("hmac-sha256:".length), "hex");
+  const expected = publicationAuthenticationBytes("state", authenticated, stateAuthenticationKey);
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) throw new Error("GitHub publication occurrence state authentication failed");
+  return state;
+}
+
+function validOccurrence(value) {
+  const first = typeof value?.firstSeen === "string" ? Date.parse(value.firstSeen) : Number.NaN;
+  const last = typeof value?.lastSeen === "string" ? Date.parse(value.lastSeen) : Number.NaN;
+  return value && Number.isSafeInteger(value.count) && value.count >= 1 && value.firstSeen.length <= 128 && value.lastSeen.length <= 128 && Number.isFinite(first) && Number.isFinite(last) && first <= last;
+}
+
+function validSeenSourceIds(value) {
+  return Array.isArray(value) && value.length > 0 && value.length <= MAX_SEEN_PUBLICATION_SOURCES && new Set(value).size === value.length && value.every((item) => /^sha256:[0-9a-f]{64}$/.test(item));
+}
+
+function assertStateAuthenticationKey(value) {
+  if (!(value instanceof Uint8Array) || value.byteLength < 32) throw new Error("GitHub publication state authentication key is invalid");
+}
+
+function occurrenceTimestamp(value) {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) throw new Error("GitHub publication occurrence timestamp is invalid");
+  return new Date(timestamp).toISOString();
+}
+
+export function renderGitHubOccurrenceRecord({ repository, publicationFingerprint, source, occurredAt, stateAuthenticationKey, secrets = [] }) {
+  assertStateAuthenticationKey(stateAuthenticationKey);
+  if (!/^sha256:[0-9a-f]{64}$/.test(publicationFingerprint) || !source || [source.runId, source.judgeResultId, source.evidenceBundleId].some((value) => typeof value !== "string" || value.length === 0 || value.length > 512)) throw new Error("GitHub occurrence record input is invalid");
+  const record = { schemaVersion: "qa-occurrence/0.1", keyId: PUBLICATION_KEY_ID, repository: repositorySlug(repository).toLowerCase(), publicationFingerprint, sourceId: publicationSourceId(source), occurredAt: occurrenceTimestamp(occurredAt) };
+  const authentication = publicationAuthentication("occurrence", record, stateAuthenticationKey);
+  return ["## QA occurrence", "", `- Run: ${code(source.runId, secrets)}`, `- Judge Result: ${code(source.judgeResultId, secrets)}`, `- Evidence Bundle: ${code(source.evidenceBundleId, secrets)}`, `- Seen: ${code(record.occurredAt, secrets)}`, "", `<!-- qa-occurrence: ${Buffer.from(JSON.stringify({ ...record, authentication })).toString("base64url")} -->`].join("\n");
+}
+
+function occurrenceRecords(value, repository, fingerprint, stateAuthenticationKey) {
+  if (!Array.isArray(value) || value.length > 500) throw new Error("GitHub occurrence search returned invalid data");
+  const records = value.flatMap((item) => {
+    if (!item || !Number.isSafeInteger(item.id) || item.id < 1 || typeof item.body !== "string" || item.body.length > 8_192) return [];
+    const match = /<!-- qa-occurrence: ([A-Za-z0-9_-]{1,8192}) -->/.exec(item.body);
+    if (!match) return [];
+    let record;
+    try {
+      const bytes = Buffer.from(match[1], "base64url");
+      if (bytes.toString("base64url") !== match[1]) return [];
+      record = JSON.parse(bytes.toString("utf8"));
+    } catch { return []; }
+    const occurredAt = typeof record?.occurredAt === "string" ? Date.parse(record.occurredAt) : Number.NaN;
+    if (!record || Object.keys(record).sort().join(",") !== "authentication,keyId,occurredAt,publicationFingerprint,repository,schemaVersion,sourceId" || record.schemaVersion !== "qa-occurrence/0.1" || record.keyId !== PUBLICATION_KEY_ID || record.repository !== repositorySlug(repository).toLowerCase() || record.publicationFingerprint !== fingerprint || !/^sha256:[0-9a-f]{64}$/.test(record.sourceId) || !Number.isFinite(occurredAt) || new Date(occurredAt).toISOString() !== record.occurredAt || typeof record.authentication !== "string" || !/^hmac-sha256:[0-9a-f]{64}$/.test(record.authentication)) return [];
+    const { authentication, ...authenticated } = record;
+    const actual = Buffer.from(authentication.slice("hmac-sha256:".length), "hex");
+    const expected = publicationAuthenticationBytes("occurrence", authenticated, stateAuthenticationKey);
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return [];
+    return [{ ...authenticated, commentId: item.id }];
+  });
+  return [...new Map(records.sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.commentId - right.commentId).map((record) => [record.sourceId, record])).values()];
+}
+
+function occurrenceFromRecords(records) {
+  if (!Array.isArray(records) || records.length === 0) throw new Error("GitHub occurrence record is missing");
+  const times = records.map((record) => Date.parse(record.occurredAt));
+  return { count: records.length, firstSeen: new Date(Math.min(...times)).toISOString(), lastSeen: new Date(Math.max(...times)).toISOString() };
+}
+
+function publicationAuthentication(kind, value, key) {
+  return `hmac-sha256:${publicationAuthenticationBytes(kind, value, key).toString("hex")}`;
+}
+
+function publicationAuthenticationBytes(kind, value, key) {
+  return createHmac("sha256", key).update(`qa-native/github/${kind}/v1\0`).update(canonicalHash(value)).digest();
+}
+
 function labelSlug(value) {
   return String(value).toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 41) || "unknown";
 }
@@ -271,4 +484,21 @@ function safeText(value, secrets) { return safePlainText(value, secrets).replace
 function verifyStableId(prefix, idKey, value) { const { [idKey]: id, ...body } = value; const expected = `${prefix}-${canonicalHash(body).slice("sha256:".length, "sha256:".length + 16)}`; if (id !== expected) throw new Error(`${prefix} artifact identity is invalid`); }
 function jsonSnapshot(value) { const serialized = JSON.stringify(value); if (serialized === undefined) throw new Error("GitHub publication input must be JSON-serializable"); return JSON.parse(serialized); }
 function runGh(spawn, args, input) { const result = spawn("gh", args, { encoding: "buffer", maxBuffer: MAX_GITHUB_RESPONSE_BYTES, env: githubEnvironment(), ...(input === undefined ? {} : { input }) }); if (!result || result.status !== 0 || !(result.stdout instanceof Uint8Array) || result.stdout.byteLength > MAX_GITHUB_RESPONSE_BYTES) throw new Error("GitHub CLI request failed"); return Buffer.from(result.stdout); }
+function runGhJson(spawn, args, input) { try { return JSON.parse(runGh(spawn, args, input).toString("utf8")); } catch { throw new Error("GitHub CLI returned invalid JSON"); } }
 function githubEnvironment() { return Object.fromEntries([...GITHUB_ENV_KEYS.map((key) => [key, process.env[key]]).filter(([, value]) => typeof value === "string"), ["GH_PROMPT_DISABLED", "1"], ["GH_NO_UPDATE_NOTIFIER", "1"]]); }
+function hasFingerprintMarker(body, fingerprint) { return body.split("\n").some((line) => line.trim() === `<!-- qa-fingerprint: ${fingerprint} -->`); }
+function publicationMatch({ repository, publication, number, url, body }) {
+  if (!["ISSUE", "DRAFT_PR"].includes(publication) || !Number.isSafeInteger(number) || number < 1 || typeof url !== "string" || typeof body !== "string" || body.length === 0 || body.length > 65_536) throw new Error("GitHub publication data is invalid");
+  let parsed;
+  try { parsed = new URL(url); } catch { throw new Error("GitHub publication data is invalid"); }
+  const segment = publication === "ISSUE" ? "issues" : "pull";
+  if (parsed.protocol !== "https:" || parsed.hostname !== "github.com" || parsed.port || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname.toLowerCase() !== `/${repository}/${segment}/${number}`.toLowerCase()) throw new Error("GitHub publication data is invalid");
+  return Object.freeze({ publication, number, url, body });
+}
+function awaitGitHubPublication(spawn, repository, { publication, number, url }) {
+  const target = publicationTarget({ repository, publication, number, url });
+  const endpoint = publication === "ISSUE" ? `repos/${repository}/issues/${number}` : `repos/${repository}/pulls/${number}`;
+  const value = runGhJson(spawn, ["api", "--method", "GET", endpoint]);
+  if (!value || value.state !== "open" || (publication === "DRAFT_PR" && value.draft !== true)) throw new Error("GitHub publication is not open and managed");
+  return publicationMatch({ repository, publication, number: value.number, url: value.html_url, body: value.body });
+}

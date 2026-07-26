@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseArgs, TextDecoder } from "node:util";
 
 const INTEGRITY_KEY_ENV = "QA_NATIVE_INTEGRITY_KEY";
+const PUBLICATION_KEY_ENV = "QA_NATIVE_PUBLICATION_KEY";
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 const MAX_PRIVATE_JSON_BYTES = 4 * 1024 * 1024;
@@ -29,11 +30,19 @@ const COMMAND_USAGE = Object.freeze({
 });
 
 export function decodeIntegrityKey(value) {
+  return decodeKey(value, "integrity");
+}
+
+export function decodePublicationKey(value) {
+  return decodeKey(value, "publication");
+}
+
+function decodeKey(value, label) {
   if (typeof value !== "string" || value.length === 0 || value.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
-    throw new CliError("integrity key is missing or invalid");
+    throw new CliError(`${label} key is missing or invalid`);
   }
   const key = Buffer.from(value, "base64");
-  if (key.byteLength < 32 || key.toString("base64") !== value) throw new CliError("integrity key is missing or invalid");
+  if (key.byteLength < 32 || key.toString("base64") !== value) throw new CliError(`${label} key is missing or invalid`);
   return key;
 }
 
@@ -127,8 +136,10 @@ export async function runQaNative(argv, {
   stderr = (value) => process.stderr.write(value),
 } = {}) {
   let integrityKey;
+  let publicationKey;
   const restoreProcessKey = env !== process.env;
   const previousProcessKey = restoreProcessKey ? process.env[INTEGRITY_KEY_ENV] : undefined;
+  const previousPublicationKey = restoreProcessKey ? process.env[PUBLICATION_KEY_ENV] : undefined;
   try {
     const request = parseRequest(argv);
     if (request.help) {
@@ -139,17 +150,22 @@ export async function runQaNative(argv, {
     if (typeof handler !== "function") throw new CliError("command is not available");
     if (platform === "win32") throw new CliError("command is not supported on this platform");
     integrityKey = decodeIntegrityKey(env[INTEGRITY_KEY_ENV]);
+    if (request.command === "publish-issue") publicationKey = decodePublicationKey(env[PUBLICATION_KEY_ENV]);
     delete process.env[INTEGRITY_KEY_ENV];
+    delete process.env[PUBLICATION_KEY_ENV];
     const normalized = normalizeRequest(request, cwd);
-    const status = await handler({ ...normalized, integrityKey });
+    const status = await handler({ ...normalized, integrityKey, ...(publicationKey === undefined ? {} : { publicationKey }) });
     return Number.isInteger(status) ? status : 0;
   } catch (error) {
     stderr(`qa-native: ${error instanceof CliError ? error.message : "command failed"}\n`);
     return 1;
   } finally {
     integrityKey?.fill(0);
+    publicationKey?.fill(0);
     if (restoreProcessKey && previousProcessKey !== undefined) process.env[INTEGRITY_KEY_ENV] = previousProcessKey;
     else delete process.env[INTEGRITY_KEY_ENV];
+    if (restoreProcessKey && previousPublicationKey !== undefined) process.env[PUBLICATION_KEY_ENV] = previousPublicationKey;
+    else delete process.env[PUBLICATION_KEY_ENV];
   }
 }
 
@@ -162,6 +178,7 @@ ${available.map((command) => `  ${COMMAND_USAGE[command]}`).join("\n") || "  No 
 
 Environment:
   QA_NATIVE_INTEGRITY_KEY  Canonical base64 encoding of at least 32 random bytes
+  QA_NATIVE_PUBLICATION_KEY  Stable canonical base64 key for publish-issue HMAC state
 `;
 }
 

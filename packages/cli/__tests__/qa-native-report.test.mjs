@@ -17,6 +17,7 @@ import { createExclusiveQaDirectory, runQaNative, writePrivateJsonExclusive } fr
 
 const temporaryDirectories = [];
 const integrityKey = Buffer.alloc(32, 0x63);
+const publicationKey = Buffer.alloc(32, 0x64);
 const capabilities = Object.freeze({
   schemaVersion: PROVIDER_CAPABILITIES_VERSION,
   providerId: "fixture-provider",
@@ -115,7 +116,7 @@ describe("qa-native GitHub Issue publication", () => {
 
     expect(githubTransport.verifyCodeContext).toHaveBeenCalledWith(expect.objectContaining({ repository: "owner/example", revision: fixture.revision }));
     const directory = completedPublicationDirectory(fixture.runDirectory);
-    expect(readdirSync(directory)).toEqual(["github-publication-result.json"]);
+    expect(readdirSync(directory).sort()).toEqual(["github-publication-intent.json", "github-publication-result.json"]);
     expect(readJson(join(directory, "github-publication-result.json"))).toMatchObject({
       repository: "owner/example",
       publication: "ISSUE",
@@ -164,6 +165,25 @@ describe("qa-native GitHub Issue publication", () => {
     expect(githubTransport.createIssue).not.toHaveBeenCalled();
     expect(existsSync(join(fixture.runDirectory, "publications"))).toBe(false);
   });
+
+  it("persists an ambiguous remote fingerprint result without creating another Issue", async () => {
+    const fixture = persistedFailedRun();
+    let createdBody;
+    const githubTransport = fakeGitHubTransport();
+    githubTransport.createIssue = vi.fn(async ({ body }) => { createdBody = body; return { number: 4, url: "https://github.com/owner/example/issues/4" }; });
+    githubTransport.readPublication = vi.fn(async ({ publication, number, url }) => ({ publication, number, url, body: createdBody }));
+    githubTransport.findOpenPublications = vi.fn(async () => []);
+    githubTransport.findRecentPublications = vi.fn(async () => [
+        { publication: "ISSUE", number: 4, url: "https://github.com/owner/example/issues/4", body: createdBody },
+        { publication: "DRAFT_PR", number: 5, url: "https://github.com/owner/example/pull/5", body: createdBody },
+      ]);
+
+    expect(await dispatchIssue(fixture.cwd, githubTransport)).toBe(1);
+    const result = readJson(join(completedPublicationDirectory(fixture.runDirectory), "github-publication-result.json"));
+    expect(result).toMatchObject({ action: "AMBIGUOUS", publication: "UNRESOLVED" });
+    expect(githubTransport.createIssue).toHaveBeenCalledOnce();
+    expect(githubTransport.createOccurrenceRecord).toHaveBeenCalledOnce();
+  });
 });
 
 async function dispatch(cwd, { key = integrityKey, stderr = vi.fn(), judgment } = {}) {
@@ -181,7 +201,7 @@ async function dispatch(cwd, { key = integrityKey, stderr = vi.fn(), judgment } 
 async function dispatchIssue(cwd, githubTransport, { key = integrityKey, stderr = vi.fn() } = {}) {
   return runQaNative(["publish-issue", "--run-dir=.qa/runs/run-1", "--repository-root=.", "--repository=owner/example"], {
     cwd,
-    env: { QA_NATIVE_INTEGRITY_KEY: key.toString("base64") },
+    env: { QA_NATIVE_INTEGRITY_KEY: key.toString("base64"), QA_NATIVE_PUBLICATION_KEY: publicationKey.toString("base64") },
     handlers: { "publish-issue": (options) => publishIssueQaNative({ ...options, githubTransport }) },
     stdout: vi.fn(),
     stderr,
@@ -189,10 +209,18 @@ async function dispatchIssue(cwd, githubTransport, { key = integrityKey, stderr 
 }
 
 function fakeGitHubTransport(overrides = {}) {
+  const { createIssue, ...rest } = overrides;
+  let createdBody;
+  const records = [];
   return {
+    findOpenPublications: vi.fn(async () => []),
+    findRecentPublications: vi.fn(async () => createdBody ? [{ publication: "ISSUE", number: 42, url: "https://github.com/owner/example/issues/42", body: createdBody }] : []),
+    readPublication: vi.fn(async ({ publication, number, url }) => ({ publication, number, url, body: createdBody })),
+    listOccurrenceRecords: vi.fn(async () => records),
     verifyCodeContext: vi.fn(async () => true),
-    createIssue: vi.fn(async () => ({ number: 42, url: "https://github.com/owner/example/issues/42" })),
-    ...overrides,
+    createIssue: vi.fn(async (request) => { createdBody = request.body; return createIssue ? createIssue(request) : { number: 42, url: "https://github.com/owner/example/issues/42" }; }),
+    createOccurrenceRecord: vi.fn(async ({ body }) => { const record = { id: records.length + 1, url: `https://github.com/owner/example/issues/42#issuecomment-${records.length + 1}`, body, createdAt: "2026-07-26T00:00:00.000Z" }; records.push(record); return record; }),
+    ...rest,
   };
 }
 

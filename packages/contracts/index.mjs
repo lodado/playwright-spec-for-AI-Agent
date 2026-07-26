@@ -1016,7 +1016,7 @@ function validateGitHubPublicationResult(value, path) {
     array(value.matches, `${path}.matches`, contract);
     if (value.matches.length < 2 || value.matches.length > 10) fail(contract, `${path}.matches`, "must contain 2 to 10 matches");
     value.matches.forEach((match, index) => validateGitHubPublicationTarget(match, `${path}.matches[${index}]`, value.repository, contract));
-    const matchKeys = value.matches.map((match) => `${match.publication}:${match.number}`);
+    const matchKeys = value.matches.map((match) => String(match.number));
     if (new Set(matchKeys).size !== matchKeys.length) fail(contract, `${path}.matches`, "must contain unique publications");
   } else {
     oneOf(value.publication, ["ISSUE", "DRAFT_PR"], `${path}.publication`, contract);
@@ -1031,8 +1031,8 @@ function validateGitHubPublicationResult(value, path) {
     if (value.action === "CREATED" && value.occurrence.count !== 1) fail(contract, `${path}.occurrence.count`, "must be 1 for a created publication");
   }
   object(value.source, `${path}.source`, contract);
-  allowedKeys(value.source, ["runId", "judgeResultId", "failureDiagnosisId", "codeContextBundleId", "repairRecommendationId"], `${path}.source`, contract);
-  for (const key of ["runId", "judgeResultId", "failureDiagnosisId", "codeContextBundleId"]) boundedString(value.source[key], 512, `${path}.source.${key}`, contract);
+  allowedKeys(value.source, ["runId", "evidenceBundleId", "judgeResultId", "failureDiagnosisId", "codeContextBundleId", "repairRecommendationId"], `${path}.source`, contract);
+  for (const key of ["runId", "evidenceBundleId", "judgeResultId", "failureDiagnosisId", "codeContextBundleId"]) boundedString(value.source[key], 512, `${path}.source.${key}`, contract);
   if (value.source.repairRecommendationId !== undefined) boundedString(value.source.repairRecommendationId, 512, `${path}.source.repairRecommendationId`, contract);
   sha256Hash(value.publicationFingerprint, `${path}.publicationFingerprint`, contract);
 }
