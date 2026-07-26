@@ -16,7 +16,7 @@
 
 <br />
 
-[Quick start](#quick-start) · [API](#api) · [Policy mapping](#outputs) · [Safety](#safety) · [Legacy package](../../apps/playwright-spec-for-ai-agent/README.md)
+[Quick start](#quick-start) · [Annotations](#playwright-annotations) · [API](#api) · [Policy mapping](#outputs) · [Safety](#safety) · [Legacy package](../../apps/playwright-spec-for-ai-agent/README.md)
 
 </div>
 
@@ -76,6 +76,7 @@ study-spec/0.1
 - [Why this exists](#why-this-exists)
 - [What it does](#what-it-does)
 - [API](#api)
+- [Playwright annotations](#playwright-annotations)
 - [Quick start](#quick-start)
 - [Outputs](#outputs)
 - [Safety](#safety)
@@ -115,6 +116,52 @@ import { parseSpecDirectory } from "playwright-spec-adapter/legacy";
 import { literalExpectedForLive } from "playwright-spec-adapter/expectation";
 import { filterSpecForLiveJson } from "playwright-spec-adapter/policy";
 ```
+
+## Playwright annotations
+
+These are Playwright source comments, not TypeScript decorators. They are the
+shared input contract for both the legacy live-QA CLI and Persona Runtime's
+`import-playwright` command.
+
+| Annotation | Scope | Persona Runtime meaning |
+| --- | --- | --- |
+| `// @qa-page: pricing` | File | Optional page/task target metadata. |
+| `// @qa-scenario: ACTIVE` | File | Required scenario identity and task intent. |
+| `// @qa-live-skip: true` | File | Imports the scenario conservatively instead of scheduling live actions. |
+| `// @qa-always-run: true` | File | Keeps the scenario eligible when legacy filtering would skip it. |
+| `// @qa-live-policy: ...` | Test or enclosing `test.describe` | Compiles the test's browser-action safety policy. |
+| `// @qa-fixture: avatar=tests/fixtures/avatar.png` | Test, describe, or file | Preserves a named fixture reference; the adapter does not upload it. |
+
+Place file annotations before imports and action annotations immediately above
+the test they control:
+
+```ts
+// @qa-page: pricing
+// @qa-scenario: PRICING_VISIBLE
+
+import { expect, test } from "@playwright/test";
+
+// @qa-live-policy: readonly
+test("shows the current price", async ({ page }) => {
+  await expect(page.getByRole("heading", { name: "Pricing" })).toBeVisible();
+});
+```
+
+Supported live policies:
+
+| Policy | StudySpec mapping |
+| --- | --- |
+| `readonly` | Navigation/read checks only; click, typing, upload, and mutation stay disabled. |
+| `safe-interaction` | Bounded click, typing, upload, and state mutation may be enabled. |
+| `safe-interaction-no-confirm` | Interaction is allowed, but destructive confirmation remains blocked. |
+| `mock-judgment` | Mock-backed expectations become conservative live intent. |
+| `subscription-mutation` | Blocked from execution and marked for human review. |
+| `auth-mock` | Blocked from direct live execution and marked for review. |
+| `skip` | Blocked from live execution. |
+
+`import-playwright` preserves these policies; it never upgrades a blocked policy
+into an executable action. Parser syntax coverage and unsupported constructs are
+listed in [PLAYWRIGHT_SYNTAX_SUPPORT.md](../../apps/playwright-spec-for-ai-agent/PLAYWRIGHT_SYNTAX_SUPPORT.md).
 
 ## Quick start
 

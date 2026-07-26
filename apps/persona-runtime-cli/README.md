@@ -204,7 +204,7 @@ Use the adapter when existing Playwright specs are the source of QA intent:
 pnpm persona-runtime import-playwright --spec-dir=path/to/specs --base-url=https://staging.example.com --output=.qa/imported-study.yaml
 ```
 
-The adapter preserves legacy annotation/live-policy semantics, then writes a canonical StudySpec.
+The adapter preserves legacy annotation/live-policy semantics, then writes a canonical StudySpec. See the shared [Playwright annotations](../../packages/playwright-spec-adapter/README.md#playwright-annotations) reference for placement, supported policies, fixtures, and safety mapping.
 
 ## Compare variants
 
@@ -231,7 +231,10 @@ A run directory contains:
         ├── evidence-manifest.json
         ├── events.jsonl
         ├── observations.jsonl
-        └── artifacts/...
+        ├── screenshots/           # when enabled
+        ├── downloads/
+        ├── videos/                # on failure/all, when enabled
+        └── trace.zip              # when enabled
 ```
 
 The evaluator verifies manifest membership, hashes, and artifact bytes before reporting success.

@@ -20,7 +20,7 @@
 
 <br />
 
-[Persona Runtime](#persona-runtime) · [End-to-end example](#end-to-end-example) · [Quick start](#quick-start) · [Commands](#commands) · [Legacy package](./apps/playwright-spec-for-ai-agent/README.md) · [Docs](./docs/README.md)
+[Persona Runtime](#persona-runtime) · [End-to-end example](#end-to-end-example) · [Quick start](#quick-start) · [Commands](#commands) · [Playwright annotations](./packages/playwright-spec-adapter/README.md#playwright-annotations) · [Legacy package](./apps/playwright-spec-for-ai-agent/README.md)
 
 </div>
 
@@ -164,7 +164,10 @@ The study runs three persona presets across three seeds: nine isolated browser s
         ├── evidence-manifest.json
         ├── events.jsonl
         ├── observations.jsonl
-        └── artifacts/...
+        ├── screenshots/           # when enabled
+        ├── downloads/
+        ├── videos/                # on failure/all, when enabled
+        └── trace.zip              # when enabled
 ```
 
 Example `summary.json`:
@@ -334,4 +337,4 @@ pnpm test
 pnpm package:smoke
 ```
 
-Implementation notes and architecture constraints live in [`docs/`](./docs/README.md).
+Playwright source annotations shared by the compatibility package and Persona Runtime are documented in the [Playwright Spec Adapter README](./packages/playwright-spec-adapter/README.md#playwright-annotations).
