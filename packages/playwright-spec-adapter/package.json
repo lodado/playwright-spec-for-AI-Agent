@@ -1,0 +1,28 @@
+{
+  "name": "playwright-spec-adapter",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.mjs",
+    "./compiler": "./src/compiler.mjs",
+    "./legacy": "./src/legacy/parser.mjs",
+    "./expectation": "./src/expectation/abstractor.mjs",
+    "./policy": "./src/policy/live-filter.mjs"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "node --check src/index.mjs && node --check src/compiler.mjs && node --check src/legacy/parser.mjs && node --check src/expectation/abstractor.mjs && node --check src/policy/live-filter.mjs",
+    "build": "node --check src/index.mjs && node --check src/compiler.mjs && node --check src/legacy/parser.mjs && node --check src/expectation/abstractor.mjs && node --check src/policy/live-filter.mjs",
+    "lint": "node --check src/index.mjs && node --check src/compiler.mjs && node --check src/legacy/parser.mjs && node --check src/expectation/abstractor.mjs && node --check src/policy/live-filter.mjs"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.7"
+  },
+  "dependencies": {
+    "@persona-runtime/contracts": "workspace:*"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

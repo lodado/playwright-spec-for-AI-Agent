@@ -1,114 +1,21 @@
 {
-  "name": "playwright-spec-for-ai-agent",
-  "version": "0.9.0",
-  "description": "AI-assisted live staging QA layer for Playwright test suites. Parses @qa-scenario annotations from *.spec.ts into structured QA scenarios, then uses Hermes Agent to log into staging, visit target pages, and judge live DOM against test intent \u2014 returning pass, fail, manual_review, or skip without running Playwright against staging or mutating billing state.",
-  "type": "module",
-  "license": "MIT",
-  "author": "lodado <ycp998@naver.com>",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/lodado/playwright-spec-for-AI-Agent.git"
-  },
-  "homepage": "https://github.com/lodado/playwright-spec-for-AI-Agent#readme",
-  "bugs": {
-    "url": "https://github.com/lodado/playwright-spec-for-AI-Agent/issues"
-  },
-  "keywords": [
-    "playwright",
-    "playwright-test",
-    "e2e",
-    "qa",
-    "staging",
-    "live-qa",
-    "live-staging",
-    "hermes",
-    "hermes-agent",
-    "ai",
-    "ai-qa",
-    "testing",
-    "test-automation",
-    "cli",
-    "nightly",
-    "slack",
-    "qa-scenario",
-    "manual-review"
-  ],
-  "bin": {
-    "qa-native": "./bin/qa-native.mjs",
-    "playwright-spec-for-ai-agent": "./bin/playwright-spec-for-ai-agent.mjs"
-  },
-  "files": [
-    "bin",
-    "scripts",
-    "playwright-spec-for-ai-agent.config.example.mjs",
-    "examples",
-    "README.md",
-    "packages/cli/index.mjs",
-    "packages/cli/qa-native-adaptive-evidence.mjs",
-    "packages/cli/qa-native-run-envelope.mjs",
-    "packages/cli/qa-native.mjs",
-    "packages/cli/qa-native-execute.mjs",
-    "packages/cli/qa-native-judge.mjs",
-    "packages/cli/qa-native-publish-issue.mjs",
-    "packages/cli/qa-native-report.mjs",
-    "packages/contracts/index.mjs",
-    "packages/adapter-playwright/index.mjs",
-    "packages/core/index.mjs",
-    "packages/evidence/index.mjs",
-    "packages/judge/index.mjs",
-    "packages/provider-hermes/index.mjs",
-    "packages/provider-playwright/index.mjs",
-    "packages/remediation/index.mjs",
-    "packages/repository-provider/index.mjs",
-    "packages/reporter-github/index.mjs",
-    "packages/reporter-markdown/index.mjs"
-  ],
-  "scripts": {
-    "qa:spec": "node bin/playwright-spec-for-ai-agent.mjs spec",
-    "qa:abstract-ai": "node bin/playwright-spec-for-ai-agent.mjs abstract-ai",
-    "qa:judge": "node bin/playwright-spec-for-ai-agent.mjs judge",
-    "qa:review": "node bin/playwright-spec-for-ai-agent.mjs review",
-    "qa:slack": "node bin/playwright-spec-for-ai-agent.mjs slack",
-    "qa:nightly": "node bin/playwright-spec-for-ai-agent.mjs nightly",
-    "test": "vitest run",
-    "prepublishOnly": "npm test"
-  },
-  "peerDependencies": {
-    "@playwright/test": ">=1.48.0"
-  },
-  "peerDependenciesMeta": {
-    "vitest": {
-      "optional": true
-    }
-  },
-  "devDependencies": {
-    "@playwright/test": "^1.60.0",
-    "vitest": "^3.2.7"
-  },
+  "name": "playwright-spec-for-ai-agent-workspace",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
   "engines": {
     "node": ">=20"
   },
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
+  "scripts": {
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "pack:compat": "pnpm --filter playwright-spec-for-ai-agent pack",
+    "package:smoke": "node scripts/package-smoke.mjs",
+    "persona-runtime": "pnpm --filter @persona-runtime/persona-policy build && node apps/persona-runtime-cli/bin/persona-runtime.mjs",
+    "fixture:hidden-cta": "node fixtures/hidden-below-fold-cta/server.mjs"
   },
-  "exports": {
-    "./cli": "./packages/cli/index.mjs",
-    "./cli/qa-native": "./packages/cli/qa-native.mjs",
-    "./cli/qa-native-execute": "./packages/cli/qa-native-execute.mjs",
-    "./cli/qa-native-judge": "./packages/cli/qa-native-judge.mjs",
-    "./cli/qa-native-publish-issue": "./packages/cli/qa-native-publish-issue.mjs",
-    "./cli/qa-native-report": "./packages/cli/qa-native-report.mjs",
-    "./contracts": "./packages/contracts/index.mjs",
-    "./adapter-playwright": "./packages/adapter-playwright/index.mjs",
-    "./core": "./packages/core/index.mjs",
-    "./evidence": "./packages/evidence/index.mjs",
-    "./judge": "./packages/judge/index.mjs",
-    "./provider-hermes": "./packages/provider-hermes/index.mjs",
-    "./provider-playwright": "./packages/provider-playwright/index.mjs",
-    "./remediation": "./packages/remediation/index.mjs",
-    "./repository-provider": "./packages/repository-provider/index.mjs",
-    "./reporter-github": "./packages/reporter-github/index.mjs",
-    "./reporter-markdown": "./packages/reporter-markdown/index.mjs"
+  "devDependencies": {
+    "turbo": "2.10.7"
   }
 }
