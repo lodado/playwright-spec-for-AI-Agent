@@ -87,6 +87,73 @@ test("driver close failure replaces a success with runtime_error", async () => {
   assert.equal(result.session.terminalReason.code, "DRIVER_FAILED");
 });
 
+test("seal failure persists runtime_error instead of leaving a success artifact", async () => {
+  const store = memoryStore();
+  store.sealManifest = async () => {
+    throw new Error("disk full");
+  };
+
+  await assert.rejects(
+    () => runSession({
+      study,
+      task: study.tasks[0],
+      persona: study.personas[0],
+      seed: 101,
+      runId: "run-seal-error",
+      sessionId: "session-seal-error",
+      driver: fakeDriver({ successAfterObserve: 1 }),
+      policy: { decide: () => ({ type: "finish", reasonCode: "done" }) },
+      oracle: { evaluate: () => ({ definitiveSuccess: true }) },
+      store,
+    }),
+    (error) => error.code === "EVIDENCE_SEAL_FAILED",
+  );
+
+  assert.deepEqual(store.calls.at(-1), ["session", "RUNTIME_ERROR"]);
+});
+
+test("policy receives viewport-safe perception while raw observation remains evidence", async () => {
+  let policyInput;
+  const store = memoryStore();
+  const driver = fakeDriver({ successAfterObserve: 99 });
+  driver.observe = async () => ({
+    page: { url: "http://127.0.0.1:4173/", title: "Fixture", viewport: { width: 390, height: 844 } },
+    semantic: {
+      visibleText: ["Above fold", "Secret below fold"],
+      headings: [
+        { role: "heading", name: "Above fold", boundingBox: { x: 0, y: 20, width: 200, height: 30 } },
+        { role: "heading", name: "Secret below fold", boundingBox: { x: 0, y: 1200, width: 200, height: 30 } },
+      ],
+      landmarks: [],
+      interactiveElements: [],
+    },
+  });
+
+  const result = await runSession({
+    study,
+    task: study.tasks[0],
+    persona: study.personas[0],
+    seed: 101,
+    runId: "run-perception",
+    sessionId: "session-perception",
+    driver,
+    policy: {
+      decide(input) {
+        policyInput = input;
+        return { type: "finish", reasonCode: "done" };
+      },
+    },
+    oracle: { evaluate: () => ({}) },
+    store,
+  });
+
+  assert.equal(policyInput.observation, policyInput.perceivedObservation);
+  assert.deepEqual(policyInput.perceivedObservation.semantic.visibleText, ["Above fold"]);
+  assert.deepEqual(policyInput.perceivedObservation.semantic.headings.map((item) => item.name), ["Above fold"]);
+  assert.equal(JSON.stringify(policyInput).includes("Secret below fold"), false);
+  assert.equal(JSON.stringify(result.observations).includes("Secret below fold"), true);
+});
+
 test("evaluation and reporting only advance after evidence is sealed", async () => {
   const rootDir = await mkdtemp(join(tmpdir(), "runtime-core-"));
   const sessionResult = await runSession({
@@ -138,6 +205,26 @@ test("action budget exhaustion becomes runtime_error instead of false pass", asy
   assert.equal(result.session.terminalReason.code, "ACTION_BUDGET_EXHAUSTED");
 });
 
+test("the final allowed action gets an observation and oracle evaluation", async () => {
+  const limitedTask = { ...study.tasks[0], maxActions: 1 };
+  const result = await runSession({
+    study: { ...study, tasks: [limitedTask] },
+    task: limitedTask,
+    persona: study.personas[0],
+    seed: 101,
+    runId: "run-final-action",
+    sessionId: "session-final-action",
+    driver: fakeDriver({ successAfterObserve: 99 }),
+    policy: { decide: () => ({ type: "click", elementId: "el-1", reasonCode: "try" }) },
+    oracle: { evaluate: ({ observation }) => ({ definitiveSuccess: observation.sequence === 1 }) },
+    store: memoryStore(),
+  });
+
+  assert.equal(result.session.status, "success");
+  assert.equal(result.observations.length, 2);
+  assert.equal(result.events.length, 1);
+});
+
 test("policy cannot act on an element that was not in the current observation", async () => {
   const result = await runSession({
     study,
@@ -187,6 +274,51 @@ test("runStudy schedules the task/persona/seed matrix with bounded concurrency",
   assert.equal(result.sessionCount, 8);
   assert.equal(maxActive <= 2, true);
   assert.equal(result.results.every((item) => item.session.phase === "EVIDENCE_SEALED"), true);
+});
+
+test("runStudy creates a unique run id for each invocation", async () => {
+  const input = {
+    study,
+    driverFactory: () => fakeDriver({ successAfterObserve: 1 }),
+    policyFactory: () => ({ decide: () => ({ type: "finish", reasonCode: "done" }) }),
+    oracle: { evaluate: () => ({ definitiveSuccess: true }) },
+    storeFactory: () => memoryStore(),
+  };
+
+  const first = await runStudy(input);
+  const second = await runStudy(input);
+  assert.notEqual(first.runId, second.runId);
+});
+
+test("runStudy stops scheduling after failure and awaits active sibling cleanup", async () => {
+  const starts = [];
+  let siblingClosed = false;
+  const concurrentStudy = { ...study, runtime: { seeds: [1, 2, 3], concurrency: 2 } };
+
+  await assert.rejects(
+    () => runStudy({
+      study: concurrentStudy,
+      driverFactory: ({ seed }) => fakeDriver({
+        successAfterObserve: 1,
+        asyncStart: async () => starts.push(seed),
+        asyncClose: seed === 2
+          ? async () => {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            siblingClosed = true;
+          }
+          : undefined,
+      }),
+      policyFactory: () => ({ decide: () => ({ type: "finish", reasonCode: "done" }) }),
+      oracle: { evaluate: () => ({ definitiveSuccess: true }) },
+      storeFactory: ({ seed }) => seed === 1
+        ? { ...memoryStore(), sealManifest: async () => { throw new Error("disk full"); } }
+        : memoryStore(),
+    }),
+    (error) => error.code === "EVIDENCE_SEAL_FAILED",
+  );
+
+  assert.deepEqual(starts, [1, 2]);
+  assert.equal(siblingClosed, true);
 });
 
 test("counterbalances paired variant order and sends each variant URL to the driver", async () => {
@@ -249,7 +381,14 @@ function fakeDriver({ order = [], successAfterObserve = 1, asyncStart, asyncClos
       observes += 1;
       return {
         page: { url: `http://127.0.0.1:4173/${sequence}`, title: "Fixture", viewport: { width: 390, height: 844 } },
-        semantic: { visibleText: [], headings: [], landmarks: [], interactiveElements: sequence < successAfterObserve ? [{ id: "el-1", role: "button", name: "Continue" }] : [] },
+        semantic: {
+          visibleText: [],
+          headings: [],
+          landmarks: [],
+          interactiveElements: sequence < successAfterObserve
+            ? [{ id: "el-1", role: "button", name: "Continue", visible: true, viewportPosition: { inViewport: true, occluded: false } }]
+            : [],
+        },
       };
     },
     async execute() {

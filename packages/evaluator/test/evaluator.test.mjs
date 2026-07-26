@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { canonicalHash } from "@persona-runtime/contracts";
+
 import {
   EVALUATOR_ERROR_CODES,
   EvaluatorError,
@@ -70,7 +72,7 @@ const event = Object.freeze({
   derivedSignals: { progressChanged: true, backtrack: false, repeatedPage: false, failedInteraction: false, noProgress: false },
 });
 
-const manifest = Object.freeze({
+const manifestBody = {
   schemaVersion: "evidence-manifest/0.2",
   id: "manifest-1",
   runId: "run-1",
@@ -81,15 +83,15 @@ const manifest = Object.freeze({
   studyHash: "sha256:study",
   policyHash: "sha256:policy",
   entries: [
-    { id: "evidence-observation-1", type: "semantic_snapshot", contentHash: "sha256:obs", metadata: { observationId: "observation-1" } },
+    { id: "evidence-observation-1", type: "semantic_snapshot", contentHash: canonicalHash(observation), metadata: { observationId: "observation-1" } },
     { id: "evidence-screenshot-1", type: "screenshot", contentHash: "sha256:shot", metadata: { observationId: "observation-1" } },
-    { id: "evidence-event-1", type: "action_result", contentHash: "sha256:event", metadata: { eventId: "event-1", eventName: "click", properties: { elementId: "button-1" } } },
+    { id: "evidence-event-1", type: "action_result", contentHash: canonicalHash(event), metadata: { eventId: "event-1", eventName: "click", properties: { elementId: "button-1" } } },
     { id: "evidence-network-1", type: "network_failure", contentHash: "sha256:net", metadata: { network: true, method: "POST", url: "https://example.test/api/upload", status: 200 } },
     { id: "evidence-download-1", type: "download", contentHash: "sha256:download", metadata: { filename: "receipt.pdf", mimeType: "application/pdf" } },
   ],
-  manifestHash: "sha256:manifest",
   redactionSummary: { redactedCount: 0, rulesVersion: "test" },
-});
+};
+const manifest = Object.freeze({ ...manifestBody, manifestHash: canonicalHash(manifestBody) });
 
 test("deterministic success oracles evaluate without a model", async () => {
   let modelCalls = 0;
@@ -116,6 +118,17 @@ test("deterministic success oracles evaluate without a model", async () => {
   assert.deepEqual(result.unknownOracleIds, []);
   assert.equal(modelCalls, 0);
   assert.ok(result.evidenceIds.includes("evidence-observation-1"));
+});
+
+test("rejects unsafe regex oracles before evaluation", async () => {
+  const unsafeTask = {
+    ...baseTask,
+    successOracles: [{ id: "unsafe", type: "visible_text", operation: "matches", value: "(a+)+$" }],
+  };
+  await assert.rejects(
+    () => evaluateFunctionalSession({ task: unsafeTask, session, observations: [observation], events: [event], manifest }),
+    (error) => error instanceof EvaluatorError && error.code === EVALUATOR_ERROR_CODES.ORACLE_INVALID,
+  );
 });
 
 test("unknown deterministic state maps to manual_review", async () => {
@@ -152,6 +165,29 @@ test("evaluation requires a sealed manifest linked to the session evidence", asy
 
   await assert.rejects(
     () => evaluateFunctionalSession({ task: baseTask, session, observations: [observation], events: [{ ...event, evidenceIds: ["missing-evidence"] }], manifest }),
+    (error) => error instanceof EvaluatorError && error.code === EVALUATOR_ERROR_CODES.EVIDENCE_LINK_INVALID,
+  );
+});
+
+test("evaluation rejects a non-canonical manifest hash", async () => {
+  await assert.rejects(
+    () => evaluateFunctionalSession({ task: baseTask, session, observations: [observation], events: [event], manifest: { ...manifest, manifestHash: "sha256:tampered" } }),
+    (error) => error instanceof EvaluatorError && error.code === EVALUATOR_ERROR_CODES.EVIDENCE_LINK_INVALID,
+  );
+});
+
+test("evaluation rejects observation or event evidence tampering even after resealing", async () => {
+  const tamperedObservation = { ...observation, semantic: { ...observation.semantic, visibleText: ["Forged result"] } };
+  await assert.rejects(
+    () => evaluateFunctionalSession({ task: baseTask, session, observations: [tamperedObservation], events: [event], manifest }),
+    (error) => error instanceof EvaluatorError && error.code === EVALUATOR_ERROR_CODES.EVIDENCE_LINK_INVALID,
+  );
+
+  const entries = manifest.entries.map((entry) => entry.id === "evidence-event-1" ? { ...entry, id: "evidence-forged-event-1" } : entry);
+  const resealedBody = { ...manifestBody, entries };
+  const resealedManifest = { ...resealedBody, manifestHash: canonicalHash(resealedBody) };
+  await assert.rejects(
+    () => evaluateFunctionalSession({ task: baseTask, session, observations: [observation], events: [event], manifest: resealedManifest }),
     (error) => error instanceof EvaluatorError && error.code === EVALUATOR_ERROR_CODES.EVIDENCE_LINK_INVALID,
   );
 });

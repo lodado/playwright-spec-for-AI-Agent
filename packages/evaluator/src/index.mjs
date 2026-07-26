@@ -5,6 +5,7 @@ import {
   SIMULATION_VALIDITY_VERSION,
   VARIANT_COMPARISON_REPORT_VERSION,
   ContractValidationError,
+  canonicalHash,
   validateBehavioralFingerprint,
   validateEvidenceManifest,
   validateFinding,
@@ -23,6 +24,9 @@ export const EVALUATOR_ERROR_CODES = Object.freeze({
   ORACLE_INVALID: "ORACLE_INVALID",
 });
 
+const MAX_REGEX_PATTERN_LENGTH = 256;
+const MAX_REGEX_INPUT_LENGTH = 10_000;
+
 export class EvaluatorError extends Error {
   constructor(code, message) {
     super(message);
@@ -32,6 +36,7 @@ export class EvaluatorError extends Error {
 }
 
 export async function evaluateFunctionalSession({
+  study,
   task,
   session,
   observations = [],
@@ -41,6 +46,9 @@ export async function evaluateFunctionalSession({
 } = {}) {
   if (!task || typeof task !== "object") throw new EvaluatorError(EVALUATOR_ERROR_CODES.ORACLE_INVALID, "task is required");
   const sealedManifest = requireSealedManifest(manifest);
+  if (study && sealedManifest.studyHash !== canonicalHash(study)) {
+    throw new EvaluatorError(EVALUATOR_ERROR_CODES.EVIDENCE_LINK_INVALID, "study hash does not match sealed evidence");
+  }
   const sealedSession = validateSessionRecord(session);
   assertEvidenceLinks({ session: sealedSession, observations, events, manifest: sealedManifest });
 
@@ -115,7 +123,12 @@ export async function evaluateOracle(oracle, context, customEvaluators = {}) {
 
 function requireSealedManifest(manifest) {
   try {
-    return validateEvidenceManifest(manifest);
+    const sealedManifest = validateEvidenceManifest(manifest);
+    const { manifestHash, ...manifestBody } = sealedManifest;
+    if (manifestHash !== canonicalHash(manifestBody)) {
+      throw new EvaluatorError(EVALUATOR_ERROR_CODES.EVIDENCE_LINK_INVALID, "manifest hash does not match its sealed contents");
+    }
+    return sealedManifest;
   } catch (error) {
     if (error instanceof ContractValidationError) {
       throw new EvaluatorError(EVALUATOR_ERROR_CODES.EVIDENCE_NOT_SEALED, "functional evaluation requires sealed evidence");
@@ -136,10 +149,23 @@ function assertEvidenceLinks({ session, observations, events, manifest }) {
   for (const observation of observations) {
     if (observation.sessionId !== session.sessionId) throw new EvaluatorError(EVALUATOR_ERROR_CODES.EVIDENCE_LINK_INVALID, "observation belongs to a different session");
     observationIds.add(observation.id);
+    assertCanonicalEvidence(manifest, {
+      id: `evidence-${observation.id}`,
+      type: "semantic_snapshot",
+      contentHash: canonicalHash(observation),
+      metadataKey: "observationId",
+      sourceId: observation.id,
+    });
   }
 
   const manifestEvidenceIds = new Set(manifest.entries.map((entry) => entry.id));
+  if (manifestEvidenceIds.size !== manifest.entries.length) {
+    throw new EvaluatorError(EVALUATOR_ERROR_CODES.EVIDENCE_LINK_INVALID, "manifest contains duplicate evidence ids");
+  }
   const eventIds = new Set(events.map((event) => event.id));
+  if (eventIds.size !== events.length || eventIds.size !== session.eventIds.length) {
+    throw new EvaluatorError(EVALUATOR_ERROR_CODES.EVIDENCE_LINK_INVALID, "session event ids do not match the sealed events");
+  }
   for (const id of session.eventIds) {
     if (!eventIds.has(id)) throw new EvaluatorError(EVALUATOR_ERROR_CODES.EVIDENCE_LINK_INVALID, `session event is missing: ${id}`);
   }
@@ -147,9 +173,25 @@ function assertEvidenceLinks({ session, observations, events, manifest }) {
   for (const event of events) {
     if (event.sessionId !== session.sessionId) throw new EvaluatorError(EVALUATOR_ERROR_CODES.EVIDENCE_LINK_INVALID, "event belongs to a different session");
     if (!observationIds.has(event.observationId)) throw new EvaluatorError(EVALUATOR_ERROR_CODES.EVIDENCE_LINK_INVALID, `event observation is missing: ${event.observationId}`);
+    assertCanonicalEvidence(manifest, {
+      id: `evidence-${event.id}`,
+      type: "action_result",
+      contentHash: canonicalHash(event),
+      metadataKey: "eventId",
+      sourceId: event.id,
+    });
     for (const evidenceId of event.evidenceIds ?? []) {
       if (!manifestEvidenceIds.has(evidenceId)) throw new EvaluatorError(EVALUATOR_ERROR_CODES.EVIDENCE_LINK_INVALID, `event evidence is missing: ${evidenceId}`);
     }
+  }
+}
+
+function assertCanonicalEvidence(manifest, expected) {
+  const entry = manifest.entries.find((item) => item.id === expected.id);
+  if (entry?.type !== expected.type
+    || entry.contentHash !== expected.contentHash
+    || entry.metadata?.[expected.metadataKey] !== expected.sourceId) {
+    throw new EvaluatorError(EVALUATOR_ERROR_CODES.EVIDENCE_LINK_INVALID, `sealed evidence does not match ${expected.sourceId}`);
   }
 }
 
@@ -253,7 +295,7 @@ function matchText(actual, operation, expected) {
   if (operation === "equals") return actual === expected;
   if (operation === "contains") return actual.includes(expected);
   if (operation === "not_contains") return !actual.includes(expected);
-  if (operation === "matches") return new RegExp(expected).test(actual);
+  if (operation === "matches") return safeRegexTest(actual, expected);
   return false;
 }
 
@@ -265,7 +307,7 @@ function elementMatches(element, oracle) {
 
 function matchNetwork(record, oracle) {
   if (oracle.method && String(record.method ?? "").toUpperCase() !== oracle.method.toUpperCase()) return false;
-  if (!new RegExp(oracle.urlPattern).test(String(record.url ?? record.requestUrl ?? ""))) return false;
+  if (!safeRegexTest(String(record.url ?? record.requestUrl ?? ""), oracle.urlPattern)) return false;
   if (oracle.status !== undefined && Number(record.status) !== oracle.status) return false;
   return true;
 }
@@ -281,9 +323,23 @@ function matchEvent(record, oracle) {
 }
 
 function matchDownload(record, oracle) {
-  if (oracle.filenamePattern && !new RegExp(oracle.filenamePattern).test(String(record.filename ?? record.fileName ?? ""))) return false;
+  if (oracle.filenamePattern && !safeRegexTest(String(record.filename ?? record.fileName ?? ""), oracle.filenamePattern)) return false;
   if (oracle.mimeType && String(record.mimeType ?? "") !== oracle.mimeType) return false;
   return true;
+}
+
+function safeRegexTest(actual, pattern) {
+  if (pattern.length > MAX_REGEX_PATTERN_LENGTH || actual.length > MAX_REGEX_INPUT_LENGTH) {
+    throw new EvaluatorError(EVALUATOR_ERROR_CODES.ORACLE_INVALID, "regex oracle exceeds bounded input limits");
+  }
+  if (/\\[1-9]|\)[+*?{]|(?:[+*?}]|\{\d+(?:,\d*)?\})[+*?{]/.test(pattern)) {
+    throw new EvaluatorError(EVALUATOR_ERROR_CODES.ORACLE_INVALID, "regex oracle contains unsafe repetition");
+  }
+  try {
+    return new RegExp(pattern).test(actual);
+  } catch {
+    throw new EvaluatorError(EVALUATOR_ERROR_CODES.ORACLE_INVALID, "regex oracle is invalid");
+  }
 }
 
 function collectVisibleText(observation) {

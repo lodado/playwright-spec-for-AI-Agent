@@ -1,9 +1,10 @@
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   EVIDENCE_MANIFEST_VERSION,
   SESSION_VERSION,
+  canonicalHash,
   validateEvidenceManifest,
   validateSessionRecord,
 } from "@persona-runtime/contracts";
@@ -181,7 +182,7 @@ export function buildSessionMatrix({ study, runId = `run-${hashJson({ study: stu
   return deepFreeze(rows);
 }
 
-export async function runStudy({ study, driverFactory, policyFactory, oracle, storeFactory, concurrency, signal } = {}) {
+export async function runStudy({ study, runId = `run-${randomUUID()}`, driverFactory, policyFactory, oracle, storeFactory, concurrency, signal } = {}) {
   validateStudyShape(study);
   if (typeof driverFactory !== "function") throw new RuntimeCoreError(RUNTIME_ERROR_CODES.SPEC_INVALID, "driverFactory must be a function");
   if (typeof policyFactory !== "function") throw new RuntimeCoreError(RUNTIME_ERROR_CODES.SPEC_INVALID, "policyFactory must be a function");
@@ -189,7 +190,7 @@ export async function runStudy({ study, driverFactory, policyFactory, oracle, st
   if (typeof storeFactory !== "function") throw new RuntimeCoreError(RUNTIME_ERROR_CODES.SPEC_INVALID, "storeFactory must be a function");
 
   const limit = positiveConcurrency(concurrency ?? study.runtime?.concurrency ?? 1);
-  const matrix = buildSessionMatrix({ study });
+  const matrix = buildSessionMatrix({ study, runId });
   const results = await mapLimit(matrix, limit, signal, async (entry) => {
     const driver = driverFactory(entry);
     const policy = policyFactory(entry);
@@ -251,6 +252,7 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
         startPath: task.startPath ?? study.environment?.startPath,
       },
       safetyPolicy: task.safetyPolicy,
+      evidencePolicy: study.evidence,
       evidenceDir: store.sessionDir,
       valueRefs: study.environment?.fixtures ?? {},
     });
@@ -258,8 +260,6 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
 
     while (true) {
       throwIfAborted(signal);
-      enforceBudget(budgets, now());
-
       const rawObservation = await driver.observe(handle, { signal });
       driverEvidence.push(...evidenceFrom(rawObservation));
       const observation = normalizeObservation(rawObservation, sessionId, observations.length);
@@ -273,7 +273,19 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
         break;
       }
 
-      const action = validateAction(await policy.decide({ study, task, persona, session, observation, events, signal }), observation, task);
+      enforceBudget(budgets, now());
+
+      const perceivedObservation = buildPerceivedObservation(observation);
+      const action = validateAction(await policy.decide({
+        study,
+        task,
+        persona,
+        session,
+        observation: perceivedObservation,
+        perceivedObservation,
+        events,
+        signal,
+      }), perceivedObservation, task);
       const actionTerminal = terminalFromAction(action);
       if (actionTerminal) {
         await setPhase(actionTerminal.phase, { terminalReason: actionTerminal.reason });
@@ -311,7 +323,16 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
     await setPhase("MANUAL_REVIEW", { terminalReason: { code: "NO_TERMINAL_RESULT", message: "session ended without a terminal result" } });
   }
 
-  const manifest = await sealSessionEvidence({ session, observations, events, driverEvidence, store, now: now() });
+  let manifest;
+  try {
+    manifest = await sealSessionEvidence({ study, session, observations, events, driverEvidence, store, now: now() });
+  } catch (error) {
+    const runtimeError = toRuntimeError(error);
+    if (session.phase !== "RUNTIME_ERROR") {
+      await setPhase("RUNTIME_ERROR", { terminalReason: { code: runtimeError.code, message: runtimeError.message } });
+    }
+    throw runtimeError;
+  }
   await setPhase("EVIDENCE_SEALED", { evidenceManifestId: manifest.id });
   return deepFreeze({ session, manifest, observations, events });
 }
@@ -383,7 +404,7 @@ export function deriveInteractionEvent({ sessionId, index, observation, action, 
   return deepFreeze(event);
 }
 
-async function sealSessionEvidence({ session, observations, events, driverEvidence, store, now }) {
+async function sealSessionEvidence({ study, session, observations, events, driverEvidence, store, now }) {
   const manifestBody = {
     schemaVersion: EVIDENCE_MANIFEST_SCHEMA_VERSION,
     id: `manifest-${session.sessionId}`,
@@ -392,7 +413,7 @@ async function sealSessionEvidence({ session, observations, events, driverEviden
     createdAt: session.startedAt,
     sealedAt: toIso(now),
     sealed: true,
-    studyHash: hashJson({ studyId: session.studyId, taskId: session.taskId }),
+    studyHash: hashJson(study),
     policyHash: hashJson(session.sampledPolicy),
     entries: [
       ...deduplicateEvidence(driverEvidence),
@@ -409,7 +430,10 @@ async function sealSessionEvidence({ session, observations, events, driverEviden
         metadata: { eventId: event.id, index: event.index },
       })),
     ],
-    redactionSummary: { redactedCount: 0, rulesVersion: "runtime-core/0.1" },
+    redactionSummary: {
+      redactedCount: Object.keys(study.environment?.fixtures ?? {}).length,
+      rulesVersion: "runtime-core/0.1",
+    },
   };
   const manifest = validateEvidenceManifest({ ...manifestBody, manifestHash: hashJson(manifestBody) });
   try {
@@ -506,6 +530,45 @@ function normalizeObservation(observation, sessionId, sequence) {
   });
 }
 
+function buildPerceivedObservation(observation) {
+  const viewport = observation.page?.viewport ?? { width: 0, height: 0 };
+  const semantic = observation.semantic ?? {};
+  const headings = (semantic.headings ?? []).filter((node) => isViewportSafe(node, viewport));
+  const landmarks = (semantic.landmarks ?? []).filter((node) => isViewportSafe(node, viewport));
+  const interactiveElements = (semantic.interactiveElements ?? []).filter((node) => isViewportSafe(node, viewport));
+  const visibleText = uniqueStrings([
+    ...(semantic.visibleText ?? []).filter((node) => isRecord(node) && isViewportSafe(node, viewport)).flatMap(textParts),
+    ...headings.flatMap(textParts),
+    ...landmarks.flatMap(textParts),
+    ...interactiveElements.flatMap(textParts),
+  ]);
+  return deepFreeze({
+    ...observation,
+    semantic: { visibleText, headings, landmarks, interactiveElements },
+  });
+}
+
+function isViewportSafe(node, viewport) {
+  if (!isRecord(node) || node.visible === false || node.viewportPosition?.occluded === true) return false;
+  if (node.viewportPosition) return node.viewportPosition.inViewport === true;
+  const box = node.boundingBox;
+  return isRecord(box)
+    && box.width > 0
+    && box.height > 0
+    && box.x + box.width > 0
+    && box.y + box.height > 0
+    && box.x < viewport.width
+    && box.y < viewport.height;
+}
+
+function textParts(value) {
+  return [value.name, value.text].filter((item) => typeof item === "string" && item.length > 0);
+}
+
+function uniqueStrings(values) {
+  return [...new Set(values)];
+}
+
 function evidenceFrom(value) {
   return Array.isArray(value?.evidence) ? value.evidence.filter(isRecord).map(item => structuredClone(item)) : [];
 }
@@ -556,13 +619,7 @@ function stableEventId(sessionId, index) {
 }
 
 function hashJson(value) {
-  return `sha256:${createHash("sha256").update(stableJson(value)).digest("hex")}`;
-}
-
-function stableJson(value) {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  if (isRecord(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
-  return JSON.stringify(value);
+  return canonicalHash(value);
 }
 
 async function atomicWriteJson(path, value) {
@@ -593,15 +650,26 @@ async function atomicWriteRaw(path, text) {
 async function mapLimit(items, limit, signal, worker) {
   const results = new Array(items.length);
   let next = 0;
+  let failure;
   async function runOne() {
-    while (next < items.length) {
-      throwIfAborted(signal);
+    while (next < items.length && failure === undefined) {
+      try {
+        throwIfAborted(signal);
+      } catch (error) {
+        failure ??= error;
+        return;
+      }
       const index = next;
       next += 1;
-      results[index] = await worker(items[index], index);
+      try {
+        results[index] = await worker(items[index], index);
+      } catch (error) {
+        failure ??= error;
+      }
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, runOne));
+  if (failure) throw failure;
   return results;
 }
 

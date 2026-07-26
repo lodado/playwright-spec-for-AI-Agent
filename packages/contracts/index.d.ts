@@ -41,7 +41,7 @@ export type BrowserAction =
   | { type: "ignore"; elementId?: string; reasonCode: string };
 export interface SessionRecord { schemaVersion: typeof SESSION_VERSION; runId: string; sessionId: string; studyId: string; taskId: string; personaId: string; seed: number; variant?: string; model?: string; status: "created" | "running" | "success" | "partial" | "failure" | "abandoned" | "runtime_error" | "manual_review"; startedAt: string; completedAt?: string; sampledPolicy: Record<string, unknown>; terminalReason?: Record<string, unknown>; eventIds: string[]; evidenceManifestId?: string; }
 export interface InteractionEvent { schemaVersion: typeof INTERACTION_EVENT_VERSION; id: string; sessionId: string; index: number; timestamp: string; observationId: string; action: BrowserAction; result: { status: "success" | "failure" | "no_change" | "blocked"; message?: string }; urlBefore: string; urlAfter: string; evidenceIds: string[]; derivedSignals: Record<"progressChanged" | "backtrack" | "repeatedPage" | "failedInteraction" | "noProgress", boolean>; }
-export interface EvidenceEntry { id: string; type: "screenshot" | "semantic_snapshot" | "trace" | "video" | "console_issue" | "network_failure" | "download" | "oracle_result" | "action_result"; relativePath?: string; contentHash: string; byteSize?: number; metadata: Record<string, unknown>; }
+export interface EvidenceEntry { id: string; type: "screenshot" | "semantic_snapshot" | "trace" | "video" | "console_issue" | "network_failure" | "download" | "oracle_result" | "action_result"; relativePath?: string; contentHash: string; byteSize?: number; metadata?: Record<string, unknown>; }
 export interface EvidenceManifest { schemaVersion: typeof EVIDENCE_MANIFEST_VERSION; id: string; runId: string; sessionId: string; createdAt: string; sealedAt: string; sealed: true; repositoryRevision?: string; studyHash: string; policyHash: string; entries: EvidenceEntry[]; manifestHash: string; redactionSummary: { redactedCount: number; rulesVersion: string }; }
 export interface FunctionalEvaluation { schemaVersion: typeof FUNCTIONAL_EVALUATION_VERSION; status: "success" | "partial" | "failure" | "runtime_error" | "manual_review"; satisfiedOracleIds: string[]; violatedOracleIds: string[]; unknownOracleIds: string[]; evidenceIds: string[]; reasons: string[]; }
 export interface FindingConfidence { evidenceConfidence: number; recurrenceConfidence: number; seedStability: number | "not_available"; modelAgreement: number | "not_available"; calibrationConfidence: number | "not_available"; orderConsistency: number | "not_available"; overall: "low" | "medium" | "high"; limitations: string[]; }
@@ -54,17 +54,17 @@ export function createSessionId(input: { runId: string; taskId: string; personaI
 export function createEventId(sessionId: string, sequence: number): string;
 export function createEvidenceId(input: { sessionId: string; type: string; sequence: number; contentHash: string }): string;
 export function validateContract(contractName: string, value: unknown): unknown;
-export function validateStudySpec(value: StudySpec): Readonly<StudySpec>;
-export function validateSessionRecord(value: SessionRecord): Readonly<SessionRecord>;
+export function validateStudySpec(value: unknown): Readonly<StudySpec>;
+export function validateSessionRecord(value: unknown): Readonly<SessionRecord>;
 export function validateObservation(value: unknown): unknown;
-export function validateInteractionEvent(value: InteractionEvent): Readonly<InteractionEvent>;
-export function validateEvidenceManifest(value: EvidenceManifest): Readonly<EvidenceManifest>;
-export function validateFunctionalEvaluation(value: FunctionalEvaluation): Readonly<FunctionalEvaluation>;
+export function validateInteractionEvent(value: unknown): Readonly<InteractionEvent>;
+export function validateEvidenceManifest(value: unknown): Readonly<EvidenceManifest>;
+export function validateFunctionalEvaluation(value: unknown): Readonly<FunctionalEvaluation>;
 export function validateBehavioralFingerprint(value: unknown): unknown;
 export function validateFrictionPoint(value: unknown): unknown;
 export function validateFinding(value: unknown): unknown;
 export function validateSimulationValidityReport(value: unknown): unknown;
-export function validateVariantComparisonSpec(value: VariantComparisonSpec): Readonly<VariantComparisonSpec>;
+export function validateVariantComparisonSpec(value: unknown): Readonly<VariantComparisonSpec>;
 export function validateVariantComparisonReport(value: unknown): unknown;
 export function createMigrationRegistry(): { register(migrator: { from: string; to: string; migrate(value: unknown): unknown }): void; migrate(value: unknown, to: string): unknown };
 export function migrateContract(value: unknown, to: string, registry?: ReturnType<typeof createMigrationRegistry>): unknown;

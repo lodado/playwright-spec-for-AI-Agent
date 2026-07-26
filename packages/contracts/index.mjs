@@ -123,7 +123,7 @@ export function validateObservation(value) {
   arrayOf(validateSemanticNode)(value.semantic.landmarks, "$.semantic.landmarks");
   arrayOf(validateInteractiveElement)(value.semantic.interactiveElements, "$.semantic.interactiveElements");
   object(value.visual, "$.visual", ["screenshotEvidenceId", "occludedElementFingerprints"]);
-  string(value.visual.screenshotEvidenceId, "$.visual.screenshotEvidenceId");
+  optional(value.visual.screenshotEvidenceId, string, "$.visual.screenshotEvidenceId");
   optional(value.visual.occludedElementFingerprints, arrayOf(string), "$.visual.occludedElementFingerprints");
   object(value.runtime, "$.runtime", ["consoleIssues", "networkFailures", "pendingRequestCount", "loadingIndicators"]);
   arrayOf(validateRuntimeIssue)(value.runtime.consoleIssues, "$.runtime.consoleIssues");
@@ -456,34 +456,41 @@ function validateBrowserAction(value, path) {
 }
 
 function validateSemanticNode(value, path) {
-  object(value, path, ["id", "role", "name", "text", "level", "fingerprint"]);
+  object(value, path, ["id", "role", "name", "text", "level", "fingerprint", "viewportPosition", "boundingBox"]);
   optional(value.id, string, `${path}.id`);
   optional(value.role, string, `${path}.role`);
   optional(value.name, string, `${path}.name`);
   optional(value.text, string, `${path}.text`);
   optional(value.level, integer, `${path}.level`);
   optional(value.fingerprint, string, `${path}.fingerprint`);
+  optionalRecord(value.viewportPosition, `${path}.viewportPosition`);
+  optionalRecord(value.boundingBox, `${path}.boundingBox`);
 }
 
 function validateInteractiveElement(value, path) {
-  object(value, path, ["id", "role", "name", "text", "enabled", "focused", "visible", "viewportPosition", "boundingBox", "fingerprint"]);
+  object(value, path, ["id", "role", "name", "text", "checked", "enabled", "focused", "visible", "viewportPosition", "boundingBox", "fingerprint"]);
   ["id", "fingerprint"].forEach((key) => string(value[key], `${path}.${key}`));
   optional(value.role, string, `${path}.role`);
   optional(value.name, string, `${path}.name`);
   optional(value.text, string, `${path}.text`);
+  optional(value.checked, boolean, `${path}.checked`);
   ["enabled", "focused", "visible"].forEach((key) => optional(value[key], boolean, `${path}.${key}`));
   optionalRecord(value.viewportPosition, `${path}.viewportPosition`);
   optionalRecord(value.boundingBox, `${path}.boundingBox`);
 }
 
 function validateRuntimeIssue(value, path) {
-  object(value, path, ["id", "type", "severity", "message", "url", "timestamp"]);
+  object(value, path, ["id", "type", "severity", "message", "url", "timestamp", "method", "status", "filename", "mimeType"]);
   string(value.id, `${path}.id`);
   oneOf(value.type, ["console", "pageerror", "network", "download", "popup", "dialog", "navigation", "loading"], `${path}.type`);
   optional(value.severity, string, `${path}.severity`);
   string(value.message, `${path}.message`);
   optional(value.url, string, `${path}.url`);
   optional(value.timestamp, string, `${path}.timestamp`);
+  optional(value.method, string, `${path}.method`);
+  optional(value.status, integer, `${path}.status`);
+  optional(value.filename, string, `${path}.filename`);
+  optional(value.mimeType, string, `${path}.mimeType`);
 }
 
 function validateOracleSignals(value, path) {
@@ -496,6 +503,9 @@ function validateEvidenceEntry(value, path) {
   string(value.id, `${path}.id`);
   oneOf(value.type, ["screenshot", "semantic_snapshot", "trace", "video", "console_issue", "network_failure", "download", "oracle_result", "action_result"], `${path}.type`);
   optional(value.relativePath, string, `${path}.relativePath`);
+  if (value.relativePath !== undefined && (value.relativePath.startsWith("/") || value.relativePath.includes("\\") || value.relativePath.split("/").includes(".."))) {
+    throw new ContractValidationError("must be a contained relative path", `${path}.relativePath`);
+  }
   string(value.contentHash, `${path}.contentHash`);
   optional(value.byteSize, integer, `${path}.byteSize`);
   optionalRecord(value.metadata, `${path}.metadata`);
