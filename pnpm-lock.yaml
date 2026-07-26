@@ -18,6 +18,15 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7
 
+  packages/playwright-driver:
+    devDependencies:
+      '@playwright/test':
+        specifier: ^1.60.0
+        version: 1.60.0
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7
+
   packages/playwright-spec-for-ai-agent:
     devDependencies:
       '@playwright/test':
