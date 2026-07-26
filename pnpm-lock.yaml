@@ -12,6 +12,12 @@ importers:
         specifier: 2.10.7
         version: 2.10.7
 
+  packages/playwright-spec-adapter:
+    devDependencies:
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7
+
   packages/playwright-spec-for-ai-agent:
     devDependencies:
       '@playwright/test':
