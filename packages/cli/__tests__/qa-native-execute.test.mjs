@@ -82,9 +82,11 @@ describe("qa-native execute persistence", () => {
     const qaIr = JSON.parse(readFileSync(join(runDirectory, "qa-ir.json"), "utf8"));
     const plan = JSON.parse(readFileSync(join(runDirectory, "execution-plan.json"), "utf8"));
     const outcome = JSON.parse(readFileSync(join(runDirectory, "run.json"), "utf8"));
+    const envelope = JSON.parse(readFileSync(join(runDirectory, "run-envelope.json"), "utf8"));
     expect(validateContract("QaIrDocument", qaIr)).toBe(qaIr);
     expect(validateContract("ExecutionPlan", plan)).toBe(plan);
     expect(validateContract("RuntimeOutcome", outcome).type).toBe("COMPLETED");
+    expect(validateContract("RunEnvelope", envelope)).toMatchObject({ runId: "run-1", mode: "strict" });
     expect(existsSync(join(runDirectory, "execution-outcome.json"))).toBe(false);
     expect(lstatSync(join(runDirectory, "qa-ir.json")).mode & 0o777).toBe(0o600);
     const replay = readEvidenceArchive({ directory: join(runDirectory, "evidence"), integrityKey });
@@ -116,6 +118,7 @@ describe("qa-native execute persistence", () => {
     expect(validateContract("ExecutionAgentInput", JSON.parse(readFileSync(join(runDirectory, "execution-agent-input.json"), "utf8")))).toBeTruthy();
     expect(validateContract("ExecutionAgentOutcome", JSON.parse(readFileSync(join(runDirectory, "execution-agent-outcome.json"), "utf8")))).toBeTruthy();
     expect(validateContract("RuntimeOutcome", JSON.parse(readFileSync(join(runDirectory, "run.json"), "utf8"))).type).toBe("COMPLETED");
+    expect(validateContract("RunEnvelope", JSON.parse(readFileSync(join(runDirectory, "run-envelope.json"), "utf8")))).toMatchObject({ runId: "adaptive", mode: "adaptive" });
     expect(existsSync(join(runDirectory, "execution-plan.json"))).toBe(false);
     expect(createProposer).toHaveBeenCalledOnce();
   });
@@ -163,6 +166,6 @@ describe("qa-native execute persistence", () => {
       "./cli/qa-native": "./packages/cli/qa-native.mjs",
       "./cli/qa-native-execute": "./packages/cli/qa-native-execute.mjs",
     });
-    expect(packageJson.files).toEqual(expect.arrayContaining(["packages/cli/qa-native.mjs", "packages/cli/qa-native-execute.mjs", "packages/cli/qa-native-adaptive-evidence.mjs"]));
+    expect(packageJson.files).toEqual(expect.arrayContaining(["packages/cli/qa-native.mjs", "packages/cli/qa-native-execute.mjs", "packages/cli/qa-native-adaptive-evidence.mjs", "packages/cli/qa-native-run-envelope.mjs"]));
   });
 });

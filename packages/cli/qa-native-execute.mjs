@@ -7,6 +7,7 @@ import { writeEvidenceArchive } from "../evidence/index.mjs";
 import { createHermesExecutionProposer } from "../provider-hermes/index.mjs";
 import { assertPlaywrightAdaptiveExecution, executeWithPlaywright, playwrightExecutionCapabilities, runAdaptiveWithPlaywright } from "../provider-playwright/index.mjs";
 import { validateAdaptiveExecutionEvidence } from "./qa-native-adaptive-evidence.mjs";
+import { writeAuthenticatedRunEnvelope } from "./qa-native-run-envelope.mjs";
 import { createExclusiveQaDirectory, writePrivateJsonExclusive } from "./qa-native.mjs";
 
 const MAX_SPEC_BYTES = 4 * 1024 * 1024;
@@ -65,6 +66,17 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
       writePrivateJsonExclusive(relative(cwd, join(runDirectory, "execution-agent-outcome.json")), agentOutcome, { cwd });
     }
     writePrivateJsonExclusive(relative(cwd, join(runDirectory, "run.json")), runtimeOutcome, { cwd });
+    writeAuthenticatedRunEnvelope({
+      runDirectory,
+      cwd,
+      integrityKey,
+      runId: basename(runDirectory),
+      mode,
+      qaIr,
+      runtimeOutcome,
+      evidenceManifest: execution.manifest,
+      ...(mode === "strict" ? { executionPlan } : { executionAgentInput: agentInput, executionAgentOutcome: agentOutcome }),
+    });
     return 0;
   } catch (error) {
     if (created) rmSync(runDirectory, { recursive: true, force: true });

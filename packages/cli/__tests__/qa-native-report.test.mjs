@@ -7,10 +7,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { compilePlaywrightSpec } from "../../adapter-playwright/index.mjs";
 import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_AGENT_OUTCOME_VERSION, JUDGE_RESULT_VERSION, PROVIDER_CAPABILITIES_VERSION, RUNTIME_OUTCOME_VERSION, canonicalHash, validateContract } from "../../contracts/index.mjs";
-import { createAdaptiveExecutionInput } from "../../core/index.mjs";
+import { createAdaptiveExecutionInput, createExecutionPlan } from "../../core/index.mjs";
 import { createInMemoryEvidenceStore, writeEvidenceArchive } from "../../evidence/index.mjs";
-import { playwrightBrowserToolCapabilities } from "../../provider-playwright/index.mjs";
+import { playwrightBrowserToolCapabilities, playwrightExecutionCapabilities } from "../../provider-playwright/index.mjs";
 import { reportQaNative } from "../qa-native-report.mjs";
+import { writeAuthenticatedRunEnvelope } from "../qa-native-run-envelope.mjs";
 import { createExclusiveQaDirectory, runQaNative, writePrivateJsonExclusive } from "../qa-native.mjs";
 
 const temporaryDirectories = [];
@@ -173,11 +174,17 @@ function persistedFailedRun({ adaptive = false } = {}) {
 
   writePrivateJsonExclusive(".qa/runs/run-1/qa-ir.json", qaIr, { cwd });
   writeEvidenceArchive({ directory: join(runDirectory, "evidence"), bundles, manifest, readBlob: store.readBlob, integrityKey });
-  writePrivateJsonExclusive(".qa/runs/run-1/run.json", { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "execute", type: "COMPLETED" }, { cwd });
+  const runtimeOutcome = { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "execute", type: "COMPLETED" };
+  writePrivateJsonExclusive(".qa/runs/run-1/run.json", runtimeOutcome, { cwd });
   if (adaptive) {
     const outcome = { schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION, runId: input.runId, scenarioId: input.scenarioId, type: "COMPLETED", completedMilestoneIds: input.milestones.map((milestone) => milestone.id) };
     writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-input.json", input, { cwd });
     writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-outcome.json", outcome, { cwd });
+    writeAuthenticatedRunEnvelope({ runDirectory, cwd, integrityKey, runId: "run-1", mode: "adaptive", qaIr, runtimeOutcome, evidenceManifest: manifest, executionAgentInput: input, executionAgentOutcome: outcome });
+  } else {
+    const executionPlan = createExecutionPlan({ qaIr, providerCapabilities: playwrightExecutionCapabilities() });
+    writePrivateJsonExclusive(".qa/runs/run-1/execution-plan.json", executionPlan, { cwd });
+    writeAuthenticatedRunEnvelope({ runDirectory, cwd, integrityKey, runId: "run-1", mode: "strict", qaIr, runtimeOutcome, evidenceManifest: manifest, executionPlan });
   }
   const judgmentDirectory = createExclusiveQaDirectory(".qa/runs/run-1/judgments/judge-fixture", { cwd });
   writePrivateJsonExclusive(".qa/runs/run-1/judgments/judge-fixture/judge-result-fail.json", judgment, { cwd });

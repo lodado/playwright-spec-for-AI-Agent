@@ -16,6 +16,7 @@ import {
   PROVIDER_CAPABILITIES_VERSION,
   QA_IR_VERSION,
   REPAIR_RECOMMENDATION_VERSION,
+  RUN_ENVELOPE_VERSION,
   RUNTIME_OUTCOME_VERSION,
   canonicalHash,
   contractViolationOutcome,
@@ -197,6 +198,15 @@ function checkpoint(fields) {
 }
 
 describe("documented runtime contracts", () => {
+  it("validates mode-specific authenticated run envelopes", () => {
+    const hash = `sha256:${"a".repeat(64)}`;
+    const strict = { schemaVersion: RUN_ENVELOPE_VERSION, runId: "run-1", mode: "strict", qaIrHash: hash, runtimeOutcomeHash: hash, evidenceManifestHash: hash, executionPlanHash: hash, authentication: `hmac-sha256:${"b".repeat(64)}` };
+
+    expect(validateContract("RunEnvelope", strict)).toBe(strict);
+    expect(() => validateContract("RunEnvelope", { ...strict, qaIrHash: "sha256:short" })).toThrow(/SHA-256/);
+    expect(() => validateContract("RunEnvelope", { ...strict, mode: "adaptive" })).toThrow(/executionPlanHash|executionAgentInputHash/);
+  });
+
   it("requires globally unique QA IR scenario ids", () => {
     const value = qaIr();
     value.suites.push({ ...structuredClone(value.suites[0]), id: "suite-other" });

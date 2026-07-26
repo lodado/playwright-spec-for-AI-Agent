@@ -12,6 +12,7 @@ export const EXECUTION_ACTION_PROPOSAL_VERSION = "execution-action-proposal/0.1"
 export const EXECUTION_ACTION_RESULT_VERSION = "execution-action-result/0.1";
 export const EXECUTION_AGENT_OUTCOME_VERSION = "execution-agent-outcome/0.1";
 export const RUNTIME_OUTCOME_VERSION = "runtime-outcome/0.1";
+export const RUN_ENVELOPE_VERSION = "run-envelope/0.1";
 export const DETERMINISTIC_EVALUATION_VERSION = "deterministic-evaluation/0.1";
 export const EVIDENCE_BUNDLE_VERSION = "evidence-bundle/0.1";
 export const EVIDENCE_MANIFEST_VERSION = "evidence-manifest/0.1";
@@ -80,6 +81,7 @@ const schemas = {
   ExecutionActionResult: validateExecutionActionResult,
   ExecutionAgentOutcome: validateExecutionAgentOutcome,
   RuntimeOutcome: validateRuntimeOutcome,
+  RunEnvelope: validateRunEnvelope,
   DeterministicEvaluationResult: validateDeterministicEvaluationResult,
   EvidenceBundle: validateEvidenceBundle,
   EvidenceManifest: validateEvidenceManifest,
@@ -529,6 +531,24 @@ function validateRuntimeOutcome(value, path) {
     oneOf(value.code, RUNTIME_ERROR_CODES, `${path}.code`, "RuntimeOutcome");
     string(value.message, `${path}.message`, "RuntimeOutcome");
   }
+}
+
+function validateRunEnvelope(value, path) {
+  const contract = "RunEnvelope";
+  object(value, path, contract);
+  const adaptive = value.mode === "adaptive";
+  allowedKeys(value, adaptive
+    ? ["schemaVersion", "runId", "mode", "qaIrHash", "runtimeOutcomeHash", "evidenceManifestHash", "executionAgentInputHash", "executionAgentOutcomeHash", "authentication"]
+    : ["schemaVersion", "runId", "mode", "qaIrHash", "runtimeOutcomeHash", "evidenceManifestHash", "executionPlanHash", "authentication"], path, contract);
+  exact(value.schemaVersion, RUN_ENVELOPE_VERSION, `${path}.schemaVersion`, contract);
+  boundedString(value.runId, 256, `${path}.runId`, contract);
+  oneOf(value.mode, ["strict", "adaptive"], `${path}.mode`, contract);
+  const hashes = adaptive
+    ? ["qaIrHash", "runtimeOutcomeHash", "evidenceManifestHash", "executionAgentInputHash", "executionAgentOutcomeHash"]
+    : ["qaIrHash", "runtimeOutcomeHash", "evidenceManifestHash", "executionPlanHash"];
+  for (const key of hashes) sha256Hash(value[key], `${path}.${key}`, contract);
+  boundedString(value.authentication, 128, `${path}.authentication`, contract);
+  if (!/^hmac-sha256:[0-9a-f]{64}$/.test(value.authentication)) fail(contract, `${path}.authentication`, "must be an HMAC-SHA256 value");
 }
 
 function validateDeterministicEvaluationResult(value, path) {
@@ -1152,6 +1172,7 @@ function stringArray(value, path, contract) { array(value, path, contract); valu
 function uniqueStringArray(value, path, contract) { stringArray(value, path, contract); if (new Set(value).size !== value.length) fail(contract, path, "must contain unique strings"); }
 function string(value, path, contract) { if (typeof value !== "string" || value.length === 0) fail(contract, path, "must be a non-empty string"); }
 function boundedString(value, maxLength, path, contract) { string(value, path, contract); if (value.length > maxLength) fail(contract, path, `must contain at most ${maxLength} characters`); }
+function sha256Hash(value, path, contract) { if (typeof value !== "string" || !/^sha256:[0-9a-f]{64}$/.test(value)) fail(contract, path, "must be a SHA-256 hash"); }
 function boundedInteger(value, min, max, path, contract) { number(value, path, contract); if (!Number.isInteger(value) || value < min || value > max) fail(contract, path, `must be an integer between ${min} and ${max}`); }
 function repositoryPath(value, path, contract) { boundedString(value, 4_096, path, contract); if (/^(?:[a-z]:[\\/]|[\\/])|(?:^|[\\/])\.\.(?:[\\/]|$)|[\0\r\n]/i.test(value)) fail(contract, path, "must be a safe repository-relative path"); }
 function number(value, path, contract) { if (typeof value !== "number" || Number.isNaN(value)) fail(contract, path, "must be a number"); }

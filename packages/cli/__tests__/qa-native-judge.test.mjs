@@ -1,14 +1,15 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { compilePlaywrightSpec } from "../../adapter-playwright/index.mjs";
 import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_AGENT_OUTCOME_VERSION, PROVIDER_CAPABILITIES_VERSION, RUNTIME_OUTCOME_VERSION, validateContract } from "../../contracts/index.mjs";
-import { createAdaptiveExecutionInput } from "../../core/index.mjs";
+import { createAdaptiveExecutionInput, createExecutionPlan } from "../../core/index.mjs";
 import { createInMemoryEvidenceStore, writeEvidenceArchive } from "../../evidence/index.mjs";
 import { judgeWithHermes } from "../../provider-hermes/index.mjs";
-import { playwrightBrowserToolCapabilities } from "../../provider-playwright/index.mjs";
+import { playwrightBrowserToolCapabilities, playwrightExecutionCapabilities } from "../../provider-playwright/index.mjs";
 import { judgeQaNative } from "../qa-native-judge.mjs";
+import { writeAuthenticatedRunEnvelope } from "../qa-native-run-envelope.mjs";
 import { createExclusiveQaDirectory, runQaNative, writePrivateJsonExclusive } from "../qa-native.mjs";
 
 const temporaryDirectories = [];
@@ -101,6 +102,29 @@ describe("qa-native offline judge", () => {
     expect(existsSync(join(failed.runDirectory, "judgments"))).toBe(false);
   });
 
+  it("rejects valid JSON metadata that no longer matches the authenticated run envelope", async () => {
+    const strict = persistedRun({ deterministic: true });
+    const strictQaIr = readJson(join(strict.runDirectory, "qa-ir.json"));
+    strictQaIr.suites[0].scenarios[0].title = "Tampered strict meaning";
+    writeFileSync(join(strict.runDirectory, "qa-ir.json"), JSON.stringify(strictQaIr));
+    expect(await dispatch(strict.cwd)).toBe(1);
+    expect(existsSync(join(strict.runDirectory, "judgments"))).toBe(false);
+
+    const adaptive = persistedRun({ deterministic: true, checkpointsPerScenario: 2, adaptive: true });
+    const input = readJson(join(adaptive.runDirectory, "execution-agent-input.json"));
+    input.goal.description = "Tampered adaptive meaning";
+    writeFileSync(join(adaptive.runDirectory, "execution-agent-input.json"), JSON.stringify(input));
+    expect(await dispatch(adaptive.cwd)).toBe(1);
+    expect(existsSync(join(adaptive.runDirectory, "judgments"))).toBe(false);
+
+    const authentication = persistedRun({ deterministic: true });
+    const envelope = readJson(join(authentication.runDirectory, "run-envelope.json"));
+    envelope.authentication = `hmac-sha256:${"0".repeat(64)}`;
+    writeFileSync(join(authentication.runDirectory, "run-envelope.json"), JSON.stringify(envelope));
+    expect(await dispatch(authentication.cwd)).toBe(1);
+    expect(existsSync(join(authentication.runDirectory, "judgments"))).toBe(false);
+  });
+
   it("keeps completed judgment sets immutable", async () => {
     const fixture = persistedRun({ deterministic: true });
     expect(await dispatch(fixture.cwd)).toBe(0);
@@ -169,11 +193,17 @@ function persistedRun({ scenarioCount = 1, checkpointsPerScenario = 1, determini
 
   writePrivateJsonExclusive(".qa/runs/run-1/qa-ir.json", qaIr, { cwd });
   writeEvidenceArchive({ directory: join(runDirectory, "evidence"), bundles, manifest, readBlob: store.readBlob, integrityKey });
-  writePrivateJsonExclusive(".qa/runs/run-1/run.json", { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "execute", type: "COMPLETED" }, { cwd });
+  const runtimeOutcome = { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "execute", type: "COMPLETED" };
+  writePrivateJsonExclusive(".qa/runs/run-1/run.json", runtimeOutcome, { cwd });
   if (adaptive) {
     const agentOutcome = { schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION, runId: "run-1", scenarioId: adaptiveInput.scenarioId, type: "COMPLETED", completedMilestoneIds: adaptiveInput.milestones.map((milestone) => milestone.id) };
     writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-input.json", adaptiveInput, { cwd });
     writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-outcome.json", agentOutcome, { cwd });
+    writeAuthenticatedRunEnvelope({ runDirectory, cwd, integrityKey, runId: "run-1", mode: "adaptive", qaIr, runtimeOutcome, evidenceManifest: manifest, executionAgentInput: adaptiveInput, executionAgentOutcome: agentOutcome });
+  } else {
+    const executionPlan = createExecutionPlan({ qaIr, providerCapabilities: playwrightExecutionCapabilities() });
+    writePrivateJsonExclusive(".qa/runs/run-1/execution-plan.json", executionPlan, { cwd });
+    writeAuthenticatedRunEnvelope({ runDirectory, cwd, integrityKey, runId: "run-1", mode: "strict", qaIr, runtimeOutcome, evidenceManifest: manifest, executionPlan });
   }
   return { cwd, runDirectory, qaIr, bundles, expectationIds };
 }

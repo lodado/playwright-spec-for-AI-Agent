@@ -45,6 +45,7 @@
     "README.md",
     "packages/cli/index.mjs",
     "packages/cli/qa-native-adaptive-evidence.mjs",
+    "packages/cli/qa-native-run-envelope.mjs",
     "packages/cli/qa-native.mjs",
     "packages/cli/qa-native-execute.mjs",
     "packages/cli/qa-native-judge.mjs",
