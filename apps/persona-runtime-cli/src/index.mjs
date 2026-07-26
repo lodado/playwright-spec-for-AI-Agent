@@ -4,6 +4,7 @@ import { dirname, extname, relative, resolve } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
   FUNCTIONAL_EVALUATION_VERSION,
+  redactStudySecrets,
   validateFunctionalEvaluation,
   validateStudySpec,
 } from "@persona-runtime/contracts";
@@ -58,7 +59,7 @@ export async function runPersonaStudy({ study, outputDir, driverFactory, policyF
   const validatedStudy = validateStudySpec(structuredClone(study));
   const runRoot = resolve(outputDir ?? `.qa/runs/run-${Date.now()}`);
   await mkdir(runRoot, { recursive: true });
-  await atomicJson(`${runRoot}/study.json`, redactStudyForPersistence(validatedStudy));
+  await atomicJson(`${runRoot}/study.json`, redactStudySecrets(validatedStudy));
 
   const result = await runStudy({
     study: validatedStudy,
@@ -73,6 +74,8 @@ export async function runPersonaStudy({ study, outputDir, driverFactory, policyF
   for (const sessionResult of result.results) {
     const session = toSessionRecord(sessionResult.session);
     const task = validatedStudy.tasks.find(item => item.id === session.taskId);
+    const sealedObservationIds = new Set(sessionResult.manifest.entries.filter(entry => entry.type === "semantic_snapshot").map(entry => entry.metadata?.observationId));
+    const sealedObservations = sessionResult.observations.filter(observation => sealedObservationIds.has(observation.id));
     let functionalEvaluation;
     try {
       await verifyManifestFiles(runRoot, sessionResult.manifest);
@@ -80,7 +83,7 @@ export async function runPersonaStudy({ study, outputDir, driverFactory, policyF
         study: validatedStudy,
         task,
         session,
-        observations: sessionResult.observations,
+        observations: sealedObservations,
         events: sessionResult.events,
         manifest: sessionResult.manifest,
         customEvaluators: { "manual-review": async () => ({ state: "unknown", evidenceIds: [] }) },
@@ -99,9 +102,9 @@ export async function runPersonaStudy({ study, outputDir, driverFactory, policyF
     const fingerprint = createBehavioralFingerprint({
       session,
       events: sessionResult.events,
-      observations: sessionResult.observations,
+      observations: sealedObservations,
     });
-    evaluatedSessions.push({ ...sessionResult, session, functionalEvaluation, fingerprint });
+    evaluatedSessions.push({ ...sessionResult, observations: sealedObservations, session, functionalEvaluation, fingerprint });
   }
 
   const fingerprints = evaluatedSessions.map(item => item.fingerprint);
@@ -267,6 +270,7 @@ function matchesSafeRegex(actual, pattern) {
 }
 
 function hasNestedOrRepeatedQuantifier(pattern) {
+  if (/\\[1-9]|\)[+*?{]/.test(pattern)) return true;
   const groups = [];
   let escaped = false;
   let inCharacterClass = false;
@@ -360,7 +364,10 @@ function rankForGoal(elements, goal) {
 
 function buildReport({ study, evaluatedSessions, validity, findings, variant }) {
   const statuses = evaluatedSessions.reduce((grouped, item) => {
-    (grouped[item.session.status] ??= []).push(item);
+    const status = item.session.status === "success" && item.functionalEvaluation.status !== "success"
+      ? item.functionalEvaluation.status
+      : item.session.status;
+    (grouped[status] ??= []).push(item);
     return grouped;
   }, {});
   return {
@@ -375,7 +382,7 @@ function buildReport({ study, evaluatedSessions, validity, findings, variant }) 
     personas: study.personas.map(persona => {
       const personaId = persona.id ?? persona.preset;
       const sessions = evaluatedSessions.filter(item => item.session.personaId === personaId);
-      return { personaId, sessions: sessions.length, successRate: sessions.filter(item => item.session.status === "success").length / Math.max(sessions.length, 1), findingIds: findings.filter(finding => finding.affectedPersonaIds.includes(personaId)).map(finding => finding.id) };
+      return { personaId, sessions: sessions.length, successRate: sessions.filter(item => item.session.status === "success" && item.functionalEvaluation.status === "success").length / Math.max(sessions.length, 1), findingIds: findings.filter(finding => finding.affectedPersonaIds.includes(personaId)).map(finding => finding.id) };
     }),
     ...(variant ? { variant } : {}),
     timeline: evaluatedSessions.map(item => ({ ...item.session, steps: item.events })),
@@ -384,12 +391,6 @@ function buildReport({ study, evaluatedSessions, validity, findings, variant }) 
     cost: [],
     modelCard: { actionPolicy: "deterministic behavioral baseline", calibration: validity.calibration.level },
   };
-}
-
-function redactStudyForPersistence(study) {
-  const copy = structuredClone(study);
-  if (copy.environment.fixtures) copy.environment.fixtures = Object.fromEntries(Object.keys(copy.environment.fixtures).map(key => [key, "[REDACTED]"]));
-  return copy;
 }
 
 async function atomicJson(path, value) {

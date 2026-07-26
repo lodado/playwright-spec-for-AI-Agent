@@ -6,6 +6,7 @@ import {
   VARIANT_COMPARISON_REPORT_VERSION,
   ContractValidationError,
   canonicalHash,
+  redactStudySecrets,
   validateBehavioralFingerprint,
   validateEvidenceManifest,
   validateFinding,
@@ -46,7 +47,7 @@ export async function evaluateFunctionalSession({
 } = {}) {
   if (!task || typeof task !== "object") throw new EvaluatorError(EVALUATOR_ERROR_CODES.ORACLE_INVALID, "task is required");
   const sealedManifest = requireSealedManifest(manifest);
-  if (study && sealedManifest.studyHash !== canonicalHash(study)) {
+  if (study && sealedManifest.studyHash !== canonicalHash(redactStudySecrets(study))) {
     throw new EvaluatorError(EVALUATOR_ERROR_CODES.EVIDENCE_LINK_INVALID, "study hash does not match sealed evidence");
   }
   const sealedSession = validateSessionRecord(session);

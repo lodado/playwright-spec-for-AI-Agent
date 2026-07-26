@@ -74,7 +74,12 @@ async function startSession({ input, browserType, launchOptions, now }) {
   const safetyPolicy = normalizeSafetyPolicy(input.safetyPolicy);
   const navigationOrigins = safetyPolicy.allowExternalOrigin ? allowedOrigins : [baseOrigin];
   assertAllowedOrigin(startUrl, navigationOrigins);
-  const evidencePolicy = normalizeEvidencePolicy(input.evidencePolicy ?? input.study?.evidence);
+  const valueRefs = input.valueRefs ?? {};
+  const secretValues = Object.values(valueRefs).filter((value) => typeof value === "string" && value.length > 0);
+  const requestedEvidencePolicy = normalizeEvidencePolicy(input.evidencePolicy ?? input.study?.evidence);
+  const evidencePolicy = secretValues.length > 0
+    ? { ...requestedEvidencePolicy, trace: false, video: "off" }
+    : requestedEvidencePolicy;
   const storageState = environment.storageStatePath ? await resolveStorageStatePath(environment.storageStatePath) : undefined;
   const evidenceDir = path.resolve(input.evidenceDir ?? path.join(".qa", "sessions", sessionId));
   const screenshotDir = path.join(evidenceDir, "screenshots");
@@ -96,7 +101,8 @@ async function startSession({ input, browserType, launchOptions, now }) {
       serviceWorkers: "block",
       ...(evidencePolicy.video === "off" ? {} : { recordVideo: { dir: path.join(evidenceDir, "videos") } }),
     });
-    const runtimeIssues = [];
+  const runtimeIssues = [];
+  const makeIssue = (kind, code, message, metadata = {}) => issue(kind, code, message, metadata, now, secretValues);
     const responseContentTypes = new Map();
     let policyViolation;
     let initialNavigationComplete = false;
@@ -120,7 +126,7 @@ async function startSession({ input, browserType, launchOptions, now }) {
       }
       if (violation) {
         policyViolation = { ...violation, url: safeUrl(url), method };
-        runtimeIssues.push(issue("network", violation.code, violation.message, { url: safeUrl(url), method }, now));
+      runtimeIssues.push(makeIssue("network", violation.code, violation.message, { url: safeUrl(url), method }));
         await route.abort("blockedbyclient");
         return;
       }
@@ -129,35 +135,35 @@ async function startSession({ input, browserType, launchOptions, now }) {
     if (typeof context.routeWebSocket === "function") {
       await context.routeWebSocket("**/*", (socket) => {
         const socketUrl = socket.url?.() ?? "unknown";
-        if (socketUrl === "unknown" || !isAllowedOrigin(socketUrl, allowedOrigins)) {
-          policyViolation = { code: "ORIGIN_BLOCKED", message: "Blocked WebSocket outside allowedOrigins", url: safeUrl(socketUrl) };
-          runtimeIssues.push(issue("network", "ORIGIN_BLOCKED", policyViolation.message, { url: safeUrl(socketUrl) }, now));
-          socket.close();
-        }
+      if (!safetyPolicy.allowStateMutation || socketUrl === "unknown" || !isAllowedOrigin(socketUrl, allowedOrigins)) {
+        policyViolation = { code: "ORIGIN_BLOCKED", message: "WebSocket blocked by safety policy", url: safeUrl(socketUrl) };
+        runtimeIssues.push(makeIssue("network", "ORIGIN_BLOCKED", policyViolation.message, { url: safeUrl(socketUrl) }));
+        socket.close();
+      }
       });
     }
-    if (evidencePolicy.trace) await context.tracing.start({ screenshots: true, snapshots: false, sources: false });
+  if (evidencePolicy.trace) await context.tracing.start({ screenshots: false, snapshots: false, sources: false });
     const page = await context.newPage();
     page.on("console", (message) => {
-      if (["error", "warning", "warn"].includes(message.type())) runtimeIssues.push(issue("console", message.type(), truncate(message.text(), 2_000), {}, now));
+    if (["error", "warning", "warn"].includes(message.type())) runtimeIssues.push(makeIssue("console", message.type(), truncate(message.text(), 2_000)));
     });
-    page.on("pageerror", (error) => runtimeIssues.push(issue("pageerror", "PAGE_ERROR", truncate(error.message, 2_000), {}, now)));
-    page.on("requestfailed", (request) => runtimeIssues.push(issue("network", "REQUEST_FAILED", request.failure()?.errorText ?? "request failed", { url: safeUrl(request.url()), method: request.method() }, now)));
+  page.on("pageerror", (error) => runtimeIssues.push(makeIssue("pageerror", "PAGE_ERROR", truncate(error.message, 2_000))));
+  page.on("requestfailed", (request) => runtimeIssues.push(makeIssue("network", "REQUEST_FAILED", request.failure()?.errorText ?? "request failed", { url: safeUrl(request.url()), method: request.method() })));
     page.on("response", (response) => {
       const metadata = { url: safeUrl(response.url()), method: response.request().method(), status: response.status() };
       responseContentTypes.set(response.url(), response.headers()["content-type"]);
-      runtimeIssues.push(issue("network", response.status() >= 400 ? "HTTP_STATUS" : "HTTP_RESPONSE", `HTTP ${response.status()}`, metadata, now));
+    runtimeIssues.push(makeIssue("network", response.status() >= 400 ? "HTTP_STATUS" : "HTTP_RESPONSE", `HTTP ${response.status()}`, metadata));
     });
     page.on("download", async (download) => {
       const filename = await download.suggestedFilename();
-      runtimeIssues.push(issue("download", "DOWNLOAD", filename, { url: safeUrl(download.url()), filename, mimeType: responseContentTypes.get(download.url()) }, now));
+    runtimeIssues.push(makeIssue("download", "DOWNLOAD", filename, { url: safeUrl(download.url()), filename, mimeType: responseContentTypes.get(download.url()) }));
     });
     page.on("popup", (popup) => {
-    runtimeIssues.push(issue("popup", "POPUP", "Unexpected popup opened", { url: safeUrl(popup.url()) }, now));
+    runtimeIssues.push(makeIssue("popup", "POPUP", "Unexpected popup opened", { url: safeUrl(popup.url()) }));
       void popup.close().catch(() => undefined);
     });
     page.on("dialog", async (dialog) => {
-    runtimeIssues.push(issue("dialog", "DIALOG", truncate(dialog.message(), 2_000), {}, now));
+    runtimeIssues.push(makeIssue("dialog", "DIALOG", truncate(dialog.message(), 2_000)));
       await dialog.dismiss().catch(() => undefined);
     });
     await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: input.navigationTimeoutMs ?? 30_000 });
@@ -178,7 +184,7 @@ async function startSession({ input, browserType, launchOptions, now }) {
       safetyPolicy,
       evidencePolicy,
       fixtureRoot: input.fixtureRoot ? path.resolve(input.fixtureRoot) : undefined,
-      valueRefs: input.valueRefs ?? {},
+    valueRefs,
       observationSequence: 0,
       screenshotSequence: 0,
       hadFailure: false,
@@ -231,7 +237,7 @@ async function observeSession(session, now) {
     sequence: session.observationSequence,
     timestamp: now(),
     page: {
-      url: session.page.url(),
+      url: safeUrl(session.page.url()),
       title: await session.page.title(),
       viewport: session.page.viewportSize() ?? { width: 0, height: 0 },
     },
@@ -256,7 +262,7 @@ async function observeSession(session, now) {
 async function executeAction(session, action, now) {
   if (!session.lastObservation) throw new Error("observe must be called before execute");
   const observationId = session.lastObservation.id;
-  const urlBefore = session.page.url();
+  const urlBefore = safeUrl(session.page.url());
   let actionTarget;
   try {
     actionTarget = await assertActionAllowed(session, action);
@@ -294,7 +300,7 @@ async function executeAction(session, action, now) {
       observationId,
       action: structuredClone(action),
       urlBefore,
-      urlAfter: session.page.url(),
+      urlAfter: safeUrl(session.page.url()),
       timestamp: now(),
       evidenceIds: screenshotEvidence ? [screenshotEvidence.id] : [],
       evidence: screenshotEvidence ? [screenshotEvidence] : [],
@@ -308,7 +314,7 @@ async function executeAction(session, action, now) {
       observationId,
       action: structuredClone(action),
       urlBefore,
-      urlAfter: session.page.url(),
+      urlAfter: safeUrl(session.page.url()),
       timestamp: now(),
       evidenceIds: failureEvidence.map(item => item.id),
       evidence: failureEvidence,
@@ -510,6 +516,10 @@ async function assertActionAllowed(session, action) {
     await liveTarget.handle.dispose().catch(() => undefined);
     throw policyError("ACTION_NOT_ALLOWED", "Form submission is blocked by policy");
   }
+  if (action.type === "click" && !policy.allowStateMutation && !live.navigates) {
+    await liveTarget.handle.dispose().catch(() => undefined);
+    throw policyError("ACTION_NOT_ALLOWED", "Scriptable control requires allowStateMutation");
+  }
   if (action.type === "click" && live.navigates && !policy.allowNavigation) {
     await liveTarget.handle.dispose().catch(() => undefined);
     throw policyError("ACTION_NOT_ALLOWED", "Navigation is blocked by policy");
@@ -518,7 +528,7 @@ async function assertActionAllowed(session, action) {
     await liveTarget.handle.dispose().catch(() => undefined);
     throw policyError("ORIGIN_BLOCKED", "External-origin navigation is blocked by policy");
   }
-  const description = `${live.role} ${live.name} ${live.text} ${action.reasonCode ?? ""}`;
+  const description = `${live.role} ${live.name} ${live.text} ${live.targetUrl ?? ""} ${action.reasonCode ?? ""}`;
   if (policy.stopBeforeConfirmation && DESTRUCTIVE_PATTERN.test(description)) {
     await liveTarget.handle.dispose().catch(() => undefined);
     throw policyError("ACTION_NOT_ALLOWED", "Destructive confirmation/payment action blocked");
@@ -607,6 +617,7 @@ function normalizeEvidencePolicy(policy = {}) {
     screenshot: ["off", "on_failure", "every_action"].includes(policy.screenshot) ? policy.screenshot : "every_action",
     trace: policy.trace !== false,
     video: ["off", "on_failure", "all"].includes(policy.video) ? policy.video : "off",
+    semanticSnapshot: ["off", "on_failure", "every_action"].includes(policy.semanticSnapshot) ? policy.semanticSnapshot : "every_action",
   };
 }
 
@@ -676,26 +687,33 @@ function safeUrl(value) {
     const url = new URL(value);
     url.username = "";
     url.password = "";
-    url.search = url.search ? "?…" : "";
+    url.search = "";
+    url.hash = "";
     return url.toString();
   } catch {
     return "invalid-url";
   }
 }
 
-function issue(kind, code, message, metadata, now) {
+function issue(kind, code, message, metadata, now, secretValues = []) {
+  const cleanMetadata = Object.fromEntries(Object.entries(metadata).map(([key, value]) => [key, typeof value === "string" ? redactSecrets(value, secretValues) : value]));
+  const cleanMessage = redactSecrets(message, secretValues);
   return Object.freeze({
-    id: `issue-${hash({ kind, code, message, metadata }).slice(0, 12)}`,
+    id: `issue-${hash({ kind, code, message: cleanMessage, metadata: cleanMetadata }).slice(0, 12)}`,
     type: kind === "browser" ? "popup" : kind,
     severity: code,
-    message,
-    ...(metadata.url ? { url: metadata.url } : {}),
-    ...(metadata.method ? { method: metadata.method } : {}),
-    ...(metadata.status === undefined ? {} : { status: metadata.status }),
-    ...(metadata.filename ? { filename: metadata.filename } : {}),
-    ...(metadata.mimeType ? { mimeType: metadata.mimeType } : {}),
+    message: cleanMessage,
+    ...(cleanMetadata.url ? { url: cleanMetadata.url } : {}),
+    ...(cleanMetadata.method ? { method: cleanMetadata.method } : {}),
+    ...(cleanMetadata.status === undefined ? {} : { status: cleanMetadata.status }),
+    ...(cleanMetadata.filename ? { filename: cleanMetadata.filename } : {}),
+    ...(cleanMetadata.mimeType ? { mimeType: cleanMetadata.mimeType } : {}),
     timestamp: now(),
   });
+}
+
+function redactSecrets(value, secretValues) {
+  return secretValues.reduce((redacted, secret) => redacted.split(secret).join("[REDACTED]"), String(value));
 }
 
 async function captureFailureScreenshot(session, observationId) {

@@ -5,6 +5,7 @@ import {
   EVIDENCE_MANIFEST_VERSION,
   SESSION_VERSION,
   canonicalHash,
+  redactStudySecrets,
   validateEvidenceManifest,
   validateSessionRecord,
 } from "@persona-runtime/contracts";
@@ -264,7 +265,7 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
       driverEvidence.push(...evidenceFrom(rawObservation));
       const observation = normalizeObservation(rawObservation, sessionId, observations.length);
       observations.push(observation);
-      await store.appendObservation?.(observation);
+    if ((study.evidence?.semanticSnapshot ?? "every_action") === "every_action") await store.appendObservation?.(observation);
 
       const oracleResult = await oracle.evaluate({ study, task, persona, session, observation, events, signal });
       const terminal = terminalFromOracle(oracleResult);
@@ -321,6 +322,10 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
 
   if (!TERMINAL_PHASES.includes(session.phase)) {
     await setPhase("MANUAL_REVIEW", { terminalReason: { code: "NO_TERMINAL_RESULT", message: "session ended without a terminal result" } });
+  }
+
+  if (study.evidence?.semanticSnapshot === "on_failure" && session.status !== "success") {
+    for (const observation of observations) await store.appendObservation?.(observation);
   }
 
   let manifest;
@@ -413,11 +418,11 @@ async function sealSessionEvidence({ study, session, observations, events, drive
     createdAt: session.startedAt,
     sealedAt: toIso(now),
     sealed: true,
-    studyHash: hashJson(study),
+    studyHash: hashJson(redactStudySecrets(study)),
     policyHash: hashJson(session.sampledPolicy),
     entries: [
       ...deduplicateEvidence(driverEvidence),
-      ...observations.map((observation) => ({
+      ...persistedSemanticObservations(study.evidence?.semanticSnapshot ?? "every_action", session.status, observations).map((observation) => ({
         id: `evidence-${observation.id}`,
         type: "semantic_snapshot",
         contentHash: hashJson(observation),
@@ -571,6 +576,11 @@ function uniqueStrings(values) {
 
 function evidenceFrom(value) {
   return Array.isArray(value?.evidence) ? value.evidence.filter(isRecord).map(item => structuredClone(item)) : [];
+}
+
+function persistedSemanticObservations(policy, status, observations) {
+  if (policy === "every_action" || (policy === "on_failure" && status !== "success")) return observations;
+  return [];
 }
 
 function deduplicateEvidence(entries) {

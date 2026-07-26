@@ -40,6 +40,14 @@ export function canonicalHash(value) {
   return `sha256:${createHash("sha256").update(canonicalJson(value)).digest("hex")}`;
 }
 
+export function redactStudySecrets(study) {
+  const copy = structuredClone(study);
+  if (copy?.environment?.fixtures) {
+    copy.environment.fixtures = Object.fromEntries(Object.keys(copy.environment.fixtures).map((key) => [key, "[REDACTED]"]));
+  }
+  return copy;
+}
+
 export function stableId(prefix, parts) {
   if (!Array.isArray(parts) || parts.length === 0) throw new ContractValidationError("parts must be a non-empty array", "$.parts");
   return `${prefix}_${createHash("sha256").update(parts.map((part) => canonicalJson(part)).join("\n")).digest("hex").slice(0, 16)}`;

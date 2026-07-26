@@ -49,6 +49,7 @@ export interface HumanValidationRequirement { required?: boolean; level?: "none"
 
 export function canonicalJson(value: unknown): string;
 export function canonicalHash(value: unknown): string;
+export function redactStudySecrets(study: unknown): unknown;
 export function stableId(prefix: string, parts: unknown[]): string;
 export function createSessionId(input: { runId: string; taskId: string; personaId: string; seed: number; variant?: string }): string;
 export function createEventId(sessionId: string, sequence: number): string;

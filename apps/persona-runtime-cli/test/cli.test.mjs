@@ -138,10 +138,23 @@ test("tampered file evidence becomes runtime_error instead of pass", async () =>
   await rm(root, { recursive: true, force: true });
 });
 
+test("semanticSnapshot off cannot produce a reported success without sealed observations", async () => {
+  const root = await mkdtemp(join(tmpdir(), "persona-no-semantic-"));
+  const noSemanticStudy = structuredClone(study);
+  noSemanticStudy.personas = [{ preset: "careful_business_buyer" }];
+  noSemanticStudy.evidence.semanticSnapshot = "off";
+  const completed = await runPersonaStudy({ study: noSemanticStudy, outputDir: root, driverFactory: () => fakeDriver() });
+  assert.equal(completed.sessions[0].session.status, "success");
+  assert.notEqual(completed.sessions[0].functionalEvaluation.status, "success");
+  assert.equal(completed.report.outcomes.some(outcome => outcome.status === "success"), false);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("regex oracles reject nested quantifiers and oversized patterns or inputs", async () => {
   const root = await mkdtemp(join(tmpdir(), "persona-regex-"));
   const cases = [
     { pattern: "(a+)+$", text: "a".repeat(1_000), error: /nested or repeated quantifiers/ },
+    { pattern: "(a|aa)+$", text: "a".repeat(1_000), error: /nested or repeated quantifiers/ },
     { pattern: "a++", text: "a", error: /nested or repeated quantifiers/ },
     { pattern: "a".repeat(257), text: "a", error: /pattern exceeds 256/ },
     { pattern: "a", text: "a".repeat(10_001), error: /input exceeds 10000/ },
