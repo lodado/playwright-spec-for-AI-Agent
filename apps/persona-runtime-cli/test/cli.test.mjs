@@ -101,6 +101,7 @@ test("variant comparison computes recurrence within each variant", async () => {
   assert.equal(completed.variant.baseline.recurringFindingCount, 0);
   assert.equal(completed.variant.candidate.recurringFindingCount, 0);
   assert.ok(completed.variant.findingIds.length > 0);
+  assert.ok(completed.variant.findingIds.every(id => completed.findings.some(finding => finding.id === id)));
   assert.equal(completed.variant.delta.confidence.orderConsistency, "not_available");
   assert.match(await readFile(join(root, "reports/report.html"), "utf8"), /&quot;orderConsistency&quot;:\s*&quot;not_available&quot;/);
   await rm(root, { recursive: true, force: true });

@@ -18,6 +18,7 @@ test("compares paired variant metrics as relative release evidence", () => {
   assert.equal(report.schemaVersion, "variant-comparison-report/0.1");
   assert.equal(report.status, "baseline_better");
   assert.equal(report.winner, "baseline");
+  assert.deepEqual(report.findingIds, ["finding-candidate"]);
   assert.equal(report.delta.confidence.orderConsistency, 1);
   assert.ok(report.delta.completionDelta < 0);
   assert.ok(report.delta.confidence.limitations.some((item) => item.includes("Relative")));
@@ -35,6 +36,19 @@ test("marks reversed order disagreement unstable", () => {
   assert.equal(report.status, "unstable");
   assert.equal(report.winner, "none");
   assert.equal(report.delta.confidence.orderConsistency, 0);
+});
+
+test("maps variant-local findings to canonical report ids by fingerprint", () => {
+  const report = compareVariants({
+    baselineSessions: [session("b1", "p1", "success")],
+    candidateSessions: [session("c1", "p1", "success")],
+    baselineFingerprints: [fp("b1", 1, 0)],
+    candidateFingerprints: [fp("c1", 1, 0)],
+    candidateFindings: [{ id: "local-finding", fingerprint: "shared-fingerprint", maturity: "exploratory_signal" }],
+    canonicalFindings: [{ id: "canonical-finding", fingerprint: "shared-fingerprint" }],
+  });
+
+  assert.deepEqual(report.findingIds, ["canonical-finding"]);
 });
 
 test("does not count runtime success when sealed functional evaluation failed", () => {

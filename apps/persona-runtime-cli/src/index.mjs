@@ -144,6 +144,7 @@ export async function runPersonaStudy({ study, outputDir, driverFactory, policyF
       candidateSessions,
       baselineFindings: findingsForVariant(baselineSessions),
       candidateFindings: findingsForVariant(candidateSessions),
+      canonicalFindings: findings,
     });
   }
   const report = buildReport({ study: validatedStudy, evaluatedSessions, validity, findings, variant });

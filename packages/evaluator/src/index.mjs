@@ -741,7 +741,7 @@ function recommendationFor(point) {
 }
 
 
-export function compareVariants({ baselineSessions = [], candidateSessions = [], baselineFingerprints, candidateFingerprints, baselineFindings = [], candidateFindings = [], orderResults = [] } = {}) {
+export function compareVariants({ baselineSessions = [], candidateSessions = [], baselineFingerprints, candidateFingerprints, baselineFindings = [], candidateFindings = [], canonicalFindings, orderResults = [] } = {}) {
   const baselinePrints = baselineFingerprints ?? baselineSessions.map((item) => item.fingerprint ?? createBehavioralFingerprint({ session: item.session ?? item, events: item.events ?? [], observations: item.observations ?? [] }));
   const candidatePrints = candidateFingerprints ?? candidateSessions.map((item) => item.fingerprint ?? createBehavioralFingerprint({ session: item.session ?? item, events: item.events ?? [], observations: item.observations ?? [] }));
   const baselineRecords = baselineSessions.map(effectiveVariantSession);
@@ -754,6 +754,11 @@ export function compareVariants({ baselineSessions = [], candidateSessions = [],
   const confidence = comparisonConfidence({ baselineRecords, candidateRecords, orderConsistency });
   let status = comparisonStatus({ baseline, candidate, orderConsistency });
   if (baselineRecords.length === 0 || candidateRecords.length === 0) status = "insufficient_evidence";
+  const variantFindings = [...baselineFindings, ...candidateFindings];
+  const variantFindingFingerprints = new Set(variantFindings.map((finding) => finding.fingerprint).filter(Boolean));
+  const findingIds = canonicalFindings === undefined
+    ? variantFindings.map((finding) => finding.id)
+    : canonicalFindings.filter((finding) => variantFindingFingerprints.has(finding.fingerprint)).map((finding) => finding.id);
   const report = {
     schemaVersion: VARIANT_COMPARISON_REPORT_VERSION,
     status,
@@ -769,7 +774,7 @@ export function compareVariants({ baselineSessions = [], candidateSessions = [],
       affectedPersonaIds: affectedPersonas(baselineRecords, candidateRecords),
       confidence,
     },
-    findingIds: unique([...baselineFindings, ...candidateFindings].map((finding) => finding.id).filter(Boolean)),
+    findingIds: unique(findingIds.filter(Boolean)),
     winner: status === "candidate_better" ? "candidate" : (status === "baseline_better" ? "baseline" : "none"),
   };
   return validateVariantComparisonReport(report);
