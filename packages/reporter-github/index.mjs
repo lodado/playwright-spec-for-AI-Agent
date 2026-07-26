@@ -1,8 +1,41 @@
+import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { GITHUB_PUBLICATION_RESULT_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
 import { redactSensitiveText, verifyEvidenceBundleIdentity } from "../evidence/index.mjs";
 import { diagnoseFailure, recommendRepair } from "../remediation/index.mjs";
 
 const DEFAULT_LABELS = ["qa-runtime", "auto-generated"];
+const MAX_GITHUB_RESPONSE_BYTES = 1024 * 1024;
+const GITHUB_ENV_KEYS = ["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GH_HOST", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "LANG", "LC_ALL", "LC_CTYPE"];
+
+export function createGitHubCliIssueTransport({ spawn = spawnSync } = {}) {
+  if (typeof spawn !== "function") throw new TypeError("GitHub CLI spawn must be a function");
+  return Object.freeze({
+    async verifyCodeContext({ repository, revision, files }) {
+      const target = repositorySlug(repository);
+      if (typeof revision !== "string" || !/^[0-9a-f]{40,64}$/i.test(revision) || !Array.isArray(files) || files.length > 10) throw new Error("GitHub Code Context verification input is invalid");
+      const commit = runGh(spawn, ["api", "--method", "GET", `repos/${target}/commits/${revision}`, "--jq", ".sha"]).toString("utf8").trim();
+      if (commit.toLowerCase() !== revision.toLowerCase()) return false;
+      for (const file of files) {
+        if (!file || typeof file.path !== "string" || !/^[^\0\r\n\\]+$/.test(file.path) || file.path.split("/").some((part) => !part || part === "." || part === "..") || typeof file.contentHash !== "string" || !/^sha256:[0-9a-f]{64}$/.test(file.contentHash)) throw new Error("GitHub Code Context verification input is invalid");
+        const content = runGh(spawn, ["api", "--method", "GET", `repos/${target}/contents/${file.path.split("/").map(encodeURIComponent).join("/")}`, "-f", `ref=${revision}`, "-H", "Accept: application/vnd.github.raw+json"]);
+        if (`sha256:${createHash("sha256").update(content).digest("hex")}` !== file.contentHash) return false;
+      }
+      return true;
+    },
+    async createIssue({ repository, title, body, labels }) {
+      const target = repositorySlug(repository);
+      if (typeof title !== "string" || title.length === 0 || title.length > 240 || typeof body !== "string" || body.length === 0 || body.length > 65_536) throw new Error("GitHub Issue request is invalid");
+      const safeLabels = validateLabels(labels, []);
+      const args = ["issue", "create", "--repo", target, "--title", title, "--body-file", "-"];
+      for (const label of safeLabels) args.push("--label", label);
+      const url = runGh(spawn, args, body).toString("utf8").trim();
+      const match = /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/([1-9][0-9]*)$/i.exec(url);
+      if (!match) throw new Error("GitHub CLI returned an invalid Issue URL");
+      return { number: Number(match[1]), url };
+    },
+  });
+}
 
 export async function publishGitHubFailureIssue({
   repository,
@@ -200,3 +233,5 @@ function safePlainText(value, secrets) {
 function safeText(value, secrets) { return safePlainText(value, secrets).replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1").replaceAll("@", "@\u200b"); }
 function verifyStableId(prefix, idKey, value) { const { [idKey]: id, ...body } = value; const expected = `${prefix}-${canonicalHash(body).slice("sha256:".length, "sha256:".length + 16)}`; if (id !== expected) throw new Error(`${prefix} artifact identity is invalid`); }
 function jsonSnapshot(value) { const serialized = JSON.stringify(value); if (serialized === undefined) throw new Error("GitHub publication input must be JSON-serializable"); return JSON.parse(serialized); }
+function runGh(spawn, args, input) { const result = spawn("gh", args, { encoding: "buffer", maxBuffer: MAX_GITHUB_RESPONSE_BYTES, env: githubEnvironment(), ...(input === undefined ? {} : { input }) }); if (!result || result.status !== 0 || !(result.stdout instanceof Uint8Array) || result.stdout.byteLength > MAX_GITHUB_RESPONSE_BYTES) throw new Error("GitHub CLI request failed"); return Buffer.from(result.stdout); }
+function githubEnvironment() { return Object.fromEntries([...GITHUB_ENV_KEYS.map((key) => [key, process.env[key]]).filter(([, value]) => typeof value === "string"), ["GH_PROMPT_DISABLED", "1"], ["GH_NO_UPDATE_NOTIFIER", "1"]]); }

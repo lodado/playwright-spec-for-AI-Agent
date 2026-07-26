@@ -231,6 +231,18 @@ npx qa-native report \
 
 The report pins `HEAD` to an exact Git commit before locating likely files and line ranges. If a run contains multiple completed judgment sets, select one result explicitly with `--judgment=judgments/<set>/judge-result-<id>.json`.
 
+Publish one failed or manual-review result as an evidence-backed GitHub Issue after authenticating `gh`:
+
+```bash
+npx qa-native publish-issue \
+  --run-dir=.qa/runs/dashboard-1 \
+  --repository-root=. \
+  --repository=owner/repository \
+  --revision=HEAD
+```
+
+Before publication, the runtime verifies the pinned commit and Code Context file hashes against the target repository. The command rejects passing and ambiguous multi-failure inputs, publishes no source snippets or credentials, and stores only the bounded publication result under the private run directory. It cannot create branches, patches, pull requests, or merges.
+
 ## Recommended workflow
 
 | Stage        | Check                                  | Purpose                                |

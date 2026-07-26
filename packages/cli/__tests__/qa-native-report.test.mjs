@@ -10,6 +10,7 @@ import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_AGENT_OUTCOME_VERSION, JUD
 import { createAdaptiveExecutionInput, createExecutionPlan } from "../../core/index.mjs";
 import { createInMemoryEvidenceStore, writeEvidenceArchive } from "../../evidence/index.mjs";
 import { playwrightBrowserToolCapabilities, playwrightExecutionCapabilities } from "../../provider-playwright/index.mjs";
+import { publishIssueQaNative } from "../qa-native-publish-issue.mjs";
 import { reportQaNative } from "../qa-native-report.mjs";
 import { writeAuthenticatedRunEnvelope } from "../qa-native-run-envelope.mjs";
 import { createExclusiveQaDirectory, runQaNative, writePrivateJsonExclusive } from "../qa-native.mjs";
@@ -105,6 +106,66 @@ describe("qa-native repository report", () => {
   });
 });
 
+describe("qa-native GitHub Issue publication", () => {
+  it("publishes one verified failure and persists only the bounded result", async () => {
+    const fixture = persistedFailedRun();
+    const githubTransport = fakeGitHubTransport();
+
+    expect(await dispatchIssue(fixture.cwd, githubTransport)).toBe(0);
+
+    expect(githubTransport.verifyCodeContext).toHaveBeenCalledWith(expect.objectContaining({ repository: "owner/example", revision: fixture.revision }));
+    const directory = completedPublicationDirectory(fixture.runDirectory);
+    expect(readdirSync(directory)).toEqual(["github-publication-result.json"]);
+    expect(readJson(join(directory, "github-publication-result.json"))).toMatchObject({
+      repository: "owner/example",
+      publication: "ISSUE",
+      action: "CREATED",
+      issue: { number: 42, url: "https://github.com/owner/example/issues/42" },
+    });
+  });
+
+  it("removes its guard before remote mutation but retains it after any remote attempt", async () => {
+    const rejected = persistedFailedRun();
+    expect(await dispatchIssue(rejected.cwd, fakeGitHubTransport({ verifyCodeContext: vi.fn(async () => false) }))).toBe(1);
+    expect(readdirSync(join(rejected.runDirectory, "publications"))).toEqual([]);
+
+    const failed = persistedFailedRun();
+    expect(await dispatchIssue(failed.cwd, fakeGitHubTransport({ createIssue: vi.fn(async () => { throw new Error("provider-secret"); }) }))).toBe(1);
+    expect(existsSync(completedPublicationDirectory(failed.runDirectory))).toBe(true);
+
+    const uncertain = persistedFailedRun();
+    const transport = fakeGitHubTransport({
+      createIssue: vi.fn(async () => {
+        const directory = completedPublicationDirectory(uncertain.runDirectory);
+        writeFileSync(join(directory, "github-publication-result.json"), "occupied");
+        return { number: 42, url: "https://github.com/owner/example/issues/42" };
+      }),
+    });
+    expect(await dispatchIssue(uncertain.cwd, transport)).toBe(1);
+    expect(existsSync(completedPublicationDirectory(uncertain.runDirectory))).toBe(true);
+  });
+
+  it("rejects non-failing judgments before creating publication state", async () => {
+    const fixture = persistedFailedRun();
+    fixture.judgment.verdict = "PASS";
+    fixture.judgment.expectationResults[0].status = "MATCHED";
+    writeFileSync(join(fixture.judgmentDirectory, "judge-result-fail.json"), `${JSON.stringify(fixture.judgment)}\n`);
+
+    expect(await dispatchIssue(fixture.cwd, fakeGitHubTransport())).toBe(1);
+    expect(existsSync(join(fixture.runDirectory, "publications"))).toBe(false);
+  });
+
+  it("rejects ambiguous multi-failure publication before creating remote state", async () => {
+    const fixture = persistedFailedRun({ strictFailureCount: 2 });
+    const githubTransport = fakeGitHubTransport();
+
+    expect(await dispatchIssue(fixture.cwd, githubTransport)).toBe(1);
+    expect(githubTransport.verifyCodeContext).not.toHaveBeenCalled();
+    expect(githubTransport.createIssue).not.toHaveBeenCalled();
+    expect(existsSync(join(fixture.runDirectory, "publications"))).toBe(false);
+  });
+});
+
 async function dispatch(cwd, { key = integrityKey, stderr = vi.fn(), judgment } = {}) {
   const args = ["report", "--run-dir=.qa/runs/run-1", "--repository-root=."];
   if (judgment) args.push(`--judgment=${judgment}`);
@@ -117,7 +178,25 @@ async function dispatch(cwd, { key = integrityKey, stderr = vi.fn(), judgment } 
   });
 }
 
-function persistedFailedRun({ adaptive = false } = {}) {
+async function dispatchIssue(cwd, githubTransport, { key = integrityKey, stderr = vi.fn() } = {}) {
+  return runQaNative(["publish-issue", "--run-dir=.qa/runs/run-1", "--repository-root=.", "--repository=owner/example"], {
+    cwd,
+    env: { QA_NATIVE_INTEGRITY_KEY: key.toString("base64") },
+    handlers: { "publish-issue": (options) => publishIssueQaNative({ ...options, githubTransport }) },
+    stdout: vi.fn(),
+    stderr,
+  });
+}
+
+function fakeGitHubTransport(overrides = {}) {
+  return {
+    verifyCodeContext: vi.fn(async () => true),
+    createIssue: vi.fn(async () => ({ number: 42, url: "https://github.com/owner/example/issues/42" })),
+    ...overrides,
+  };
+}
+
+function persistedFailedRun({ adaptive = false, strictFailureCount = 1 } = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "qa-native-report-"));
   temporaryDirectories.push(cwd);
   mkdirSync(join(cwd, "src"));
@@ -135,7 +214,7 @@ function persistedFailedRun({ adaptive = false } = {}) {
   const store = createInMemoryEvidenceStore({ providerCapabilities: adaptive ? playwrightBrowserToolCapabilities() : capabilities });
   const bundles = [];
   let manifest;
-  for (let index = 0; index < (adaptive ? 2 : 1); index += 1) {
+  for (let index = 0; index < (adaptive ? 2 : strictFailureCount); index += 1) {
     const proposal = adaptive ? { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: `proposal-${index}`, runId: input.runId, scenarioId: input.scenarioId, milestoneId: input.currentMilestoneId, leaseId: input.capabilityLease.leaseId, action: index === 1 ? "observe_dom" : "get_current_url", parameters: {} } : undefined;
     const page = input?.currentPage;
     const artifacts = adaptive ? [
@@ -157,20 +236,23 @@ function persistedFailedRun({ adaptive = false } = {}) {
     bundles.push(bundle);
     manifest = store.appendCheckpoint(bundle, adaptive ? { stage: "execute" } : undefined);
   }
-  const bundle = bundles.at(-1);
-  const artifact = bundle.artifacts[0];
-  const judgment = {
-    schemaVersion: JUDGE_RESULT_VERSION,
-    resultId: "judge-fail",
-    qaIrId: qaIr.id,
-    evidenceBundleId: bundle.bundleId,
-    verdict: "FAIL",
-    confidence: 0.82,
-    expectationResults: [{ expectationId: expectation.id, status: "CONTRADICTED", confidence: 0.82, evidenceRefs: [artifact.id], rationale: "Expected dashboard copy is missing." }],
-    uncertainty: [],
-    judge: { provider: "hermes", model: "fixture", promptVersion: "judge-prompt/0.1" },
-    inputHash: canonicalHash({ qaIrId: qaIr.id, evidenceBundleId: bundle.bundleId }),
-  };
+  const judgedBundles = adaptive ? [bundles.at(-1)] : bundles;
+  const judgments = judgedBundles.map((bundle) => {
+    const artifact = bundle.artifacts[0];
+    const body = {
+      schemaVersion: JUDGE_RESULT_VERSION,
+      qaIrId: qaIr.id,
+      evidenceBundleId: bundle.bundleId,
+      verdict: "FAIL",
+      confidence: 0.82,
+      expectationResults: [{ expectationId: expectation.id, status: "CONTRADICTED", confidence: 0.82, evidenceRefs: [artifact.id], rationale: "Expected dashboard copy is missing." }],
+      uncertainty: [],
+      judge: { provider: "hermes", model: "fixture", promptVersion: "judge-prompt/0.1" },
+      inputHash: canonicalHash({ qaIrId: qaIr.id, evidenceBundleId: bundle.bundleId }),
+    };
+    return { ...body, resultId: `judge-${canonicalHash(body).slice("sha256:".length, "sha256:".length + 16)}` };
+  });
+  const judgment = judgments[0];
 
   writePrivateJsonExclusive(".qa/runs/run-1/qa-ir.json", qaIr, { cwd });
   writeEvidenceArchive({ directory: join(runDirectory, "evidence"), bundles, manifest, readBlob: store.readBlob, integrityKey });
@@ -187,7 +269,7 @@ function persistedFailedRun({ adaptive = false } = {}) {
     writeAuthenticatedRunEnvelope({ runDirectory, cwd, integrityKey, runId: "run-1", mode: "strict", qaIr, runtimeOutcome, evidenceManifest: manifest, executionPlan });
   }
   const judgmentDirectory = createExclusiveQaDirectory(".qa/runs/run-1/judgments/judge-fixture", { cwd });
-  writePrivateJsonExclusive(".qa/runs/run-1/judgments/judge-fixture/judge-result-fail.json", judgment, { cwd });
+  judgments.forEach((result, index) => writePrivateJsonExclusive(`.qa/runs/run-1/judgments/judge-fixture/judge-result-fail${index === 0 ? "" : `-${index}`}.json`, result, { cwd }));
   writePrivateJsonExclusive(".qa/runs/run-1/judgments/judge-fixture/run.json", { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "judge", type: "COMPLETED" }, { cwd });
   return { cwd, runDirectory, judgmentDirectory, judgment, revision };
 }
@@ -206,6 +288,13 @@ test.describe("dashboard", () => {
 
 function completedReportDirectory(runDirectory) {
   const root = join(runDirectory, "reports");
+  const directories = readdirSync(root);
+  expect(directories).toHaveLength(1);
+  return join(root, directories[0]);
+}
+
+function completedPublicationDirectory(runDirectory) {
+  const root = join(runDirectory, "publications");
   const directories = readdirSync(root);
   expect(directories).toHaveLength(1);
   return join(root, directories[0]);

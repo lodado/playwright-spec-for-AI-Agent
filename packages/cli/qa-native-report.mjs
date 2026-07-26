@@ -11,6 +11,29 @@ import { readAuthenticatedRunEnvelope, verifyRunEnvelopeBindings } from "./qa-na
 import { createExclusiveQaDirectory, readPrivateJson, writePrivateFileExclusive, writePrivateJsonExclusive } from "./qa-native.mjs";
 
 export async function reportQaNative({ runDirectory, repositoryRoot, revision, judgmentPath, integrityKey, cwd }) {
+  const prepared = prepareQaNativeRemediation({ runDirectory, repositoryRoot, revision, judgmentPath, integrityKey, cwd });
+  const reportHash = shortHash({ results: prepared.items.map(({ judgeResult }) => judgeResult.resultId), repositoryRevision: prepared.repositoryRevision });
+  const reportDirectory = join(runDirectory, "reports", `report-${reportHash}`);
+  let created = false;
+  try {
+    createExclusiveQaDirectory(relative(cwd, reportDirectory), { cwd });
+    created = true;
+    for (const { judgeResult, evidenceBundle, diagnosis, codeContext, recommendation } of prepared.items) {
+      const suffix = shortHash(judgeResult.resultId);
+      writePrivateJsonExclusive(relative(cwd, join(reportDirectory, `diagnosis-${suffix}.json`)), diagnosis, { cwd });
+      writePrivateJsonExclusive(relative(cwd, join(reportDirectory, `code-context-${suffix}.json`)), codeContext, { cwd });
+      writePrivateJsonExclusive(relative(cwd, join(reportDirectory, `repair-recommendation-${suffix}.json`)), recommendation, { cwd });
+      writePrivateFileExclusive(relative(cwd, join(reportDirectory, `report-${suffix}.md`)), renderRemediationReport({ diagnosis, codeContext, recommendation, qaIr: prepared.qaIr, judgeResult, evidenceBundle }), { cwd });
+    }
+    writePrivateJsonExclusive(relative(cwd, join(reportDirectory, "run.json")), { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "report", type: "COMPLETED" }, { cwd });
+    return 0;
+  } catch (error) {
+    if (created) rmSync(reportDirectory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+export function prepareQaNativeRemediation({ runDirectory, repositoryRoot, revision, judgmentPath, integrityKey, cwd, repositoryId }) {
   const outcome = readPrivateJson(relative(cwd, join(runDirectory, "run.json")), { cwd });
   validateContract("RuntimeOutcome", outcome);
   if (outcome.stage !== "execute" || outcome.type !== "COMPLETED") throw new Error("QA execution is incomplete");
@@ -30,29 +53,14 @@ export async function reportQaNative({ runDirectory, repositoryRoot, revision, j
   const selected = judgments.filter(({ result }) => ["FAIL", "MANUAL_REVIEW"].includes(result.verdict));
   if (selected.length === 0) throw new Error("QA report has no failing judgments");
 
-  const snapshot = createLocalRepositorySnapshot({ root: repositoryRoot, revision });
-  const reportHash = shortHash({ results: selected.map(({ result }) => result.resultId), repositoryRevision: snapshot.revision });
-  const reportDirectory = join(runDirectory, "reports", `report-${reportHash}`);
-  let created = false;
-  try {
-    createExclusiveQaDirectory(relative(cwd, reportDirectory), { cwd });
-    created = true;
-    for (const { result, bundle } of selected) {
-      const diagnosis = diagnoseFailure({ qaIr, judgeResult: result, evidenceBundle: bundle });
-      const codeContext = locateCode({ snapshot, diagnosis, judgeResult: result, qaIr, evidenceBundle: bundle });
-      const recommendation = recommendRepair({ diagnosis, codeContext, qaIr, judgeResult: result, evidenceBundle: bundle });
-      const suffix = shortHash(result.resultId);
-      writePrivateJsonExclusive(relative(cwd, join(reportDirectory, `diagnosis-${suffix}.json`)), diagnosis, { cwd });
-      writePrivateJsonExclusive(relative(cwd, join(reportDirectory, `code-context-${suffix}.json`)), codeContext, { cwd });
-      writePrivateJsonExclusive(relative(cwd, join(reportDirectory, `repair-recommendation-${suffix}.json`)), recommendation, { cwd });
-      writePrivateFileExclusive(relative(cwd, join(reportDirectory, `report-${suffix}.md`)), renderRemediationReport({ diagnosis, codeContext, recommendation, qaIr, judgeResult: result, evidenceBundle: bundle }), { cwd });
-    }
-    writePrivateJsonExclusive(relative(cwd, join(reportDirectory, "run.json")), { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "report", type: "COMPLETED" }, { cwd });
-    return 0;
-  } catch (error) {
-    if (created) rmSync(reportDirectory, { recursive: true, force: true });
-    throw error;
-  }
+  const snapshot = createLocalRepositorySnapshot({ root: repositoryRoot, revision, repositoryId });
+  const items = selected.map(({ result, bundle }) => {
+    const diagnosis = diagnoseFailure({ qaIr, judgeResult: result, evidenceBundle: bundle });
+    const codeContext = locateCode({ snapshot, diagnosis, judgeResult: result, qaIr, evidenceBundle: bundle });
+    const recommendation = recommendRepair({ diagnosis, codeContext, qaIr, judgeResult: result, evidenceBundle: bundle });
+    return { judgeResult: result, evidenceBundle: bundle, diagnosis, codeContext, recommendation };
+  });
+  return Object.freeze({ qaIr, repositoryRevision: snapshot.revision, items: Object.freeze(items) });
 }
 
 function expectedJudgedBundles({ runDirectory, archive, envelope, qaIr, runtimeOutcome, cwd }) {

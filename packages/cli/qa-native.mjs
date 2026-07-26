@@ -8,6 +8,7 @@ const PRIVATE_FILE_MODE = 0o600;
 const MAX_PRIVATE_JSON_BYTES = 4 * 1024 * 1024;
 const REPORT_OPTIONS = new Set(["run-dir", "repository-root", "revision", "judgment"]);
 const REPORT_COMMANDS = new Set(["diagnose", "suggest-fix", "report"]);
+const PUBLISH_ISSUE_OPTIONS = new Set([...REPORT_OPTIONS, "repository"]);
 const COMMAND_OPTIONS = Object.freeze({
   execute: new Set(["spec", "base-url", "run-dir", "provider", "mode"]),
   judge: new Set(["run-dir"]),
@@ -15,6 +16,7 @@ const COMMAND_OPTIONS = Object.freeze({
   diagnose: REPORT_OPTIONS,
   "suggest-fix": REPORT_OPTIONS,
   report: REPORT_OPTIONS,
+  "publish-issue": PUBLISH_ISSUE_OPTIONS,
 });
 const COMMAND_USAGE = Object.freeze({
   execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> [--provider=playwright --mode=strict | --provider=hermes --mode=adaptive]",
@@ -23,6 +25,7 @@ const COMMAND_USAGE = Object.freeze({
   diagnose: "qa-native diagnose --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
   "suggest-fix": "qa-native suggest-fix --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
   report: "qa-native report --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
+  "publish-issue": "qa-native publish-issue --run-dir=.qa/runs/<id> --repository-root=. --repository=<owner/repository> [--revision=<commit>] [--judgment=<result.json>]",
 });
 
 export function decodeIntegrityKey(value) {
@@ -177,6 +180,7 @@ function parseRequest(argv) {
         "repository-root": { type: "string" },
         revision: { type: "string" },
         judgment: { type: "string" },
+        repository: { type: "string" },
         provider: { type: "string" },
         mode: { type: "string" },
       },
@@ -189,7 +193,7 @@ function parseRequest(argv) {
   const command = parsed.positionals[0];
   const supplied = Object.keys(parsed.values).filter((key) => key !== "help");
   if (supplied.some((key) => !COMMAND_OPTIONS[command].has(key))) throw new CliError("invalid command arguments");
-  const required = command === "execute" ? ["spec", "base-url", "run-dir"] : REPORT_COMMANDS.has(command) ? ["run-dir", "repository-root"] : ["run-dir"];
+  const required = command === "execute" ? ["spec", "base-url", "run-dir"] : command === "publish-issue" ? ["run-dir", "repository-root", "repository"] : REPORT_COMMANDS.has(command) ? ["run-dir", "repository-root"] : ["run-dir"];
   if (required.some((key) => typeof parsed.values[key] !== "string" || parsed.values[key].length === 0)) throw new CliError("required command argument is missing");
   return { command, options: Object.freeze({ ...parsed.values }) };
 }
@@ -213,7 +217,7 @@ function normalizeRequest(request, cwd) {
   }
 
   assertPrivateDirectory(runDirectory);
-  if (!REPORT_COMMANDS.has(request.command)) return Object.freeze({ command: request.command, cwd, runDirectory });
+  if (!REPORT_COMMANDS.has(request.command) && request.command !== "publish-issue") return Object.freeze({ command: request.command, cwd, runDirectory });
   const repositoryRoot = resolveRepositoryRoot(request.options["repository-root"], cwd);
   const judgmentPath = request.options.judgment === undefined ? undefined : resolveRegularInput(request.options.judgment, { root: runDirectory, label: "judgment" });
   return Object.freeze({
@@ -221,6 +225,7 @@ function normalizeRequest(request, cwd) {
     cwd,
     runDirectory,
     repositoryRoot,
+    ...(request.command === "publish-issue" ? { repository: safeRepositorySlug(request.options.repository) } : {}),
     revision: safeRevision(request.options.revision ?? "HEAD"),
     ...(judgmentPath === undefined ? {} : { judgmentPath }),
   });
@@ -265,6 +270,11 @@ function resolveRepositoryRoot(value, cwd) {
 
 function safeRevision(value) {
   if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._/~^-]{0,199}$/.test(value)) throw new CliError("repository revision is invalid");
+  return value;
+}
+
+function safeRepositorySlug(value) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(value) || value.split("/").some((part) => part === "." || part === "..")) throw new CliError("GitHub repository is invalid");
   return value;
 }
 
