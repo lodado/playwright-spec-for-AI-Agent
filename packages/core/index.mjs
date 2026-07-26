@@ -145,6 +145,7 @@ export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId,
   if (!scenario) throw contractError("execute", "scenarioId does not exist in QA IR");
   const navigationStep = scenario.steps.find((step) => step.kind === "NAVIGATE");
   const interactionSteps = scenario.steps.filter((step) => step.kind === "INTERACT");
+  if (scenario.policy.readDom !== true) throw policyError("execute", "adaptive DOM observation is blocked by scenario policy");
   if (navigationStep && scenario.policy.navigation !== "ALLOWED") throw policyError("execute", "adaptive startup navigation is blocked by scenario policy");
   if (interactionSteps.length > 0 && !["SAFE_ONLY", "ALL"].includes(scenario.policy.click)) throw policyError("execute", "adaptive interaction is blocked by scenario policy");
   const startUrl = adaptiveStartUrl(baseUrl, navigationStep);

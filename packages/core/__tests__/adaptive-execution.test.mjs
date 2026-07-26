@@ -77,6 +77,10 @@ describe("adaptive execution authorization", () => {
     const blocked = adaptiveQaIr();
     blocked.suites[0].scenarios[0].policy.click = "NONE";
     expect(() => createAdaptiveExecutionInput({ qaIr: blocked, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-blocked" })).toThrow(/blocked by scenario policy/);
+
+    const domDenied = adaptiveQaIr();
+    domDenied.suites[0].scenarios[0].policy.readDom = false;
+    expect(() => createAdaptiveExecutionInput({ qaIr: domDenied, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-dom-denied" })).toThrow(/DOM observation is blocked/);
   });
 
   it("authorizes one exact observed-element action from the current DOM generation", () => {
