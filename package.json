@@ -59,6 +59,7 @@
     "packages/provider-playwright/index.mjs",
     "packages/remediation/index.mjs",
     "packages/repository-provider/index.mjs",
+    "packages/reporter-github/index.mjs",
     "packages/reporter-markdown/index.mjs"
   ],
   "scripts": {
@@ -105,6 +106,7 @@
     "./provider-playwright": "./packages/provider-playwright/index.mjs",
     "./remediation": "./packages/remediation/index.mjs",
     "./repository-provider": "./packages/repository-provider/index.mjs",
+    "./reporter-github": "./packages/reporter-github/index.mjs",
     "./reporter-markdown": "./packages/reporter-markdown/index.mjs"
   }
 }

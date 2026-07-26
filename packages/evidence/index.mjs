@@ -255,6 +255,12 @@ export function verifyStoredEvidence({ bundle, manifest, readBlob }) {
   });
 }
 
+export function verifyEvidenceBundleIdentity(bundle) {
+  validateContract("EvidenceBundle", bundle);
+  if (derivedBundleId(bundle) !== bundle.bundleId) throw new Error("Evidence Bundle identity is invalid");
+  return bundle;
+}
+
 export function writeEvidenceArchive(options = {}) {
   const key = archiveIntegrityKey(options?.integrityKey);
   try {

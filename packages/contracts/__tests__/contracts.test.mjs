@@ -10,6 +10,7 @@ import {
   EVIDENCE_MANIFEST_VERSION,
   EXECUTION_PLAN_VERSION,
   FAILURE_DIAGNOSIS_VERSION,
+  GITHUB_PUBLICATION_RESULT_VERSION,
   JUDGE_RESULT_VERSION,
   SEMANTIC_JUDGE_DECISION_VERSION,
   SEMANTIC_JUDGE_INPUT_VERSION,
@@ -205,6 +206,12 @@ describe("documented runtime contracts", () => {
     expect(validateContract("RunEnvelope", strict)).toBe(strict);
     expect(() => validateContract("RunEnvelope", { ...strict, qaIrHash: "sha256:short" })).toThrow(/SHA-256/);
     expect(() => validateContract("RunEnvelope", { ...strict, mode: "adaptive" })).toThrow(/executionPlanHash|executionAgentInputHash/);
+  });
+
+  it("validates bounded GitHub Issue publication results", () => {
+    const result = { schemaVersion: GITHUB_PUBLICATION_RESULT_VERSION, repository: "owner/repository", publication: "ISSUE", action: "CREATED", issue: { number: 42, url: "https://github.com/owner/repository/issues/42" }, source: { runId: "run-1", judgeResultId: "judge-1", failureDiagnosisId: "diagnosis-1", codeContextBundleId: "context-1" }, publicationFingerprint: "UNASSIGNED" };
+    expect(validateContract("GitHubPublicationResult", result)).toBe(result);
+    expect(() => validateContract("GitHubPublicationResult", { ...result, issue: { ...result.issue, url: "https://attacker.test/42" } })).toThrow(/GitHub Issue/);
   });
 
   it("requires globally unique QA IR scenario ids", () => {

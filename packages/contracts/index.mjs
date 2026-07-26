@@ -22,6 +22,7 @@ export const SEMANTIC_JUDGE_DECISION_VERSION = "semantic-judge-decision/0.1";
 export const FAILURE_DIAGNOSIS_VERSION = "failure-diagnosis/0.1";
 export const CODE_CONTEXT_VERSION = "code-context/0.1";
 export const REPAIR_RECOMMENDATION_VERSION = "repair-recommendation/0.1";
+export const GITHUB_PUBLICATION_RESULT_VERSION = "github-publication-result/0.1";
 
 export const VERDICTS = Object.freeze(["PASS", "FAIL", "SKIP", "MANUAL_REVIEW"]);
 export const EXPECTATION_STATUSES = Object.freeze(["MATCHED", "CONTRADICTED", "NOT_OBSERVED", "AMBIGUOUS", "NOT_APPLICABLE"]);
@@ -91,6 +92,7 @@ const schemas = {
   FailureDiagnosis: validateFailureDiagnosis,
   CodeContextBundle: validateCodeContextBundle,
   RepairRecommendation: validateRepairRecommendation,
+  GitHubPublicationResult: validateGitHubPublicationResult,
 };
 
 export class ContractViolationError extends Error {
@@ -1000,6 +1002,28 @@ function validateRepairRecommendation(value, path, context = {}) {
   }
 }
 
+function validateGitHubPublicationResult(value, path) {
+  const contract = "GitHubPublicationResult";
+  object(value, path, contract);
+  allowedKeys(value, ["schemaVersion", "repository", "publication", "action", "issue", "source", "publicationFingerprint"], path, contract);
+  exact(value.schemaVersion, GITHUB_PUBLICATION_RESULT_VERSION, `${path}.schemaVersion`, contract);
+  repositorySlug(value.repository, `${path}.repository`, contract);
+  exact(value.publication, "ISSUE", `${path}.publication`, contract);
+  exact(value.action, "CREATED", `${path}.action`, contract);
+  object(value.issue, `${path}.issue`, contract);
+  allowedKeys(value.issue, ["number", "url"], `${path}.issue`, contract);
+  boundedInteger(value.issue.number, 1, Number.MAX_SAFE_INTEGER, `${path}.issue.number`, contract);
+  boundedString(value.issue.url, 2_048, `${path}.issue.url`, contract);
+  let issueUrl;
+  try { issueUrl = new URL(value.issue.url); } catch { fail(contract, `${path}.issue.url`, "must be a GitHub Issue URL"); }
+  if (issueUrl?.protocol !== "https:" || issueUrl.hostname !== "github.com" || issueUrl.port || issueUrl.username || issueUrl.password || issueUrl.search || issueUrl.hash || issueUrl.pathname.toLowerCase() !== `/${value.repository}/issues/${value.issue.number}`.toLowerCase()) fail(contract, `${path}.issue.url`, "must match the published GitHub Issue");
+  object(value.source, `${path}.source`, contract);
+  allowedKeys(value.source, ["runId", "judgeResultId", "failureDiagnosisId", "codeContextBundleId", "repairRecommendationId"], `${path}.source`, contract);
+  for (const key of ["runId", "judgeResultId", "failureDiagnosisId", "codeContextBundleId"]) boundedString(value.source[key], 512, `${path}.source.${key}`, contract);
+  if (value.source.repairRecommendationId !== undefined) boundedString(value.source.repairRecommendationId, 512, `${path}.source.repairRecommendationId`, contract);
+  exact(value.publicationFingerprint, "UNASSIGNED", `${path}.publicationFingerprint`, contract);
+}
+
 function validateSourceProvenance(value, path, contract) {
   object(value, path, contract);
   allowedKeys(value, ["repository", "revision", "path", "range", "symbol", "adapter", "contentHash"], path, contract);
@@ -1175,6 +1199,7 @@ function boundedString(value, maxLength, path, contract) { string(value, path, c
 function sha256Hash(value, path, contract) { if (typeof value !== "string" || !/^sha256:[0-9a-f]{64}$/.test(value)) fail(contract, path, "must be a SHA-256 hash"); }
 function boundedInteger(value, min, max, path, contract) { number(value, path, contract); if (!Number.isInteger(value) || value < min || value > max) fail(contract, path, `must be an integer between ${min} and ${max}`); }
 function repositoryPath(value, path, contract) { boundedString(value, 4_096, path, contract); if (/^(?:[a-z]:[\\/]|[\\/])|(?:^|[\\/])\.\.(?:[\\/]|$)|[\0\r\n]/i.test(value)) fail(contract, path, "must be a safe repository-relative path"); }
+function repositorySlug(value, path, contract) { boundedString(value, 201, path, contract); const parts = value.split("/"); if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(value) || parts.some((part) => part === "." || part === "..")) fail(contract, path, "must be an owner/repository slug"); }
 function number(value, path, contract) { if (typeof value !== "number" || Number.isNaN(value)) fail(contract, path, "must be a number"); }
 function probability(value, path, contract) { number(value, path, contract); if (!Number.isFinite(value) || value < 0 || value > 1) fail(contract, path, "must be between 0 and 1"); }
 function bool(value, path, contract) { if (typeof value !== "boolean") fail(contract, path, "must be a boolean"); }
