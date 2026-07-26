@@ -10,5 +10,16 @@ pnpm install --frozen-lockfile
 pnpm test
 ```
 
-The legacy npm package and commands remain supported while the behavioral
-runtime is developed as independent workspace packages.
+Run the Behavioral MVP against the included hidden-CTA fixture:
+
+```bash
+# terminal 1
+pnpm fixture:hidden-cta
+
+# terminal 2
+pnpm persona-runtime run examples/hidden-cta/study.yaml --output=.qa/hidden-cta
+```
+
+The command writes sealed session evidence, canonical JSON, and a static HTML
+report under `.qa/hidden-cta`. The legacy npm package commands remain supported
+unchanged.
