@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" role="img" aria-labelledby="title desc">
+  <title id="title">Persona Runtime Core</title>
+  <desc id="desc">Session orchestration, browser closure, evidence sealing, and post-seal evaluation boundaries.</desc>
+  <rect width="1200" height="340" rx="28" fill="#090b12"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,sans-serif" fill="#f7f8ff">
+    <text x="68" y="82" font-size="24" letter-spacing="4" fill="#91a7ff">SESSION STATE MACHINE</text>
+    <text x="68" y="142" font-size="56" font-weight="800">Runtime Core</text>
+    <text x="68" y="188" font-size="30" fill="#c5cbea">Code owns the workflow.</text>
+    <text x="68" y="292" font-size="20" fill="#8f96b8" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">runStudy · runSession · seal evidence · evaluate after close</text>
+  </g>
+  <g transform="translate(610 72)" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="19">
+    <path d="M60 35H360M60 92H360M60 149H360" stroke="#4052a8" stroke-width="2"/>
+    <g fill="#10162a" stroke="#7c8cff" stroke-width="2">
+      <rect x="0" y="10" width="150" height="48" rx="14"/><rect x="250" y="10" width="150" height="48" rx="14"/>
+      <rect x="0" y="67" width="150" height="48" rx="14"/><rect x="250" y="67" width="150" height="48" rx="14"/>
+      <rect x="0" y="124" width="150" height="48" rx="14"/><rect x="250" y="124" width="150" height="48" rx="14"/>
+    </g>
+    <g fill="#f7f8ff" text-anchor="middle">
+      <text x="75" y="41">CREATED</text><text x="325" y="41">RUNNING</text>
+      <text x="75" y="98">SUCCESS</text><text x="325" y="98">EVIDENCE</text>
+      <text x="75" y="155">EVALUATED</text><text x="325" y="155">REPORTED</text>
+    </g>
+  </g>
+</svg>

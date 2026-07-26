@@ -28,6 +28,9 @@
 
 ---
 
+> [!NOTE]
+> This README documents the backwards-compatible npm package. The repository also contains the new Persona Runtime workspace app for evidence-first behavioral release checks; start at the [workspace README](https://github.com/lodado/playwright-spec-for-AI-Agent#readme) when you want StudySpec, sealed evidence, persona policies, validity reports, or baseline/candidate comparison.
+
 This tool reads Playwright `*.spec.ts` files, extracts `@qa-scenario` intent, turns it into structured QA scenarios, and uses [Hermes Agent](https://github.com/NousResearch/hermes-agent) to validate the same intent against a staging page.
 
 Hermes Agent is used here as the adapter layer for multiple agents. The CLI keeps the project-specific QA flow stable, while Hermes handles agent execution, browser access, model calls, and judgment/review steps through its agent adapters.

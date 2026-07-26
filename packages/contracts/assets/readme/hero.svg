@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" role="img" aria-labelledby="title desc">
+  <title id="title">Persona Runtime Contracts</title>
+  <desc id="desc">Versioned schemas, validators, stable identifiers, and sealed evidence contracts for Persona Runtime.</desc>
+  <rect width="1200" height="340" rx="28" fill="#07110f"/>
+  <path d="M70 260H440M70 220H330M70 180H380" stroke="#2bd4a5" stroke-width="2" opacity=".45"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,sans-serif" fill="#f4fff9">
+    <text x="68" y="82" font-size="24" letter-spacing="4" fill="#70e7c5">VERSIONED BOUNDARIES</text>
+    <text x="68" y="142" font-size="56" font-weight="800">Contracts</text>
+    <text x="68" y="188" font-size="30" fill="#b9d7cc">Schemas before runtime judgment.</text>
+    <text x="68" y="292" font-size="20" fill="#86a89b" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">StudySpec · EvidenceManifest 0.2 · Finding · VariantComparison</text>
+  </g>
+  <g transform="translate(650 55)" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">
+    <rect x="0" y="0" width="430" height="230" rx="20" fill="#0d1d19" stroke="#23594a"/>
+    <text x="34" y="48" font-size="22" fill="#2bd4a5">validateStudySpec()</text>
+    <text x="34" y="86" font-size="20" fill="#dffcf2">schemaVersion: study-spec/0.1</text>
+    <text x="34" y="124" font-size="20" fill="#dffcf2">stableId(prefix, parts)</text>
+    <text x="34" y="162" font-size="20" fill="#dffcf2">canonicalHash(value)</text>
+    <text x="34" y="200" font-size="20" fill="#dffcf2">deep-freeze validated data</text>
+    <circle cx="390" cy="45" r="8" fill="#2bd4a5"/>
+    <circle cx="390" cy="84" r="8" fill="#2bd4a5"/>
+    <circle cx="390" cy="123" r="8" fill="#2bd4a5"/>
+  </g>
+</svg>
