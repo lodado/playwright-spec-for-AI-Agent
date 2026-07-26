@@ -62,6 +62,7 @@ function fakeBrowser({
   elementText = "Settings",
   protectedElement = false,
   requestAfterClick = false,
+  routeNavigationRequests = false,
 } = {}) {
   const calls = [];
   const screenshots = [];
@@ -107,11 +108,27 @@ function fakeBrowser({
     count: vi.fn(async () => 1),
     nth: vi.fn(() => candidate),
   };
+  const mainFrame = {};
+  mainFrame.url = () => pageUrl;
   const page = {
     goto: vi.fn(async (target) => {
       pageUrl = target;
       calls.push(["goto", target]);
+      if (routeNavigationRequests) {
+        await routeHandler({
+          request: () => ({
+            method: () => "GET",
+            url: () => target,
+            isNavigationRequest: () => true,
+            resourceType: () => "document",
+            frame: () => mainFrame,
+          }),
+          abort: vi.fn(async () => calls.push(["abort", "blockedbyclient"])),
+          continue: vi.fn(async () => calls.push(["continue"])),
+        });
+      }
     }),
+    mainFrame: vi.fn(() => mainFrame),
     url: vi.fn(() => pageUrl),
     viewportSize: vi.fn(() => ({ width: 1280, height: 720 })),
     locator: vi.fn((selector) => {
@@ -222,6 +239,7 @@ describe("Playwright browser tool gateway", () => {
     expect(agentInput.capabilityLease.actions).toEqual(
       expect.arrayContaining(["get_current_url", "observe_dom", "observe_aria", "click_observed_element", "press_key"]),
     );
+    expect(gateway.capabilities.actions).toContain("navigate");
     expect(agentInput.capabilityLease.actions).not.toContain("observe_screenshot");
 
     const execution = await gateway.execute({ proposal: proposal(agentInput, "get_current_url"), tokensUsed: 11 });
@@ -235,6 +253,89 @@ describe("Playwright browser tool gateway", () => {
     expect(await artifactText(gateway, execution.bundle)).toContain("https://example.test/dashboard");
     expect(fixture.screenshots).toEqual([]);
 
+    await gateway.close();
+  });
+
+  it("navigates within the capability origin and invalidates the previous page identity", async () => {
+    const fixture = fakeBrowser({ routeNavigationRequests: true });
+    const input = executionAgentInput();
+    input.milestones[0].status = "COMPLETED";
+    input.currentMilestoneId = "dialog-visible";
+    input.capabilityLease.actions.push("navigate");
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
+
+    const execution = await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "navigate", { url: "https://example.test/settings" }),
+      tokensUsed: 2,
+    });
+
+    expect(execution.result).toMatchObject({
+      accepted: true,
+      page: { url: "https://example.test/settings", domGeneration: 1 },
+    });
+    expect(execution.result.page.pageId).not.toBe("page-1");
+    expect(fixture.calls).toContainEqual(["goto", "https://example.test/settings"]);
+    expect(fixture.calls.filter(([action]) => action === "continue")).toHaveLength(2);
+    expect(gateway.agentInput().recentObservations).toEqual([]);
+    await gateway.close();
+  });
+
+  it("rejects cross-origin navigation before Playwright executes it", async () => {
+    const fixture = fakeBrowser();
+    const input = executionAgentInput();
+    input.milestones[0].status = "COMPLETED";
+    input.currentMilestoneId = "dialog-visible";
+    input.capabilityLease.actions.push("navigate");
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
+
+    await expect(
+      gateway.execute({
+        proposal: proposal(gateway.agentInput(), "navigate", { url: "https://outside.test/settings" }),
+        tokensUsed: 2,
+      }),
+    ).rejects.toThrow(/origin/i);
+
+    expect(fixture.calls.filter(([action]) => action === "goto")).toEqual([
+      ["goto", "https://example.test/dashboard"],
+    ]);
+    await gateway.close();
+  });
+
+  it("rejects navigation after an interaction", async () => {
+    const fixture = fakeBrowser();
+    const input = executionAgentInput();
+    input.milestones = [{
+      id: "open-settings",
+      class: "REQUIRED_SEMANTIC_MILESTONE",
+      status: "PENDING",
+      description: "Reach settings.",
+      target: { testId: "settings" },
+    }];
+    input.capabilityLease.actions.push("navigate");
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
+    const observed = await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "observe_dom"),
+      tokensUsed: 1,
+    });
+    const element = observed.observation.elements[0];
+    await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "click_observed_element", {
+        observationId: observed.observation.observationId,
+        elementId: element.elementId,
+      }),
+      tokensUsed: 1,
+    });
+
+    await expect(
+      gateway.execute({
+        proposal: proposal(gateway.agentInput(), "navigate", { url: "https://example.test/settings" }),
+        tokensUsed: 1,
+      }),
+    ).rejects.toThrow(/denied after an interaction/i);
+
+    expect(fixture.calls.filter(([action]) => action === "goto")).toEqual([
+      ["goto", "https://example.test/dashboard"],
+    ]);
     await gateway.close();
   });
 

@@ -34,7 +34,7 @@ const GATEWAY_ARIA_LIMIT = 512 * 1024;
 const GATEWAY_MAX_ELEMENTS = 128;
 const GATEWAY_ELEMENT_TEXT_LIMIT = 1024;
 const GATEWAY_CLEANUP_TIMEOUT_MS = 1_000;
-const GATEWAY_ACTIONS = Object.freeze(["get_current_url", "observe_dom", "observe_aria", "click_observed_element", "press_key"]);
+const GATEWAY_ACTIONS = Object.freeze(["get_current_url", "observe_dom", "observe_aria", "navigate", "click_observed_element", "press_key"]);
 
 export function playwrightExecutionCapabilities() {
   return providerCapabilities({
@@ -143,11 +143,15 @@ export async function openPlaywrightBrowserToolGateway({
         const authorization = createAdaptiveActionAuthorizer({ input: beforeInput, now: clock }).authorize({ proposal, tokensUsed });
         usedProposalIds.add(authorization.proposal.proposalId);
         remainingBudget = { ...authorization.remainingBudget };
+        if (authorization.proposal.action === "navigate" && interactionStarted) throw new Error("browser navigation is denied after an interaction");
         operationStarted = true;
         const before = await captureGatewayPage(page, currentPage, initialInput.capabilityLease.allowedOrigins, { deadline, clock }, secrets);
         let observation;
         if (authorization.proposal.action === "get_current_url") {
           // URL is captured in the mandatory pre/post evidence.
+        } else if (authorization.proposal.action === "navigate") {
+          await runGatewayBrowserOperation({ deadline, clock }, (timeout) => page.goto(authorization.proposal.parameters.url, { waitUntil: "domcontentloaded", timeout }));
+          invalidateGatewayObservations();
         } else if (authorization.proposal.action === "observe_dom" || authorization.proposal.action === "observe_aria") {
           observation = await observeGatewayElements({ page, input: beforeInput, currentPage, sequence: ++observationSequence, secrets: [...secrets, ...before.sensitiveValues], deadline, clock });
           recentObservations = [observation.contract];
@@ -167,7 +171,7 @@ export async function openPlaywrightBrowserToolGateway({
         }
         if (policyViolation) throw new Error("browser tool policy was violated");
         const nextUrl = gatewayUrl(page, initialInput.capabilityLease.allowedOrigins);
-        if (nextUrl !== currentPage.url) {
+        if (authorization.proposal.action === "navigate" || nextUrl !== currentPage.url) {
           currentPage = { pageId: `page-${canonicalHash({ proposalId: authorization.proposal.proposalId, nextUrl }).slice("sha256:".length, "sha256:".length + 12)}`, domGeneration: 1, url: nextUrl };
           recentObservations = [];
           handles.clear();
@@ -376,10 +380,19 @@ function gatewayTargetMatches(target, metadata) {
 }
 
 function captureGatewayArtifacts(store, proposal, before, after) {
+  const auditProposal = structuredClone(proposal);
+  if (auditProposal.action === "navigate") {
+    const url = new URL(auditProposal.parameters.url);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    auditProposal.parameters.url = url.href;
+  }
   return [
     store.captureArtifact({ id: `${proposal.proposalId}:before:dom`, type: "DOM_SNAPSHOT", contentType: "text/html", content: before.dom }),
     store.captureArtifact({ id: `${proposal.proposalId}:before:aria`, type: "ARIA_SNAPSHOT", contentType: "text/plain", content: before.aria }),
-    store.captureArtifact({ id: `${proposal.proposalId}:action`, type: "ACTION_LOG", contentType: "application/json", content: JSON.stringify({ proposal, status: "ACCEPTED", before: before.page, after: after.page }) }),
+    store.captureArtifact({ id: `${proposal.proposalId}:action`, type: "ACTION_LOG", contentType: "application/json", content: JSON.stringify({ proposal: auditProposal, status: "ACCEPTED", before: before.page, after: after.page }) }),
     store.captureArtifact({ id: `${proposal.proposalId}:after:dom`, type: "DOM_SNAPSHOT", contentType: "text/html", content: after.dom }),
     store.captureArtifact({ id: `${proposal.proposalId}:after:aria`, type: "ARIA_SNAPSHOT", contentType: "text/plain", content: after.aria }),
   ];
