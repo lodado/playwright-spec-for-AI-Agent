@@ -1,0 +1,21 @@
+{
+  "name": "@persona-runtime/evaluator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Persona Runtime deterministic functional evaluator.",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "build": "node --check src/index.mjs",
+    "typecheck": "node --check src/index.mjs && node --check test/evaluator.test.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@persona-runtime/contracts": "workspace:*"
+  }
+}
