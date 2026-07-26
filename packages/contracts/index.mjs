@@ -7,7 +7,7 @@ export const COMPILE_RESULT_VERSION = "compile-result/0.1";
 export const DIAGNOSTIC_VERSION = "diagnostic/0.1";
 export const PROVIDER_CAPABILITIES_VERSION = "provider-capabilities/0.1";
 export const EXECUTION_PLAN_VERSION = "execution-plan/0.2";
-export const EXECUTION_AGENT_INPUT_VERSION = "execution-agent-input/0.1";
+export const EXECUTION_AGENT_INPUT_VERSION = "execution-agent-input/0.2";
 export const EXECUTION_ACTION_PROPOSAL_VERSION = "execution-action-proposal/0.1";
 export const EXECUTION_ACTION_RESULT_VERSION = "execution-action-result/0.1";
 export const EXECUTION_AGENT_OUTCOME_VERSION = "execution-agent-outcome/0.1";
@@ -291,22 +291,32 @@ function validateCapabilityPolicy(value, path, contract) {
   exact(value.secrets, "RUNTIME_INJECTED", `${path}.secrets`, contract);
 }
 
-function validateSemanticTarget(value, path) {
-  object(value, path, "QaIrDocument");
-  allowedKeys(value, ["role", "accessibleName", "text", "testId", "hints"], path, "QaIrDocument");
-  if (value.role !== undefined) string(value.role, `${path}.role`, "QaIrDocument");
-  if (value.accessibleName !== undefined) present(value.accessibleName, `${path}.accessibleName`, "QaIrDocument");
-  if (value.text !== undefined) present(value.text, `${path}.text`, "QaIrDocument");
-  if (value.testId !== undefined) string(value.testId, `${path}.testId`, "QaIrDocument");
+function validateSemanticTarget(value, path, contract = "QaIrDocument") {
+  object(value, path, contract);
+  allowedKeys(value, ["role", "accessibleName", "text", "testId", "hints"], path, contract);
+  if (value.role !== undefined) boundedString(value.role, 256, `${path}.role`, contract);
+  if (value.accessibleName !== undefined) validateSemanticMatch(value.accessibleName, `${path}.accessibleName`, contract);
+  if (value.text !== undefined) validateSemanticMatch(value.text, `${path}.text`, contract);
+  if (value.testId !== undefined) boundedString(value.testId, 1_024, `${path}.testId`, contract);
+  if (value.role === undefined && value.accessibleName === undefined && value.text === undefined && value.testId === undefined) fail(contract, path, "requires a role, accessibleName, text, or testId identity");
   if (value.hints !== undefined) {
-    array(value.hints, `${path}.hints`, "QaIrDocument");
+    array(value.hints, `${path}.hints`, contract);
     value.hints.forEach((hint, index) => {
-      object(hint, `${path}.hints[${index}]`, "QaIrDocument");
-      allowedKeys(hint, ["adapter", "data"], `${path}.hints[${index}]`, "QaIrDocument");
-      string(hint.adapter, `${path}.hints[${index}].adapter`, "QaIrDocument");
-      present(hint.data, `${path}.hints[${index}].data`, "QaIrDocument");
+      object(hint, `${path}.hints[${index}]`, contract);
+      allowedKeys(hint, ["adapter", "data"], `${path}.hints[${index}]`, contract);
+      string(hint.adapter, `${path}.hints[${index}].adapter`, contract);
+      present(hint.data, `${path}.hints[${index}].data`, contract);
+      const serialized = JSON.stringify(hint.data);
+      if (serialized === undefined || serialized.length > 4_096) fail(contract, `${path}.hints[${index}].data`, "must be bounded JSON data");
     });
   }
+}
+
+function validateSemanticMatch(value, path, contract) {
+  object(value, path, contract);
+  allowedKeys(value, ["kind", "value"], path, contract);
+  oneOf(value.kind, ["literal", "regex"], `${path}.kind`, contract);
+  boundedString(value.value, 4_096, `${path}.value`, contract);
 }
 
 function validateCompileResult(value, path) {
@@ -395,12 +405,16 @@ function validateExecutionAgentInput(value, path) {
   value.milestones.forEach((milestone, index) => {
     const milestonePath = `${path}.milestones[${index}]`;
     object(milestone, milestonePath, contract);
-    allowedKeys(milestone, ["id", "class", "status", "description", "requiredAction"], milestonePath, contract);
+    allowedKeys(milestone, ["id", "class", "status", "description", "requiredAction", "target"], milestonePath, contract);
     boundedString(milestone.id, 256, `${milestonePath}.id`, contract);
     oneOf(milestone.class, MILESTONE_CLASSES, `${milestonePath}.class`, contract);
     oneOf(milestone.status, ["PENDING", "COMPLETED", "BLOCKED"], `${milestonePath}.status`, contract);
     boundedString(milestone.description, 4_096, `${milestonePath}.description`, contract);
-    if (milestone.class === "REQUIRED_EXACT_ACTION") oneOf(milestone.requiredAction, ADAPTIVE_ACTIONS, `${milestonePath}.requiredAction`, contract);
+    if (milestone.target !== undefined) validateSemanticTarget(milestone.target, `${milestonePath}.target`, contract);
+    if (milestone.class === "REQUIRED_EXACT_ACTION") {
+      oneOf(milestone.requiredAction, ADAPTIVE_ACTIONS, `${milestonePath}.requiredAction`, contract);
+      if (milestone.target === undefined) fail(contract, `${milestonePath}.target`, "is required for REQUIRED_EXACT_ACTION");
+    }
     else if (milestone.requiredAction !== undefined) fail(contract, `${milestonePath}.requiredAction`, "is only allowed for REQUIRED_EXACT_ACTION");
   });
   const milestoneIds = value.milestones.map((milestone) => milestone.id);
@@ -1019,13 +1033,16 @@ function validateAdaptiveObservation(value, path, contract) {
   value.elements.forEach((element, index) => {
     const elementPath = `${path}.elements[${index}]`;
     object(element, elementPath, contract);
-    allowedKeys(element, ["elementId", "milestoneIds", "allowedActions"], elementPath, contract);
+    allowedKeys(element, ["elementId", "milestoneIds", "allowedActions", "role", "accessibleName", "text"], elementPath, contract);
     boundedString(element.elementId, 256, `${elementPath}.elementId`, contract);
     uniqueStringArray(element.milestoneIds, `${elementPath}.milestoneIds`, contract);
     if (element.milestoneIds.length > 64) fail(contract, `${elementPath}.milestoneIds`, "must contain at most 64 milestones");
     element.milestoneIds.forEach((id, milestoneIndex) => boundedString(id, 256, `${elementPath}.milestoneIds[${milestoneIndex}]`, contract));
     uniqueStringArray(element.allowedActions, `${elementPath}.allowedActions`, contract);
     element.allowedActions.forEach((action, actionIndex) => oneOf(action, ["click_observed_element", "hover_observed_element", "wait_for_element_state"], `${elementPath}.allowedActions[${actionIndex}]`, contract));
+    if (element.role !== undefined) boundedString(element.role, 256, `${elementPath}.role`, contract);
+    if (element.accessibleName !== undefined) boundedString(element.accessibleName, 1_024, `${elementPath}.accessibleName`, contract);
+    if (element.text !== undefined) boundedString(element.text, 1_024, `${elementPath}.text`, contract);
   });
   const elementIds = value.elements.map((element) => element.elementId);
   if (new Set(elementIds).size !== elementIds.length) fail(contract, `${path}.elements`, "element ids must be unique");

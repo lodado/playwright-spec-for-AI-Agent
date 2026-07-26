@@ -15,7 +15,7 @@ export function executionAgentInput() {
     scenarioId: "scenario-settings",
     goal: { id: "goal-settings", description: "Open the settings dialog." },
     milestones: [
-      { id: "open-settings", class: "REQUIRED_EXACT_ACTION", status: "PENDING", description: "Click the observed Settings entry.", requiredAction: "click_observed_element" },
+      { id: "open-settings", class: "REQUIRED_EXACT_ACTION", status: "PENDING", description: "Click the observed Settings entry.", requiredAction: "click_observed_element", target: { testId: "settings" } },
       { id: "dialog-visible", class: "REQUIRED_SEMANTIC_MILESTONE", status: "PENDING", description: "Observe the settings dialog." },
     ],
     currentMilestoneId: "open-settings",
