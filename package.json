@@ -10,7 +10,8 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "pack:compat": "pnpm --filter playwright-spec-for-ai-agent pack"
+    "pack:compat": "pnpm --filter playwright-spec-for-ai-agent pack",
+    "package:smoke": "node scripts/package-smoke.mjs"
   },
   "devDependencies": {
     "turbo": "2.10.7"
