@@ -3,6 +3,7 @@ import {
   FRICTION_POINT_VERSION,
   FUNCTIONAL_EVALUATION_VERSION,
   SIMULATION_VALIDITY_VERSION,
+  VARIANT_COMPARISON_REPORT_VERSION,
   ContractValidationError,
   validateBehavioralFingerprint,
   validateEvidenceManifest,
@@ -11,6 +12,7 @@ import {
   validateFunctionalEvaluation,
   validateSessionRecord,
   validateSimulationValidityReport,
+  validateVariantComparisonReport,
   stableId,
 } from "@persona-runtime/contracts";
 
@@ -679,4 +681,138 @@ function summarizeObservations(points) {
 function recommendationFor(point) {
   if (point.category === "functional") return "Inspect the failing interaction and deterministic oracle evidence before release.";
   return "Review the route, visible affordances, and repeated no-progress action evidence with a human reviewer.";
+}
+
+
+export function compareVariants({ baselineSessions = [], candidateSessions = [], baselineFingerprints, candidateFingerprints, baselineFindings = [], candidateFindings = [], orderResults = [] } = {}) {
+  const baselinePrints = baselineFingerprints ?? baselineSessions.map((item) => item.fingerprint ?? createBehavioralFingerprint({ session: item.session ?? item, events: item.events ?? [], observations: item.observations ?? [] }));
+  const candidatePrints = candidateFingerprints ?? candidateSessions.map((item) => item.fingerprint ?? createBehavioralFingerprint({ session: item.session ?? item, events: item.events ?? [], observations: item.observations ?? [] }));
+  const baselineRecords = baselineSessions.map((item) => item.session ?? item);
+  const candidateRecords = candidateSessions.map((item) => item.session ?? item);
+  const baseline = variantMetrics(baselineRecords, baselinePrints, baselineFindings);
+  const candidate = variantMetrics(candidateRecords, candidatePrints, candidateFindings);
+  const orderConsistency = orderResults.length < 2 || new Set(orderResults.map((item) => item.status ?? item)).size === 1;
+  const confidence = comparisonConfidence({ baselineRecords, candidateRecords, orderConsistency });
+  let status = comparisonStatus({ baseline, candidate, orderConsistency });
+  if (baselineRecords.length === 0 || candidateRecords.length === 0) status = "insufficient_evidence";
+  const report = {
+    schemaVersion: VARIANT_COMPARISON_REPORT_VERSION,
+    status,
+    baseline,
+    candidate,
+    metrics: candidate,
+    delta: {
+      completionDelta: candidate.completionRate - baseline.completionRate,
+      abandonmentDelta: candidate.abandonmentRate - baseline.abandonmentRate,
+      medianActionDelta: candidate.medianActionCount - baseline.medianActionCount,
+      backtrackDelta: candidate.medianBacktrackCount - baseline.medianBacktrackCount,
+      failedInteractionDelta: candidate.medianFailedInteractionCount - baseline.medianFailedInteractionCount,
+      affectedPersonaIds: affectedPersonas(baselineRecords, candidateRecords),
+      confidence,
+    },
+    findingIds: unique([...baselineFindings, ...candidateFindings].map((finding) => finding.id).filter(Boolean)),
+    winner: status === "candidate_better" ? "candidate" : (status === "baseline_better" ? "baseline" : "none"),
+  };
+  return validateVariantComparisonReport(report);
+}
+
+export function evaluateReleaseGate({ findings = [], comparisonReport, validityReport, policy } = {}) {
+  const failRules = policy?.failOn ?? [
+    { category: "functional", severity: "critical" },
+    { category: "functional", severity: "high" },
+    { category: "behavioral", severity: "critical", minimumMaturity: "reproduced_synthetic_finding", minimumConfidence: "high" },
+  ];
+  const warnRules = policy?.warnOn ?? [{ category: "behavioral", severity: "high" }, { category: "behavioral", severity: "medium" }, { category: "functional", severity: "medium" }];
+  const blockingFindings = findings.filter((finding) => failRules.some((rule) => findingMatchesRule(finding, rule, validityReport)));
+  const warningFindings = findings.filter((finding) => !blockingFindings.includes(finding) && warnRules.some((rule) => findingMatchesRule(finding, rule, validityReport)));
+  let conclusion = blockingFindings.length > 0 ? "failure" : (warningFindings.length > 0 ? "neutral" : "success");
+  if (comparisonReport?.status === "unstable" || validityReport?.recommendedUse === "human_validation_required") conclusion = "action_required";
+  return Object.freeze({
+    conclusion,
+    blockingFindingIds: blockingFindings.map((finding) => finding.id),
+    warningFindingIds: warningFindings.map((finding) => finding.id),
+    infrastructureFailure: false,
+    reasons: [
+      ...(comparisonReport?.status === "unstable" ? ["variant comparison is unstable"] : []),
+      ...(validityReport?.calibration?.level === "uncalibrated" ? ["synthetic results are uncalibrated"] : []),
+      ...(blockingFindings.length > 0 ? ["blocking release gate finding matched"] : []),
+    ],
+  });
+}
+
+function variantMetrics(sessions, fingerprints, findings) {
+  const total = Math.max(sessions.length, 1);
+  return {
+    completionRate: ratio(sessions.filter((session) => session.status === "success").length, total),
+    partialRate: ratio(sessions.filter((session) => session.status === "partial").length, total),
+    failureRate: ratio(sessions.filter((session) => ["failure", "runtime_error", "manual_review"].includes(session.status)).length, total),
+    abandonmentRate: ratio(sessions.filter((session) => session.status === "abandoned").length, total),
+    medianActionCount: median(fingerprints.map((item) => item.actionCount)),
+    medianBacktrackCount: median(fingerprints.map((item) => Math.round(item.backtrackRate * item.actionCount))),
+    medianFailedInteractionCount: median(fingerprints.map((item) => Math.round(item.failedInteractionRate * item.actionCount))),
+    routeEntropy: average(fingerprints.map((item) => item.routeEntropy)),
+    recurringFindingCount: findings.filter((finding) => finding.maturity === "reproduced_synthetic_finding").length,
+  };
+}
+
+function comparisonStatus({ baseline, candidate, orderConsistency }) {
+  if (!orderConsistency) return "unstable";
+  const completionDelta = candidate.completionRate - baseline.completionRate;
+  const abandonmentDelta = candidate.abandonmentRate - baseline.abandonmentRate;
+  const actionDelta = candidate.medianActionCount - baseline.medianActionCount;
+  const findingDelta = candidate.recurringFindingCount - baseline.recurringFindingCount;
+  if (completionDelta <= -0.2 || abandonmentDelta >= 0.2 || actionDelta >= 3 || findingDelta > 0) return "baseline_better";
+  if (completionDelta >= 0.2 || abandonmentDelta <= -0.2 || actionDelta <= -3 || findingDelta < 0) return "candidate_better";
+  return "no_clear_difference";
+}
+
+function comparisonConfidence({ baselineRecords, candidateRecords, orderConsistency }) {
+  const enoughPairs = Math.min(baselineRecords.length, candidateRecords.length) >= 3;
+  return {
+    evidenceConfidence: enoughPairs ? 0.8 : 0.5,
+    recurrenceConfidence: enoughPairs ? 0.7 : 0.3,
+    seedStability: "not_available",
+    modelAgreement: "not_available",
+    calibrationConfidence: "not_available",
+    orderConsistency: orderConsistency ? 1 : 0,
+    overall: enoughPairs && orderConsistency ? "medium" : "low",
+    limitations: [
+      ...(!enoughPairs ? ["Small variant sample; do not claim statistical significance."] : []),
+      "Relative synthetic comparison only; no absolute conversion prediction.",
+      ...(!orderConsistency ? ["Input/execution order produced inconsistent comparison."] : []),
+    ],
+  };
+}
+
+function affectedPersonas(baselineRecords, candidateRecords) {
+  const baselineByPersona = new Map(baselineRecords.map((session) => [session.personaId, session.status]));
+  return unique(candidateRecords.filter((session) => baselineByPersona.get(session.personaId) !== session.status).map((session) => session.personaId).filter(Boolean));
+}
+
+function findingMatchesRule(finding, rule, validityReport) {
+  if (rule.category && finding.category !== rule.category) return false;
+  if (rule.severity && severityRank(finding.severity) < severityRank(rule.severity)) return false;
+  if (rule.minimumMaturity && maturityRank(finding.maturity) < maturityRank(rule.minimumMaturity)) return false;
+  if (rule.minimumConfidence && confidenceRank(finding.confidence?.overall) < confidenceRank(rule.minimumConfidence)) return false;
+  if (validityReport?.calibration?.level === "uncalibrated" && finding.maturity === "exploratory_signal") return false;
+  return true;
+}
+
+function severityRank(value) {
+  return { low: 1, medium: 2, high: 3, critical: 4 }[value] ?? 0;
+}
+
+function maturityRank(value) {
+  return { exploratory_signal: 1, reproduced_synthetic_finding: 2, calibrated_behavioral_risk: 3, human_validated_finding: 4 }[value] ?? 0;
+}
+
+function confidenceRank(value) {
+  return { low: 1, medium: 2, high: 3 }[value] ?? 0;
+}
+
+function median(values) {
+  const sorted = values.filter((value) => Number.isFinite(value)).sort((left, right) => left - right);
+  if (sorted.length === 0) return 0;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
