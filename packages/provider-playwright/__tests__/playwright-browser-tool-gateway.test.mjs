@@ -102,6 +102,8 @@ function fakeBrowser({
         });
       }
     }),
+    hover: vi.fn(async () => calls.push(["hover", "settings"])),
+    waitForElementState: vi.fn(async (state) => calls.push(["wait", state])),
   };
   candidate.elementHandle = vi.fn(async () => candidate);
   const candidateList = {
@@ -143,6 +145,10 @@ function fakeBrowser({
     keyboard: {
       press: vi.fn(async (key) => calls.push(["press", key])),
     },
+    mouse: {
+      wheel: vi.fn(async (deltaX, deltaY) => calls.push(["scroll", deltaX, deltaY])),
+    },
+    waitForFunction: vi.fn(async () => calls.push(["wait-for-function"])),
   };
   const context = {
     route: vi.fn(async (_pattern, handler) => {
@@ -240,6 +246,7 @@ describe("Playwright browser tool gateway", () => {
       expect.arrayContaining(["get_current_url", "observe_dom", "observe_aria", "click_observed_element", "press_key"]),
     );
     expect(gateway.capabilities.actions).toContain("navigate");
+    expect(gateway.capabilities.actions).toEqual(expect.arrayContaining(["hover_observed_element", "scroll_view", "wait_for_element_state"]));
     expect(agentInput.capabilityLease.actions).not.toContain("observe_screenshot");
 
     const execution = await gateway.execute({ proposal: proposal(agentInput, "get_current_url"), tokensUsed: 11 });
@@ -408,6 +415,101 @@ describe("Playwright browser tool gateway", () => {
     expect(await artifactText(gateway, execution.bundle)).toEqual(expect.stringMatching(/before|action|after/i));
     expect(fixture.screenshots).toEqual([]);
 
+    await gateway.close();
+  });
+
+  it("hovers a safe observed element and invalidates the observation", async () => {
+    const fixture = fakeBrowser();
+    const input = executionAgentInput();
+    input.milestones[0].requiredAction = "hover_observed_element";
+    input.capabilityLease.actions.push("hover_observed_element");
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
+    const observed = await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "observe_dom"),
+      tokensUsed: 1,
+    });
+    const element = observed.observation.elements[0];
+
+    const execution = await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "hover_observed_element", {
+        observationId: observed.observation.observationId,
+        elementId: element.elementId,
+      }),
+      tokensUsed: 1,
+    });
+
+    expect(element.allowedActions).toContain("hover_observed_element");
+    expect(execution.result.page.domGeneration).toBe(2);
+    expect(fixture.calls).toContainEqual(["hover", "settings"]);
+    expect(gateway.agentInput().recentObservations).toEqual([]);
+    await gateway.close();
+  });
+
+  it("scrolls by bounded deltas and invalidates prior DOM state", async () => {
+    const fixture = fakeBrowser();
+    const input = executionAgentInput();
+    input.capabilityLease.actions.push("scroll_view");
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
+
+    const execution = await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "scroll_view", { deltaX: 0, deltaY: 640 }),
+      tokensUsed: 1,
+    });
+
+    expect(execution.result.page.domGeneration).toBe(2);
+    expect(fixture.calls).toContainEqual(["scroll", 0, 640]);
+    await gateway.close();
+  });
+
+  it("waits for a bounded observed element state", async () => {
+    const fixture = fakeBrowser();
+    const input = executionAgentInput();
+    input.capabilityLease.actions.push("wait_for_element_state");
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
+    const observed = await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "observe_dom"),
+      tokensUsed: 1,
+    });
+    const element = observed.observation.elements[0];
+
+    const execution = await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "wait_for_element_state", {
+        observationId: observed.observation.observationId,
+        elementId: element.elementId,
+        state: "visible",
+        timeoutMs: 1_000,
+      }),
+      tokensUsed: 1,
+    });
+
+    expect(element.allowedActions).toContain("wait_for_element_state");
+    expect(fixture.calls).toContainEqual(["wait", "visible"]);
+    expect(execution.result.page.domGeneration).toBe(2);
+    await gateway.close();
+  });
+
+  it("waits for an observed element to become absent", async () => {
+    const fixture = fakeBrowser();
+    const input = executionAgentInput();
+    input.capabilityLease.actions.push("wait_for_element_state");
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
+    const observed = await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "observe_dom"),
+      tokensUsed: 1,
+    });
+    const element = observed.observation.elements[0];
+
+    await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "wait_for_element_state", {
+        observationId: observed.observation.observationId,
+        elementId: element.elementId,
+        state: "absent",
+        timeoutMs: 1_000,
+      }),
+      tokensUsed: 1,
+    });
+
+    expect(fixture.calls).toContainEqual(["wait-for-function"]);
     await gateway.close();
   });
 

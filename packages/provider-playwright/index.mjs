@@ -34,7 +34,7 @@ const GATEWAY_ARIA_LIMIT = 512 * 1024;
 const GATEWAY_MAX_ELEMENTS = 128;
 const GATEWAY_ELEMENT_TEXT_LIMIT = 1024;
 const GATEWAY_CLEANUP_TIMEOUT_MS = 1_000;
-const GATEWAY_ACTIONS = Object.freeze(["get_current_url", "observe_dom", "observe_aria", "navigate", "click_observed_element", "press_key"]);
+const GATEWAY_ACTIONS = Object.freeze(["get_current_url", "observe_dom", "observe_aria", "navigate", "click_observed_element", "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state"]);
 
 export function playwrightExecutionCapabilities() {
   return providerCapabilities({
@@ -163,6 +163,31 @@ export async function openPlaywrightBrowserToolGateway({
           await runGatewayBrowserOperation({ deadline, clock }, () => assertSafeClickTarget(locator));
           interactionStarted = true;
           await runGatewayBrowserOperation({ deadline, clock }, (timeout) => locator.click({ timeout: Math.min(10_000, timeout) }));
+          invalidateGatewayObservations();
+        } else if (authorization.proposal.action === "hover_observed_element") {
+          const locator = handles.get(`${authorization.proposal.parameters.observationId}\0${authorization.proposal.parameters.elementId}`);
+          if (!locator) throw new Error("observed element handle is unavailable");
+          await runGatewayBrowserOperation({ deadline, clock }, () => assertSafeClickTarget(locator));
+          interactionStarted = true;
+          await runGatewayBrowserOperation({ deadline, clock }, (timeout) => locator.hover({ timeout: Math.min(10_000, timeout) }));
+          invalidateGatewayObservations();
+        } else if (authorization.proposal.action === "scroll_view") {
+          interactionStarted = true;
+          await runGatewayBrowserOperation({ deadline, clock }, () => page.mouse.wheel(authorization.proposal.parameters.deltaX, authorization.proposal.parameters.deltaY));
+          invalidateGatewayObservations();
+        } else if (authorization.proposal.action === "wait_for_element_state") {
+          const locator = handles.get(`${authorization.proposal.parameters.observationId}\0${authorization.proposal.parameters.elementId}`);
+          if (!locator) throw new Error("observed element handle is unavailable");
+          const timeout = Math.min(authorization.proposal.parameters.timeoutMs, remainingBudget.timeMs);
+          if (["visible", "hidden"].includes(authorization.proposal.parameters.state)) {
+            await runGatewayBrowserOperation({ deadline, clock }, (remainingTime) => locator.waitForElementState(authorization.proposal.parameters.state, { timeout: Math.min(timeout, remainingTime) }));
+          } else {
+            await runGatewayBrowserOperation({ deadline, clock }, (remainingTime) => page.waitForFunction(
+              ({ element, expectedPresent }) => element.isConnected === expectedPresent,
+              { element: locator, expectedPresent: authorization.proposal.parameters.state === "present" },
+              { timeout: Math.min(timeout, remainingTime) },
+            ));
+          }
           invalidateGatewayObservations();
         } else if (authorization.proposal.action === "press_key") {
           interactionStarted = true;
@@ -332,9 +357,11 @@ async function observeGatewayElements({ page, input, currentPage, sequence, secr
     const safe = !metadata.protected && !protectedValue && !metadata.anchor && !metadata.form && !metadata.editable && !metadata.disabled;
     const elementId = `element-${canonicalHash({ observationId, index }).slice("sha256:".length, "sha256:".length + 16)}`;
     const milestoneIds = metadata.protected || protectedValue ? [] : input.milestones.filter((milestone) => milestone.target && gatewayTargetMatches(milestone.target, metadata)).map((milestone) => milestone.id);
-    const allowedActions = safe && input.capabilityLease.actions.includes("click_observed_element")
-      ? ["click_observed_element"]
-      : [];
+    const allowedActions = [
+      ...(input.capabilityLease.actions.includes("wait_for_element_state") ? ["wait_for_element_state"] : []),
+      ...(safe && input.capabilityLease.actions.includes("click_observed_element") ? ["click_observed_element"] : []),
+      ...(safe && input.capabilityLease.actions.includes("hover_observed_element") ? ["hover_observed_element"] : []),
+    ];
     elements.push({
       elementId,
       milestoneIds,
