@@ -20,21 +20,21 @@
 
 <br />
 
-[Persona Runtime](#persona-runtime) · [End-to-end example](#end-to-end-example) · [Quick start](#quick-start) · [Commands](#commands) · [Legacy package](./packages/playwright-spec-for-ai-agent/README.md) · [Docs](./docs/README.md)
+[Persona Runtime](#persona-runtime) · [End-to-end example](#end-to-end-example) · [Quick start](#quick-start) · [Commands](#commands) · [Legacy package](./apps/playwright-spec-for-ai-agent/README.md) · [Docs](./docs/README.md)
 
 </div>
 
 ---
 
 > [!NOTE]
-> This repository is now a workspace. Use **Persona Runtime** when you want sealed browser evidence, persona policies, validity reports, and baseline/candidate comparison. Use [`playwright-spec-for-ai-agent`](./packages/playwright-spec-for-ai-agent/README.md) when your existing Playwright specs should drive the original Hermes live staging QA flow.
+> This repository is now a workspace. Use **Persona Runtime** when you want sealed browser evidence, persona policies, validity reports, and baseline/candidate comparison. Use [`playwright-spec-for-ai-agent`](./apps/playwright-spec-for-ai-agent/README.md) when your existing Playwright specs should drive the original Hermes live staging QA flow.
 
 The workspace contains two related systems:
 
 | System | Status | What it does |
 | --- | --- | --- |
 | [`persona-runtime`](./apps/persona-runtime-cli/README.md) | private workspace CLI | Runs behavior-policy browser sessions, seals evidence, evaluates outcomes, and writes JSON + static HTML reports. |
-| [`playwright-spec-for-ai-agent`](./packages/playwright-spec-for-ai-agent/README.md) | backwards-compatible npm package | Preserves the original `spec → abstract-ai → judge → review → slack` Hermes-based live QA flow. |
+| [`playwright-spec-for-ai-agent`](./apps/playwright-spec-for-ai-agent/README.md) | backwards-compatible npm package | Preserves the original `spec → abstract-ai → judge → review → slack` Hermes-based live QA flow. |
 
 ```text
 StudySpec → persona browser sessions → sealed evidence → browserless evaluation → JSON + HTML report
@@ -290,7 +290,7 @@ pnpm persona-runtime import-playwright --spec-dir=path/to/specs --base-url=https
 | [`packages/reporter-html`](./packages/reporter-html/README.md) | Static HTML report renderer. |
 | [`packages/reporter-github`](./packages/reporter-github/README.md) | GitHub Check/comment formatter primitives. |
 | [`packages/playwright-spec-adapter`](./packages/playwright-spec-adapter/README.md) | Legacy Playwright spec parser and StudySpec compiler. |
-| [`packages/playwright-spec-for-ai-agent`](./packages/playwright-spec-for-ai-agent/README.md) | Backwards-compatible npm package and Hermes/QA Native commands. |
+| [`apps/playwright-spec-for-ai-agent`](./apps/playwright-spec-for-ai-agent/README.md) | Backwards-compatible npm package and Hermes/QA Native commands. |
 
 ## Safety
 
@@ -322,7 +322,7 @@ npx playwright-spec-for-ai-agent slack --page=pricing
 npx playwright-spec-for-ai-agent nightly --page=pricing
 ```
 
-Start at [`packages/playwright-spec-for-ai-agent`](./packages/playwright-spec-for-ai-agent/README.md) when Playwright specs are your QA intent source and Hermes should judge a staging page.
+Start at [`apps/playwright-spec-for-ai-agent`](./apps/playwright-spec-for-ai-agent/README.md) when Playwright specs are your QA intent source and Hermes should judge a staging page.
 
 ## Validate the workspace
 

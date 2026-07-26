@@ -16,7 +16,7 @@
 
 <br />
 
-[Quick start](#quick-start) · [API](#api) · [Policy mapping](#outputs) · [Safety](#safety) · [Legacy package](../playwright-spec-for-ai-agent/README.md)
+[Quick start](#quick-start) · [API](#api) · [Policy mapping](#outputs) · [Safety](#safety) · [Legacy package](../../apps/playwright-spec-for-ai-agent/README.md)
 
 </div>
 

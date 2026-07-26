@@ -25,7 +25,7 @@
 ---
 
 > [!NOTE]
-> `persona-runtime` is a private workspace CLI. It is separate from the published [`playwright-spec-for-ai-agent`](../../packages/playwright-spec-for-ai-agent/README.md) package, which keeps the original Hermes live staging QA commands.
+> `persona-runtime` is a private workspace CLI. It is separate from the published [`playwright-spec-for-ai-agent`](../../apps/playwright-spec-for-ai-agent/README.md) package, which keeps the original Hermes live staging QA commands.
 
 `persona-runtime` runs real Playwright browser sessions, stores sealed evidence, closes the browser, then evaluates functional and behavioral outcomes from saved evidence.
 
