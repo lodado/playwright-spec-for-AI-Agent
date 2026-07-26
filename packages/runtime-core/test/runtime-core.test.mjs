@@ -11,6 +11,7 @@ import {
   removeFileSessionStore,
   runSession,
   runStudy,
+  toSessionRecord,
 } from "../src/index.mjs";
 
 const study = Object.freeze({
@@ -58,6 +59,7 @@ test("runs one observation per action and seals evidence after closing the drive
   assert.equal(result.session.evidenceManifestId, "manifest-session-1");
   assert.equal(result.manifest.schemaVersion, "evidence-manifest/0.2");
   assert.equal(result.manifest.sealed, true);
+  assert.equal(toSessionRecord(result.session).schemaVersion, "session/0.1");
   assert.equal(result.events[0].evidenceIds.length > 0, true);
   assert.deepEqual(result.events.map((event) => event.observationId), ["observation-session-1-0"]);
   assert.equal(result.observations.length, 2);
@@ -185,6 +187,36 @@ test("runStudy schedules the task/persona/seed matrix with bounded concurrency",
   assert.equal(result.sessionCount, 8);
   assert.equal(maxActive <= 2, true);
   assert.equal(result.results.every((item) => item.session.phase === "EVIDENCE_SEALED"), true);
+});
+
+test("counterbalances paired variant order and sends each variant URL to the driver", async () => {
+  const starts = [];
+  const comparisonStudy = {
+    ...study,
+    personas: [{ id: "p1" }, { id: "p2" }],
+    comparison: {
+      baseline: { id: "baseline", baseUrl: "https://baseline.test" },
+      candidate: { id: "candidate", baseUrl: "https://candidate.test" },
+      assignment: "paired",
+      counterbalanceOrder: true,
+      metrics: ["task_completion"],
+    },
+  };
+  await runStudy({
+    study: comparisonStudy,
+    concurrency: 1,
+    driverFactory: () => ({
+      async start(input) { starts.push([input.persona.id, input.variant, input.environment.baseUrl]); return {}; },
+      async observe() { return fakeDriver().observe(); },
+      async execute() { return { status: "success" }; },
+      async close() { return { evidence: [] }; },
+    }),
+    policyFactory: () => ({ decide: () => ({ type: "finish", reasonCode: "done" }) }),
+    oracle: { evaluate: () => ({ definitiveSuccess: true }) },
+    storeFactory: () => memoryStore(),
+  });
+  assert.deepEqual(starts.map(item => item[1]), ["baseline", "candidate", "candidate", "baseline"]);
+  assert.deepEqual(starts.map(item => item[2]), ["https://baseline.test", "https://candidate.test", "https://candidate.test", "https://baseline.test"]);
 });
 
 test("aborted signal stops scheduling new sessions", async () => {

@@ -55,6 +55,7 @@ type ObservedElement = {
   enabled?: boolean;
   inViewport?: boolean;
   occluded?: boolean;
+  viewportPosition?: { inViewport?: boolean; occluded?: boolean };
   secondaryNavigation?: boolean;
   primaryCta?: boolean;
   heading?: boolean;
@@ -221,8 +222,8 @@ export function filterPerceivedElements(
   const inspectBelowFold = Number(sampleDistribution(attention.inspectBelowFoldProbability, random)) >= random();
   const inspectSecondary = Number(sampleDistribution(attention.inspectSecondaryNavigationProbability, random)) >= random();
   return elements
-    .filter(element => element.visible && !element.occluded)
-    .filter(element => !attention.viewportOnly || element.inViewport || inspectBelowFold)
+    .filter(element => element.visible && !(element.occluded ?? element.viewportPosition?.occluded))
+    .filter(element => !attention.viewportOnly || (element.inViewport ?? element.viewportPosition?.inViewport) || inspectBelowFold)
     .filter(element => !element.secondaryNavigation || inspectSecondary)
     .map(element => ({
       element,

@@ -3,7 +3,9 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   EVIDENCE_MANIFEST_VERSION,
+  SESSION_VERSION,
   validateEvidenceManifest,
+  validateSessionRecord,
 } from "@persona-runtime/contracts";
 
 export const RUNTIME_SESSION_SCHEMA_VERSION = "runtime-session/0.1";
@@ -129,15 +131,40 @@ export function transitionSession(session, phase, details = {}) {
   });
 }
 
+export function toSessionRecord(session) {
+  const terminal = TERMINAL_PHASES.includes(session.phase) || ["EVIDENCE_SEALED", "EVALUATED", "REPORTED"].includes(session.phase);
+  return validateSessionRecord({
+    schemaVersion: SESSION_VERSION,
+    runId: session.runId,
+    sessionId: session.sessionId,
+    studyId: session.studyId,
+    taskId: session.taskId,
+    personaId: session.personaId,
+    seed: session.seed,
+    ...(session.variant ? { variant: session.variant } : {}),
+    ...(session.model ? { model: session.model } : {}),
+    status: session.status,
+    startedAt: session.startedAt,
+    ...(terminal && session.completedAt ? { completedAt: session.completedAt } : {}),
+    sampledPolicy: session.sampledPolicy,
+    ...(session.terminalReason ? { terminalReason: session.terminalReason } : {}),
+    eventIds: session.eventIds,
+    ...(session.evidenceManifestId ? { evidenceManifestId: session.evidenceManifestId } : {}),
+  });
+}
+
 export function buildSessionMatrix({ study, runId = `run-${hashJson({ study: study?.study?.id ?? "study" }).slice(0, 12)}` } = {}) {
   validateStudyShape(study);
   const seeds = Array.isArray(study.runtime?.seeds) && study.runtime.seeds.length > 0 ? study.runtime.seeds : [1];
   const variants = study.comparison ? [study.comparison.baseline?.id ?? "baseline", study.comparison.candidate?.id ?? "candidate"] : [undefined];
   const rows = [];
   for (const task of study.tasks) {
-    for (const persona of study.personas) {
-      for (const seed of seeds) {
-        for (const variant of variants) {
+    for (const [personaIndex, persona] of study.personas.entries()) {
+      for (const [seedIndex, seed] of seeds.entries()) {
+        const orderedVariants = study.comparison?.counterbalanceOrder && (personaIndex + seedIndex) % 2 === 1
+          ? [...variants].reverse()
+          : variants;
+        for (const variant of orderedVariants) {
           rows.push({
             runId,
             study,
@@ -220,7 +247,7 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
       sessionId,
       signal,
       environment: {
-        ...study.environment,
+        ...environmentFor(study, variant),
         startPath: task.startPath ?? study.environment?.startPath,
       },
       safetyPolicy: task.safetyPolicy,
@@ -496,6 +523,17 @@ function validateStudyShape(study) {
   if (!isRecord(study) || !isRecord(study.study) || typeof study.study.id !== "string" || !Array.isArray(study.tasks) || !Array.isArray(study.personas)) {
     throw new RuntimeCoreError(RUNTIME_ERROR_CODES.SPEC_INVALID, "study must include study.id, tasks, and personas");
   }
+}
+
+function environmentFor(study, variant) {
+  if (!study.comparison || !variant) return study.environment;
+  const selected = [study.comparison.baseline, study.comparison.candidate].find(item => item?.id === variant);
+  if (!selected?.baseUrl) return study.environment;
+  return {
+    ...study.environment,
+    baseUrl: selected.baseUrl,
+    allowedOrigins: [new URL(selected.baseUrl).origin],
+  };
 }
 
 function validateTaskShape(task) {
