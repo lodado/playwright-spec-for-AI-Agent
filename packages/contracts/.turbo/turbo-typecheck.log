@@ -1,0 +1,4 @@
+
+> @persona-runtime/contracts@0.0.0 typecheck /Users/chungheon/orca/workspaces/playwright-spec-for-AI-Agent/main-2/packages/contracts
+> node --check index.mjs
+
