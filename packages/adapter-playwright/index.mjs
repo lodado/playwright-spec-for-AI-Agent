@@ -117,10 +117,10 @@ function scenarioFromLegacyTest(legacy, test, index, block, source, sourcePath, 
 function stepsFromLegacy(legacy, test, discriminator, expectations, interactions) {
   const steps = [];
   if (legacy.page) {
-    steps.push({ id: stableId("step-navigate", legacy.scenarioId, test.checkId, discriminator), kind: "NAVIGATE", target: { type: "PATH", value: legacy.page } });
+    steps.push({ id: stableId("step-navigate", legacy.scenarioId, test.checkId, discriminator), kind: "NAVIGATE", milestoneClass: "REQUIRED_SEMANTIC_MILESTONE", target: { type: "PATH", value: legacy.page } });
   }
   interactions.forEach((locator, index) => {
-    steps.push({ id: stableId("step-interact", legacy.scenarioId, test.checkId, discriminator, index), kind: "INTERACT", action: "CLICK", target: semanticTargetFromLocator(locator) });
+    steps.push({ id: stableId("step-interact", legacy.scenarioId, test.checkId, discriminator, index), kind: "INTERACT", milestoneClass: "REQUIRED_EXACT_ACTION", action: "CLICK", target: semanticTargetFromLocator(locator) });
   });
   if (expectations.length > 0) {
     steps.push({ id: stableId("step-observe", legacy.scenarioId, test.checkId, discriminator), kind: "OBSERVE", requests: [{ type: "ELEMENT_OBSERVATION" }, { type: "VISIBLE_TEXT" }] });

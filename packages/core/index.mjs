@@ -86,6 +86,7 @@ function nodesForScenario(suite, scenario) {
     scenarioId: scenario.id,
     stepId: step.id ?? String(index),
     kind: step.kind,
+    ...((step.kind === "NAVIGATE" || step.kind === "INTERACT") ? { milestoneClass: step.milestoneClass } : {}),
     action: step.kind === "INTERACT" ? step.action : REQUIRED_ACTIONS[step.kind],
     evidence: evidenceRequests(step),
     policy: { ...scenario.policy },

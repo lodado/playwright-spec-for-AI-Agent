@@ -56,7 +56,7 @@ function qaIr() {
             title: "Dashboard loads",
             preconditions: [],
             steps: [
-              { id: "navigate", kind: "NAVIGATE", target: { type: "PATH", value: "/dashboard" } },
+              { id: "navigate", kind: "NAVIGATE", milestoneClass: "REQUIRED_SEMANTIC_MILESTONE", target: { type: "PATH", value: "/dashboard" } },
               { id: "observe", kind: "OBSERVE", requests: [{ type: "VISIBLE_TEXT" }] },
               { id: "checkpoint", kind: "CHECKPOINT", checkpointId: "loaded" },
             ],
@@ -192,6 +192,16 @@ describe("documented runtime contracts", () => {
     const value = qaIr();
     value.suites[0].scenarios[0].steps[1].id = value.suites[0].scenarios[0].steps[0].id;
     expect(() => validateContract("QaIrDocument", value)).toThrow(/step ids must be unique/);
+  });
+
+  it("requires a valid milestone class on executable QA steps", () => {
+    const missing = qaIr();
+    delete missing.suites[0].scenarios[0].steps[0].milestoneClass;
+    expect(() => validateContract("QaIrDocument", missing)).toThrow(/milestoneClass/);
+
+    const invalid = qaIr();
+    invalid.suites[0].scenarios[0].steps[0].milestoneClass = "OPTIONAL_EXACT_ACTION";
+    expect(() => validateContract("QaIrDocument", invalid)).toThrow(/REQUIRED_EXACT_ACTION/);
   });
 
   it("validates documented core shapes and exact versions", () => {

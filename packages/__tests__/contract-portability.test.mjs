@@ -48,7 +48,7 @@ function portableQaIr() {
         title: "Scenario",
         preconditions: [],
         steps: [
-          { id: "navigate", kind: "NAVIGATE", target: { type: "PATH", value: "/dashboard" } },
+          { id: "navigate", kind: "NAVIGATE", milestoneClass: "REQUIRED_SEMANTIC_MILESTONE", target: { type: "PATH", value: "/dashboard" } },
           { id: "observe", kind: "OBSERVE", requests: [{ type: "VISIBLE_TEXT" }] },
           { id: "checkpoint", kind: "CHECKPOINT", checkpointId: "loaded" },
         ],

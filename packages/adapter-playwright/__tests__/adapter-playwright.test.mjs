@@ -139,10 +139,11 @@ describe("compilePlaywrightSpec", () => {
     expect(result.ok).toBe(true);
     expect(result.diagnostics).toEqual([]);
     expect(result.qaIr.suites[0].scenarios[0].steps.map(step => step.kind)).toEqual(["NAVIGATE", "INTERACT", "INTERACT", "INTERACT", "OBSERVE", "CHECKPOINT"]);
+    expect(result.qaIr.suites[0].scenarios[0].steps[0].milestoneClass).toBe("REQUIRED_SEMANTIC_MILESTONE");
     expect(result.qaIr.suites[0].scenarios[0].steps.filter(step => step.kind === "INTERACT")).toMatchObject([
-      { action: "CLICK", target: { testId: "menu" } },
-      { action: "CLICK", target: { text: { kind: "literal", value: "Settings" } } },
-      { action: "CLICK", target: { role: "button", accessibleName: { kind: "literal", value: "Open" } } },
+      { milestoneClass: "REQUIRED_EXACT_ACTION", action: "CLICK", target: { testId: "menu" } },
+      { milestoneClass: "REQUIRED_EXACT_ACTION", action: "CLICK", target: { text: { kind: "literal", value: "Settings" } } },
+      { milestoneClass: "REQUIRED_EXACT_ACTION", action: "CLICK", target: { role: "button", accessibleName: { kind: "literal", value: "Open" } } },
     ]);
   });
 

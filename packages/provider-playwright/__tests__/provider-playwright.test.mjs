@@ -33,7 +33,7 @@ function qaIr(target = "/dashboard") {
         title: "Scenario",
         preconditions: [],
         steps: [
-          { id: "navigate", kind: "NAVIGATE", target: { type: "PATH", value: target } },
+          { id: "navigate", kind: "NAVIGATE", milestoneClass: "REQUIRED_SEMANTIC_MILESTONE", target: { type: "PATH", value: target } },
           { id: "observe", kind: "OBSERVE", requests: [{ type: "VISIBLE_TEXT" }, { type: "DOM_SNAPSHOT" }, { type: "ELEMENT_OBSERVATION" }] },
           { id: "checkpoint", kind: "CHECKPOINT", checkpointId: "loaded" },
         ],
@@ -51,6 +51,7 @@ function clickableQaIr(action = "CLICK") {
   input.suites[0].scenarios[0].steps.splice(1, 0, {
     id: "click",
     kind: "INTERACT",
+    milestoneClass: "REQUIRED_EXACT_ACTION",
     action,
     target: { testId: "open-menu" },
     ...(action === "CLICK" ? {} : { value: "unsafe" }),

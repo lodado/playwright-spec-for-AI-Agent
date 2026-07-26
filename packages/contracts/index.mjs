@@ -20,6 +20,7 @@ export const REPAIR_RECOMMENDATION_VERSION = "repair-recommendation/0.1";
 
 export const VERDICTS = Object.freeze(["PASS", "FAIL", "SKIP", "MANUAL_REVIEW"]);
 export const EXPECTATION_STATUSES = Object.freeze(["MATCHED", "CONTRADICTED", "NOT_OBSERVED", "AMBIGUOUS", "NOT_APPLICABLE"]);
+export const MILESTONE_CLASSES = Object.freeze(["REQUIRED_EXACT_ACTION", "REQUIRED_SEMANTIC_MILESTONE", "OPTIONAL_HINT"]);
 export const RUNTIME_ERROR_CODES = Object.freeze([
   "BROWSER_START_FAILED",
   "AUTHENTICATION_FAILED",
@@ -218,13 +219,15 @@ function validateQaStep(value, path) {
   string(value.id, `${path}.id`, "QaIrDocument");
   oneOf(value.kind, ["NAVIGATE", "INTERACT", "OBSERVE", "CHECKPOINT"], `${path}.kind`, "QaIrDocument");
   if (value.kind === "NAVIGATE") {
-    allowedKeys(value, ["id", "kind", "target"], path, "QaIrDocument");
+    allowedKeys(value, ["id", "kind", "milestoneClass", "target"], path, "QaIrDocument");
+    oneOf(value.milestoneClass, MILESTONE_CLASSES, `${path}.milestoneClass`, "QaIrDocument");
     object(value.target, `${path}.target`, "QaIrDocument");
     allowedKeys(value.target, ["type", "value"], `${path}.target`, "QaIrDocument");
     oneOf(value.target.type, ["PATH", "URL"], `${path}.target.type`, "QaIrDocument");
     string(value.target.value, `${path}.target.value`, "QaIrDocument");
   } else if (value.kind === "INTERACT") {
-    allowedKeys(value, ["id", "kind", "action", "target", "value"], path, "QaIrDocument");
+    allowedKeys(value, ["id", "kind", "milestoneClass", "action", "target", "value"], path, "QaIrDocument");
+    oneOf(value.milestoneClass, MILESTONE_CLASSES, `${path}.milestoneClass`, "QaIrDocument");
     oneOf(value.action, ["CLICK", "TYPE", "UPLOAD", "SELECT", "PRESS"], `${path}.action`, "QaIrDocument");
     validateSemanticTarget(value.target, `${path}.target`);
   } else if (value.kind === "OBSERVE") {
@@ -312,7 +315,12 @@ function validateExecutionPlan(value, path) {
   string(value.planId, `${path}.planId`, "ExecutionPlan");
   string(value.qaIrId, `${path}.qaIrId`, "ExecutionPlan");
   array(value.nodes, `${path}.nodes`, "ExecutionPlan");
-  value.nodes.forEach((node, index) => { object(node, `${path}.nodes[${index}]`, "ExecutionPlan"); string(node.nodeId, `${path}.nodes[${index}].nodeId`, "ExecutionPlan"); });
+  value.nodes.forEach((node, index) => {
+    const nodePath = `${path}.nodes[${index}]`;
+    object(node, nodePath, "ExecutionPlan");
+    string(node.nodeId, `${nodePath}.nodeId`, "ExecutionPlan");
+    if (node.kind === "NAVIGATE" || node.kind === "INTERACT") oneOf(node.milestoneClass, MILESTONE_CLASSES, `${nodePath}.milestoneClass`, "ExecutionPlan");
+  });
   array(value.edges, `${path}.edges`, "ExecutionPlan");
   value.edges.forEach((edge, index) => { object(edge, `${path}.edges[${index}]`, "ExecutionPlan"); string(edge.from, `${path}.edges[${index}].from`, "ExecutionPlan"); string(edge.to, `${path}.edges[${index}].to`, "ExecutionPlan"); });
   object(value.retryPolicy, `${path}.retryPolicy`, "ExecutionPlan");

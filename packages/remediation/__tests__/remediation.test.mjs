@@ -41,7 +41,7 @@ function qaIr() {
         id: "scenario-dashboard",
         title: "Dashboard loads",
         preconditions: [],
-        steps: [{ id: "navigate", kind: "NAVIGATE", target: { type: "PATH", value: "/dashboard" } }],
+        steps: [{ id: "navigate", kind: "NAVIGATE", milestoneClass: "REQUIRED_SEMANTIC_MILESTONE", target: { type: "PATH", value: "/dashboard" } }],
         expectations: [{
           id: "expect-heading",
           kind: "VISIBLE_TEXT",

@@ -25,7 +25,7 @@ const provenance = [{
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function qaIr(policy = readonlyPolicy, steps = [
-  { id: "navigate", kind: "NAVIGATE", target: { type: "PATH", value: "/dashboard" } },
+  { id: "navigate", kind: "NAVIGATE", milestoneClass: "REQUIRED_SEMANTIC_MILESTONE", target: { type: "PATH", value: "/dashboard" } },
   { id: "observe", kind: "OBSERVE", requests: [{ type: "VISIBLE_TEXT" }] },
   { id: "checkpoint", kind: "CHECKPOINT", checkpointId: "loaded" },
 ]) {
@@ -113,18 +113,18 @@ describe("core execution planner", () => {
   });
 
   it("plans only policy-authorized CLICK interactions with action evidence", () => {
-    const clickStep = { id: "click", kind: "INTERACT", action: "CLICK", target: { testId: "open" } };
+    const clickStep = { id: "click", kind: "INTERACT", milestoneClass: "REQUIRED_EXACT_ACTION", action: "CLICK", target: { testId: "open" } };
     const clickPolicy = { ...readonlyPolicy, click: "SAFE_ONLY" };
     const capabilities = providerCapabilities({ actions: ["CLICK"], evidence: ["ACTION_LOG"] });
     const clickPlan = createExecutionPlan({ qaIr: qaIr(clickPolicy, [clickStep]), providerCapabilities: capabilities });
 
-    expect(clickPlan.nodes[0]).toMatchObject({ kind: "INTERACT", action: "CLICK", evidence: ["ACTION_LOG"] });
+    expect(clickPlan.nodes[0]).toMatchObject({ kind: "INTERACT", milestoneClass: "REQUIRED_EXACT_ACTION", action: "CLICK", evidence: ["ACTION_LOG"] });
     expect(() => createExecutionPlan({ qaIr: qaIr(readonlyPolicy, [clickStep]), providerCapabilities: capabilities })).toThrow(/click is blocked by policy/);
     expect(() => createExecutionPlan({ qaIr: qaIr(clickPolicy, [{ ...clickStep, action: "TYPE", value: "x" }]), providerCapabilities: providerCapabilities({ actions: ["TYPE"], evidence: [] }) })).toThrow(/TYPE is not supported/);
   });
 
   it("preflights CLICK action and ACTION_LOG capabilities before execution", async () => {
-    const clickStep = { id: "click", kind: "INTERACT", action: "CLICK", target: { testId: "open" } };
+    const clickStep = { id: "click", kind: "INTERACT", milestoneClass: "REQUIRED_EXACT_ACTION", action: "CLICK", target: { testId: "open" } };
     const clickPolicy = { ...readonlyPolicy, click: "SAFE_ONLY" };
     const capabilities = providerCapabilities({ actions: ["CLICK"], evidence: ["ACTION_LOG"] });
     const clickPlan = createExecutionPlan({ qaIr: qaIr(clickPolicy, [clickStep]), providerCapabilities: capabilities });
