@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "build": "node --check src/index.mjs",
-    "typecheck": "node --check src/index.mjs && node --check test/evaluator.test.mjs",
+    "typecheck": "node --check src/index.mjs && node --check test/*.test.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {

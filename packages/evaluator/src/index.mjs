@@ -1,9 +1,12 @@
 import {
   FUNCTIONAL_EVALUATION_VERSION,
+  SIMULATION_VALIDITY_VERSION,
   ContractValidationError,
+  validateBehavioralFingerprint,
   validateEvidenceManifest,
   validateFunctionalEvaluation,
   validateSessionRecord,
+  validateSimulationValidityReport,
 } from "@persona-runtime/contracts";
 
 export const EVALUATOR_ERROR_CODES = Object.freeze({
@@ -317,4 +320,208 @@ function addMapList(map, key, value) {
 
 function unique(items) {
   return [...new Set(items)];
+}
+
+
+export function createBehavioralFingerprint({ session, events = [], observations = [] } = {}) {
+  const eventCount = events.length;
+  const actionTypes = events.map((event) => event.action?.type).filter(Boolean);
+  const actionTypeCounts = countBy(actionTypes);
+  const routeSequence = events.length > 0
+    ? events.map((event) => routeKey(event.urlAfter ?? event.urlBefore)).filter(Boolean)
+    : observations.map((observation) => routeKey(observation.page?.url)).filter(Boolean);
+  const terminal = session?.terminalReason ?? {};
+  const backtrackCount = events.filter((event) => event.derivedSignals?.backtrack || event.action?.type === "back").length;
+  const failedCount = events.filter((event) => event.derivedSignals?.failedInteraction || ["failure", "blocked"].includes(event.result?.status)).length;
+  const retryCount = events.filter((event, index) => index > 0 && sameActionTarget(event, events[index - 1])).length;
+  const noActionCount = events.filter((event) => ["wait", "observe_more", "ignore", "idle"].includes(event.action?.type)).length;
+  const firstAction = events[0]?.action;
+  const fingerprint = {
+    schemaVersion: "behavioral-fingerprint/0.1",
+    sessionId: session?.sessionId ?? "unknown-session",
+    actionCount: eventCount,
+    actionTypeRates: rates(actionTypeCounts, Math.max(eventCount, 1)),
+    uniqueActionTypeCount: Object.keys(actionTypeCounts).length,
+    routeSequence,
+    routeEntropy: entropy(routeSequence),
+    ...(firstAction?.type ? { firstActionType: firstAction.type } : {}),
+    ...(firstAction?.elementId ? { firstActionTargetFingerprint: firstAction.elementId } : {}),
+    backtrackRate: ratio(backtrackCount, eventCount),
+    retryRate: ratio(retryCount, eventCount),
+    failedInteractionRate: ratio(failedCount, eventCount),
+    noActionRate: ratio(noActionCount, eventCount),
+    abandonmentOccurred: session?.status === "abandoned",
+    ...(session?.status === "abandoned" && routeSequence.at(-1) ? { abandonmentRoute: routeSequence.at(-1) } : {}),
+    ...(session?.status === "abandoned" && terminal.code ? { abandonmentReasonCode: terminal.code } : {}),
+    errorReactionVector: {
+      retry: ratio(retryCount, Math.max(failedCount, 1)),
+      backtrack: ratio(backtrackCount, Math.max(failedCount, 1)),
+      ignore: ratio(events.filter((event) => event.action?.type === "ignore").length, Math.max(failedCount, 1)),
+      abandon: session?.status === "abandoned" && failedCount > 0 ? 1 : 0,
+    },
+    progressCurve: events.map((event, index) => event.derivedSignals?.progressChanged ? ratio(index + 1, eventCount) : 0),
+    frustrationCurve: events.map((event, index) => ratio(events.slice(0, index + 1).filter((item) => item.derivedSignals?.noProgress || item.derivedSignals?.failedInteraction).length, eventCount)),
+    trustCurve: events.map((event, index) => 1 - ratio(events.slice(0, index + 1).filter((item) => item.derivedSignals?.failedInteraction).length, eventCount)),
+    goalDirectednessScore: clamp01(ratio(events.filter((event) => event.derivedSignals?.progressChanged).length, Math.max(eventCount, 1)) - ratio(backtrackCount + noActionCount, Math.max(eventCount * 2, 1)) + 0.5),
+  };
+  return validateBehavioralFingerprint(fingerprint);
+}
+
+export function evaluateSimulationValidity({ sessions = [], fingerprints = [], taskMaxActions, humanReference } = {}) {
+  const normalizedFingerprints = fingerprints.length > 0
+    ? fingerprints
+    : sessions.map((item) => createBehavioralFingerprint({ session: item.session ?? item, events: item.events ?? [], observations: item.observations ?? [] }));
+  const sessionRecords = sessions.map((item) => item.session ?? item);
+  const personaIds = unique(sessionRecords.map((session) => session.personaId).filter(Boolean));
+  const diversity = populationDiversity(normalizedFingerprints, sessionRecords);
+  const detectedRisks = [];
+  if (normalizedFingerprints.length < 3) detectedRisks.push("insufficient_sample");
+  if (diversity.homogenizationRisk === "high") detectedRisks.push("persona_homogenization");
+  if (isHyperactive(normalizedFingerprints, taskMaxActions)) detectedRisks.push("hyperactivity");
+  if (normalizedFingerprints.length > 0 && normalizedFingerprints.every((item) => item.noActionRate === 0 && !item.abandonmentOccurred)) detectedRisks.push("excessive_cooperation");
+  if (normalizedFingerprints.length > 0 && normalizedFingerprints.every((item) => item.trustCurve.every((value) => value > 0.8))) detectedRisks.push("positivity_bias");
+
+  const report = {
+    schemaVersion: SIMULATION_VALIDITY_VERSION,
+    calibration: humanReference
+      ? { level: "calibrated", datasetId: humanReference.id, sampleSize: humanReference.sampleSize }
+      : { level: "uncalibrated", reason: "No human reference dataset was provided." },
+    stability: {
+      seedVariance: variance(normalizedFingerprints.map((item) => item.actionCount)),
+      modelAgreement: "not_available",
+      orderConsistency: "not_available",
+    },
+    diversity: { ...diversity, personaCount: personaIds.length },
+    detectedRisks: unique(detectedRisks),
+    recommendedUse: recommendedUseForRisks(detectedRisks, humanReference),
+    forbiddenInterpretations: humanReference ? [] : [
+      "Do not describe synthetic sessions as actual user conversion rates.",
+      "Do not claim demographic behavior without human validation.",
+      "Do not use uncalibrated results as a sole blocking decision for high-severity behavioral risk.",
+    ],
+  };
+  return validateSimulationValidityReport(report);
+}
+
+function populationDiversity(fingerprints, sessions) {
+  const pairDistances = [];
+  const intra = [];
+  const inter = [];
+  for (let i = 0; i < fingerprints.length; i += 1) {
+    for (let j = i + 1; j < fingerprints.length; j += 1) {
+      const distance = fingerprintDistance(fingerprints[i], fingerprints[j]);
+      pairDistances.push(distance);
+      if (sessions[i]?.personaId && sessions[i]?.personaId === sessions[j]?.personaId) intra.push(distance);
+      else inter.push(distance);
+    }
+  }
+  const routes = fingerprints.map((item) => item.routeSequence.join(" > "));
+  const actions = fingerprints.flatMap((item) => Object.entries(item.actionTypeRates).flatMap(([action, rate]) => rate > 0 ? [action] : []));
+  const interDistance = inter.length ? average(inter) : "not_available";
+  const intraDistance = intra.length ? average(intra) : "not_available";
+  const separability = typeof interDistance === "number" && typeof intraDistance === "number" ? Math.max(0, interDistance - intraDistance) : "not_available";
+  const routeDiversity = entropy(routes);
+  const actionDiversity = entropy(actions);
+  const clusterCoverage = ratio(new Set(routes).size, Math.max(fingerprints.length, 1));
+  const homogenizationRisk = fingerprints.length < 2 ? "unknown" : (clusterCoverage <= 0.34 || average(pairDistances) < 0.15 ? "high" : (clusterCoverage < 0.67 ? "medium" : "low"));
+  return {
+    sessionCount: fingerprints.length,
+    personaCount: unique(sessions.map((session) => session?.personaId).filter(Boolean)).length,
+    intraPersonaDistance: intraDistance,
+    interPersonaDistance: interDistance,
+    personaSeparability: separability,
+    routeEntropy: routeDiversity,
+    actionEntropy: actionDiversity,
+    clusterCoverage,
+    homogenizationRisk,
+    warnings: homogenizationRisk === "high" ? ["Persona behavior appears homogeneous across sessions."] : [],
+  };
+}
+
+function fingerprintDistance(left, right) {
+  const actionDistance = 1 - cosine(left.actionTypeRates, right.actionTypeRates);
+  const routeDistance = 1 - jaccard(new Set(left.routeSequence), new Set(right.routeSequence));
+  const outcomeDistance = left.abandonmentOccurred === right.abandonmentOccurred ? 0 : 1;
+  const behaviorDistance = Math.abs(left.backtrackRate - right.backtrackRate) + Math.abs(left.retryRate - right.retryRate) + Math.abs(left.failedInteractionRate - right.failedInteractionRate);
+  return clamp01((actionDistance + routeDistance + outcomeDistance + behaviorDistance) / 4);
+}
+
+function isHyperactive(fingerprints, taskMaxActions) {
+  if (!taskMaxActions || fingerprints.length === 0) return false;
+  return fingerprints.every((item) => item.actionCount >= taskMaxActions * 0.8 && !item.abandonmentOccurred && item.noActionRate === 0);
+}
+
+function recommendedUseForRisks(risks, humanReference) {
+  if (!humanReference) return risks.includes("insufficient_sample") ? "exploration_only" : "human_review_required";
+  if (risks.includes("persona_homogenization") || risks.includes("hyperactivity")) return "human_validation_required";
+  return "decision_support";
+}
+
+function countBy(items) {
+  const counts = {};
+  for (const item of items) counts[item] = (counts[item] ?? 0) + 1;
+  return counts;
+}
+
+function rates(counts, denominator) {
+  return Object.fromEntries(Object.entries(counts).map(([key, value]) => [key, ratio(value, denominator)]));
+}
+
+function ratio(numerator, denominator) {
+  if (!denominator) return 0;
+  return clamp01(numerator / denominator);
+}
+
+function entropy(items) {
+  const values = items.filter(Boolean);
+  if (values.length === 0) return 0;
+  const counts = countBy(values);
+  return Object.values(counts).reduce((total, count) => {
+    const probability = count / values.length;
+    return total - probability * Math.log2(probability);
+  }, 0);
+}
+
+function routeKey(url) {
+  if (!url) return "";
+  try {
+    return new URL(url).pathname || "/";
+  } catch {
+    return String(url);
+  }
+}
+
+function sameActionTarget(left, right) {
+  return left?.action?.type === right?.action?.type && (left?.action?.elementId ?? "") === (right?.action?.elementId ?? "");
+}
+
+function average(values) {
+  return values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function variance(values) {
+  if (values.length < 2) return "not_available";
+  const mean = average(values);
+  return values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+}
+
+function cosine(left, right) {
+  const keys = unique([...Object.keys(left), ...Object.keys(right)]);
+  const dot = keys.reduce((sum, key) => sum + (left[key] ?? 0) * (right[key] ?? 0), 0);
+  const leftNorm = Math.sqrt(keys.reduce((sum, key) => sum + (left[key] ?? 0) ** 2, 0));
+  const rightNorm = Math.sqrt(keys.reduce((sum, key) => sum + (right[key] ?? 0) ** 2, 0));
+  if (!leftNorm || !rightNorm) return 0;
+  return dot / (leftNorm * rightNorm);
+}
+
+function jaccard(left, right) {
+  const unionSize = new Set([...left, ...right]).size;
+  if (!unionSize) return 1;
+  let intersection = 0;
+  for (const item of left) if (right.has(item)) intersection += 1;
+  return intersection / unionSize;
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
 }
