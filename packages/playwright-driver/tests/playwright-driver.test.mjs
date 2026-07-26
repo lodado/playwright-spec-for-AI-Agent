@@ -176,11 +176,12 @@ describe("playwright behavioral driver", () => {
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
   });
 
-  it("redacts mixed-case and fully percent-encoded fixture secrets reflected in URL paths", async () => {
+  it("redacts mixed-case, fully percent-encoded, and double-encoded fixture secrets in URL paths", async () => {
     if (!browserAvailable) return;
     const secret = "A/B";
     const mixedCaseEncodedSecret = "A%2fB";
     const fullyEncodedSecret = "%41%2F%42";
+    const doubleEncodedSecret = "%2541%252F%2542";
     const app = await serve(`<h1>Reflected path</h1>`);
     const driver = createPlaywrightDriver({ browserType: chromium });
     const dir = await tempDir();
@@ -189,7 +190,7 @@ describe("playwright behavioral driver", () => {
       environment: {
         baseUrl: app.url,
         allowedOrigins: [app.url],
-        startPath: `/reflected/${mixedCaseEncodedSecret}/${fullyEncodedSecret}`,
+        startPath: `/reflected/${mixedCaseEncodedSecret}/${fullyEncodedSecret}/${doubleEncodedSecret}`,
         viewport: { width: 390, height: 844 },
       },
       valueRefs: { token: secret },
@@ -201,9 +202,27 @@ describe("playwright behavioral driver", () => {
     expect(recorded).not.toContain(secret);
     expect(recorded.toLowerCase()).not.toContain(mixedCaseEncodedSecret.toLowerCase());
     expect(recorded.toLowerCase()).not.toContain(fullyEncodedSecret.toLowerCase());
+    expect(recorded.toLowerCase()).not.toContain(doubleEncodedSecret.toLowerCase());
     expect(recorded).toContain("[REDACTED]");
 
     await driver.close(handle);
+    const decodeLimitHandle = await driver.start({
+      ...input("decode-limit-path-secret", app.url, path.join(dir, "decode-limit"), {}),
+      environment: {
+        baseUrl: app.url,
+        allowedOrigins: [app.url],
+        startPath: "/decode-limit/%252541%25252F%252542",
+        viewport: { width: 390, height: 844 },
+      },
+      valueRefs: { token: secret },
+    });
+    const decodeLimitObservation = await driver.observe(decodeLimitHandle);
+    const decodeLimitRecorded = JSON.stringify(decodeLimitObservation);
+    expect(decodeLimitObservation.page.url).not.toContain("decode-limit");
+    expect(decodeLimitRecorded).not.toContain("%252541%25252F%252542");
+    expect(decodeLimitRecorded).toContain("[REDACTED]");
+
+    await driver.close(decodeLimitHandle);
     const malformedHandle = await driver.start({
       ...input("malformed-path-secret", app.url, path.join(dir, "malformed"), {}),
       environment: {
@@ -220,6 +239,7 @@ describe("playwright behavioral driver", () => {
     expect(malformedRecorded).not.toContain(secret);
     expect(malformedRecorded.toLowerCase()).not.toContain(mixedCaseEncodedSecret.toLowerCase());
     expect(malformedRecorded.toLowerCase()).not.toContain(fullyEncodedSecret.toLowerCase());
+    expect(malformedObservation.page.url).not.toContain("malformed");
     expect(malformedRecorded).toContain("[REDACTED]");
 
     await driver.close(malformedHandle);

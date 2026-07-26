@@ -130,13 +130,20 @@ export async function runPersonaStudy({ study, outputDir, driverFactory, policyF
   if (validatedStudy.comparison) {
     const baselineSessions = evaluatedSessions.filter(item => item.session.variant === validatedStudy.comparison.baseline.id);
     const candidateSessions = evaluatedSessions.filter(item => item.session.variant === validatedStudy.comparison.candidate.id);
-    const baselineSessionIds = new Set(baselineSessions.map(item => item.session.sessionId));
-    const candidateSessionIds = new Set(candidateSessions.map(item => item.session.sessionId));
+    const findingsForVariant = sessions => {
+      const sessionIds = new Set(sessions.map(item => item.session.sessionId));
+      return createFindings({
+        frictionPoints: frictionPoints.filter(point => sessionIds.has(point.sessionId)),
+        sessions,
+        minimumRecurrence: validatedStudy.evaluation.minimumRecurrenceForFinding,
+        validityReport: validity,
+      });
+    };
     variant = compareVariants({
       baselineSessions,
       candidateSessions,
-      baselineFindings: findings.filter(finding => finding.affectedSessionIds.some(id => baselineSessionIds.has(id))),
-      candidateFindings: findings.filter(finding => finding.affectedSessionIds.some(id => candidateSessionIds.has(id))),
+      baselineFindings: findingsForVariant(baselineSessions),
+      candidateFindings: findingsForVariant(candidateSessions),
     });
   }
   const report = buildReport({ study: validatedStudy, evaluatedSessions, validity, findings, variant });

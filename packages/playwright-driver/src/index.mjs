@@ -701,10 +701,17 @@ function safeUrl(value, secretValues = []) {
     url.search = "";
     url.hash = "";
     try {
-      const pathname = decodeURIComponent(url.pathname);
-      const redactedPathname = redactRawSecrets(pathname, secretValues);
-      if (redactedPathname !== pathname) url.pathname = redactedPathname;
-      return redactRawSecrets(url.toString(), secretValues);
+      let pathname = url.pathname;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const decodedPathname = decodeURIComponent(pathname);
+        if (decodedPathname === pathname) {
+          const redactedPathname = redactRawSecrets(pathname, secretValues);
+          if (redactedPathname !== pathname) url.pathname = redactedPathname;
+          return redactRawSecrets(url.toString(), secretValues);
+        }
+        pathname = decodedPathname;
+      }
+      throw new URIError("pathname decode limit exceeded");
     } catch {
       if (secretValues.length > 0) url.pathname = "/[REDACTED]";
       return url.toString();
