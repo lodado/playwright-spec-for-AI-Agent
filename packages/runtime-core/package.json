@@ -1,0 +1,18 @@
+{
+  "name": "@persona-runtime/runtime-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Persona Runtime session state machine and orchestration core.",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "build": "node --check src/index.mjs",
+    "typecheck": "node --check src/index.mjs && node --check test/runtime-core.test.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}
