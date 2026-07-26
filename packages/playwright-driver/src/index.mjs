@@ -78,7 +78,7 @@ async function startSession({ input, browserType, launchOptions, now }) {
   const secretValues = Object.values(valueRefs).filter((value) => typeof value === "string" && value.length > 0);
   const requestedEvidencePolicy = normalizeEvidencePolicy(input.evidencePolicy ?? input.study?.evidence);
   const evidencePolicy = secretValues.length > 0
-    ? { ...requestedEvidencePolicy, trace: false, video: "off" }
+    ? { ...requestedEvidencePolicy, screenshot: "off", trace: false, video: "off" }
     : requestedEvidencePolicy;
   const storageState = environment.storageStatePath ? await resolveStorageStatePath(environment.storageStatePath) : undefined;
   const evidenceDir = path.resolve(input.evidenceDir ?? path.join(".qa", "sessions", sessionId));
@@ -185,6 +185,7 @@ async function startSession({ input, browserType, launchOptions, now }) {
       evidencePolicy,
       fixtureRoot: input.fixtureRoot ? path.resolve(input.fixtureRoot) : undefined,
     valueRefs,
+    secretValues,
       observationSequence: 0,
       screenshotSequence: 0,
       hadFailure: false,
@@ -218,7 +219,7 @@ async function observeSession(session, now) {
   }
   const runtimeEvidence = session.runtimeIssues.map(runtimeIssueEvidence);
 
-  const capturedSemantic = await captureSemantic(session.page);
+  const capturedSemantic = redactDeep(await captureSemantic(session.page), session.secretValues);
   await clearHandles(session);
   for (const element of capturedSemantic.interactiveElements) {
     const handle = await session.page.locator(element.selector).elementHandle();
@@ -238,7 +239,7 @@ async function observeSession(session, now) {
     timestamp: now(),
     page: {
       url: safeUrl(session.page.url()),
-      title: await session.page.title(),
+      title: redactSecrets(await session.page.title(), session.secretValues),
       viewport: session.page.viewportSize() ?? { width: 0, height: 0 },
     },
     semantic,
@@ -714,6 +715,12 @@ function issue(kind, code, message, metadata, now, secretValues = []) {
 
 function redactSecrets(value, secretValues) {
   return secretValues.reduce((redacted, secret) => redacted.split(secret).join("[REDACTED]"), String(value));
+}
+
+function redactDeep(value, secretValues) {
+  if (Array.isArray(value)) return value.map((item) => redactDeep(item, secretValues));
+  if (!value || typeof value !== "object") return typeof value === "string" ? redactSecrets(value, secretValues) : value;
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, redactDeep(child, secretValues)]));
 }
 
 async function captureFailureScreenshot(session, observationId) {

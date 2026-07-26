@@ -134,7 +134,7 @@ describe("playwright behavioral driver", () => {
 
   it("revalidates retained elements and excludes values and off-viewport semantics", async () => {
     if (!browserAvailable) return;
-    const app = await serve(`<h1>Visible heading</h1><input aria-label="API key" value="super-secret"><input type="checkbox" aria-label="Remember" checked><button id="swap">Continue</button><h2 style="position:absolute;top:2000px">Offscreen secret</h2><script>console.error('super-secret');setTimeout(()=>swap.replaceWith(Object.assign(document.createElement('button'),{textContent:'Continue'})),150)</script>`);
+    const app = await serve(`<title>super-secret</title><h1>Visible heading</h1><p>Token: super-secret</p><input aria-label="API key" value="super-secret"><input type="checkbox" aria-label="Remember" checked><button id="swap">Continue</button><h2 style="position:absolute;top:2000px">Offscreen secret</h2><script>console.error('super-secret');setTimeout(()=>swap.replaceWith(Object.assign(document.createElement('button'),{textContent:'Continue'})),150)</script>`);
     const driver = createPlaywrightDriver({ browserType: chromium });
     const dir = await tempDir();
     const handle = await driver.start({
@@ -144,6 +144,8 @@ describe("playwright behavioral driver", () => {
     });
     const observation = await driver.observe(handle);
     expect(JSON.stringify(observation.semantic)).not.toContain("super-secret");
+    expect(observation.page.title).not.toContain("super-secret");
+    expect(observation.evidence.every((entry) => entry.type !== "screenshot")).toBe(true);
     expect(JSON.stringify(observation.semantic)).not.toContain("Offscreen secret");
     expect(observation.page.url).not.toContain("super-secret");
     expect(JSON.stringify(observation.runtime)).not.toContain("super-secret");

@@ -36,6 +36,16 @@ test("marks reversed order disagreement unstable", () => {
   assert.equal(report.delta.confidence.orderConsistency, 0);
 });
 
+test("does not count runtime success when sealed functional evaluation failed", () => {
+  const report = compareVariants({
+    baselineSessions: [{ session: session("b1", "p1", "success"), functionalEvaluation: { status: "success" }, fingerprint: fp("b1", 1, 0) }],
+    candidateSessions: [{ session: session("c1", "p1", "success"), functionalEvaluation: { status: "runtime_error" }, fingerprint: fp("c1", 1, 0) }],
+  });
+  assert.equal(report.baseline.completionRate, 1);
+  assert.equal(report.candidate.completionRate, 0);
+  assert.equal(report.candidate.failureRate, 1);
+});
+
 test("release gate blocks reproduced critical behavioral findings but not uncalibrated exploratory singles", () => {
   const critical = finding("f-critical", "critical", "reproduced_synthetic_finding", "high");
   const exploratory = finding("f-single", "critical", "exploratory_signal", "high");

@@ -744,8 +744,8 @@ function recommendationFor(point) {
 export function compareVariants({ baselineSessions = [], candidateSessions = [], baselineFingerprints, candidateFingerprints, baselineFindings = [], candidateFindings = [], orderResults = [] } = {}) {
   const baselinePrints = baselineFingerprints ?? baselineSessions.map((item) => item.fingerprint ?? createBehavioralFingerprint({ session: item.session ?? item, events: item.events ?? [], observations: item.observations ?? [] }));
   const candidatePrints = candidateFingerprints ?? candidateSessions.map((item) => item.fingerprint ?? createBehavioralFingerprint({ session: item.session ?? item, events: item.events ?? [], observations: item.observations ?? [] }));
-  const baselineRecords = baselineSessions.map((item) => item.session ?? item);
-  const candidateRecords = candidateSessions.map((item) => item.session ?? item);
+  const baselineRecords = baselineSessions.map(effectiveVariantSession);
+  const candidateRecords = candidateSessions.map(effectiveVariantSession);
   const baseline = variantMetrics(baselineRecords, baselinePrints, baselineFindings);
   const candidate = variantMetrics(candidateRecords, candidatePrints, candidateFindings);
   const orderConsistency = orderResults.length < 2 || new Set(orderResults.map((item) => item.status ?? item)).size === 1;
@@ -810,6 +810,14 @@ function variantMetrics(sessions, fingerprints, findings) {
     routeEntropy: average(fingerprints.map((item) => item.routeEntropy)),
     recurringFindingCount: findings.filter((finding) => finding.maturity === "reproduced_synthetic_finding").length,
   };
+}
+
+function effectiveVariantSession(item) {
+  const session = item.session ?? item;
+  if (session.status === "success" && item.functionalEvaluation?.status !== undefined && item.functionalEvaluation.status !== "success") {
+    return { ...session, status: item.functionalEvaluation.status };
+  }
+  return session;
 }
 
 function comparisonStatus({ baseline, candidate, orderConsistency }) {

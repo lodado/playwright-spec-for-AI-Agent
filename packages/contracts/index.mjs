@@ -45,7 +45,15 @@ export function redactStudySecrets(study) {
   if (copy?.environment?.fixtures) {
     copy.environment.fixtures = Object.fromEntries(Object.keys(copy.environment.fixtures).map((key) => [key, "[REDACTED]"]));
   }
+  if (copy?.environment?.auth) copy.environment.auth = redactStringLeaves(copy.environment.auth);
+  if (copy?.environment?.storageStatePath) copy.environment.storageStatePath = "[REDACTED]";
   return copy;
+}
+
+function redactStringLeaves(value) {
+  if (Array.isArray(value)) return value.map(redactStringLeaves);
+  if (!value || typeof value !== "object") return typeof value === "string" ? "[REDACTED]" : value;
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, redactStringLeaves(child)]));
 }
 
 export function stableId(prefix, parts) {

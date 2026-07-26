@@ -93,6 +93,8 @@ test("study artifacts redact fixture secrets while drivers receive in-memory val
   const root = await mkdtemp(join(tmpdir(), "persona-secret-"));
   const secretStudy = structuredClone(study);
   secretStudy.environment.fixtures = { "secret:email": "private@example.test" };
+  secretStudy.environment.auth = { token: "auth-secret" };
+  secretStudy.environment.storageStatePath = "/private/auth-state.json";
   const receivedValueRefs = [];
   await runPersonaStudy({
     study: secretStudy,
@@ -106,6 +108,8 @@ test("study artifacts redact fixture secrets while drivers receive in-memory val
   const persisted = JSON.parse(await readFile(join(root, "study.json"), "utf8"));
   assert.deepEqual(persisted.environment.fixtures, { "secret:email": "[REDACTED]" });
   assert.equal(JSON.stringify(persisted).includes("private@example.test"), false);
+  assert.equal(JSON.stringify(persisted).includes("auth-secret"), false);
+  assert.equal(persisted.environment.storageStatePath, "[REDACTED]");
   assert.equal(receivedValueRefs[0]["secret:email"], "private@example.test");
   await rm(root, { recursive: true, force: true });
 });
