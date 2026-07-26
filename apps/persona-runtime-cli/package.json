@@ -1,0 +1,27 @@
+{
+  "name": "persona-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "persona-runtime": "./bin/persona-runtime.mjs"
+  },
+  "exports": "./src/index.mjs",
+  "scripts": {
+    "start": "node bin/persona-runtime.mjs",
+    "build": "node --check src/index.mjs && node --check bin/persona-runtime.mjs",
+    "typecheck": "node --check src/index.mjs && node --check bin/persona-runtime.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@persona-runtime/contracts": "workspace:*",
+    "@persona-runtime/evaluator": "workspace:*",
+    "@persona-runtime/persona-policy": "workspace:*",
+    "@persona-runtime/reporter-html": "workspace:*",
+    "@persona-runtime/runtime-core": "workspace:*",
+    "@playwright/test": "^1.60.0",
+    "playwright-driver": "workspace:*",
+    "playwright-spec-adapter": "workspace:*",
+    "yaml": "^2.8.1"
+  }
+}

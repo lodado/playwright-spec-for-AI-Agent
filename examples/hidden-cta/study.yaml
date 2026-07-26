@@ -1,0 +1,63 @@
+schemaVersion: study-spec/0.1
+study:
+  id: hidden-cta
+  name: Hidden below-fold CTA
+product:
+  description: Upload result flow fixture
+environment:
+  baseUrl: http://127.0.0.1:4179
+  allowedOrigins:
+    - http://127.0.0.1:4179
+  viewport:
+    width: 390
+    height: 844
+tasks:
+  - id: open-report
+    name: Open the generated report
+    goal: Open behavioral report
+    successOracles:
+      - id: completed-route
+        type: url
+        operation: contains
+        value: /complete
+    safetyPolicy:
+      allowRead: true
+      allowNavigation: true
+      allowClick: true
+      allowTyping: false
+      allowFileUpload: false
+      allowStateMutation: false
+      allowExternalOrigin: false
+      forbiddenActions:
+        - payment
+        - subscription_change
+        - account_delete
+        - data_delete
+        - send_message
+        - confirm_destructive
+      stopBeforeConfirmation: true
+    maxActions: 5
+    maxDurationMs: 30000
+    maxConsecutiveNoProgressActions: 3
+    abandonmentAllowed: true
+personas:
+  - preset: impatient_new_user
+  - preset: careful_business_buyer
+  - preset: low_domain_knowledge_user
+runtime:
+  seeds:
+    - 101
+    - 202
+    - 303
+  concurrency: 2
+  modelRoles:
+    action: deterministic-policy
+    evaluator: deterministic-oracle
+evidence:
+  screenshot: every_action
+  trace: true
+  video: on_failure
+  semanticSnapshot: every_action
+evaluation:
+  minimumRecurrenceForFinding: 2
+  validityReport: true

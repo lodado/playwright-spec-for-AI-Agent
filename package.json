@@ -11,7 +11,9 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "pack:compat": "pnpm --filter playwright-spec-for-ai-agent pack",
-    "package:smoke": "node scripts/package-smoke.mjs"
+    "package:smoke": "node scripts/package-smoke.mjs",
+    "persona-runtime": "node apps/persona-runtime-cli/bin/persona-runtime.mjs",
+    "fixture:hidden-cta": "node fixtures/hidden-below-fold-cta/server.mjs"
   },
   "devDependencies": {
     "turbo": "2.10.7"
