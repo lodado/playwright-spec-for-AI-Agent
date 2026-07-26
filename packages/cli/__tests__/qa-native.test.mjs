@@ -144,6 +144,7 @@ describe("qa-native CLI security foundation", () => {
     const handlers = { execute: handler, judge: handler, replay: handler, diagnose: handler, "suggest-fix": handler, report: handler };
     const shared = { cwd, env: { QA_NATIVE_INTEGRITY_KEY: key }, handlers, stdout: vi.fn(), stderr: vi.fn() };
     expect(await runQaNative(["execute", "--spec=a.spec.ts", "--base-url=https://example.test", "--run-dir=.qa/runs/new"], shared)).toBe(0);
+    expect(handler.mock.calls[0][0]).toMatchObject({ provider: "playwright", mode: "strict" });
     createExclusiveQaDirectory(".qa/runs/existing", { cwd });
     expect(await runQaNative(["judge", "--run-dir=.qa/runs/existing"], shared)).toBe(0);
     expect(await runQaNative(["replay", "--run-dir=.qa/runs/existing"], shared)).toBe(0);
@@ -156,6 +157,19 @@ describe("qa-native CLI security foundation", () => {
       repositoryRoot: realpathSync(cwd),
       revision: "HEAD",
     });
+  });
+
+  it("accepts only the explicit strict and adaptive provider combinations", async () => {
+    const cwd = temporaryRoot();
+    writeFileSync(join(cwd, "a.spec.ts"), "test('a', () => {})");
+    const handler = vi.fn(() => 0);
+    const stderr = vi.fn();
+    const common = { cwd, env: { QA_NATIVE_INTEGRITY_KEY: Buffer.alloc(32, 0x62).toString("base64") }, handlers: { execute: handler }, stdout: vi.fn(), stderr };
+
+    expect(await runQaNative(["execute", "--spec=a.spec.ts", "--base-url=https://example.test", "--run-dir=.qa/runs/adaptive", "--provider=hermes", "--mode=adaptive"], common)).toBe(0);
+    expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ provider: "hermes", mode: "adaptive" }));
+    expect(await runQaNative(["execute", "--spec=a.spec.ts", "--base-url=https://example.test", "--run-dir=.qa/runs/invalid", "--provider=playwright", "--mode=adaptive"], common)).toBe(1);
+    expect(stderr).toHaveBeenLastCalledWith("qa-native: execution provider and mode combination is unsupported\n");
   });
 
   it("removes the raw key from the process environment before dispatch", async () => {

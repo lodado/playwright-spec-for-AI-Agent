@@ -1,4 +1,4 @@
-import { readdirSync, realpathSync, rmSync } from "node:fs";
+import { lstatSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { RUNTIME_OUTCOME_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
@@ -6,6 +6,7 @@ import { readEvidenceArchive } from "../evidence/index.mjs";
 import { diagnoseFailure, recommendRepair } from "../remediation/index.mjs";
 import { createLocalRepositorySnapshot, locateCode } from "../repository-provider/index.mjs";
 import { renderRemediationReport } from "../reporter-markdown/index.mjs";
+import { validateAdaptiveExecutionEvidence } from "./qa-native-adaptive-evidence.mjs";
 import { createExclusiveQaDirectory, readPrivateJson, writePrivateFileExclusive, writePrivateJsonExclusive } from "./qa-native.mjs";
 
 export async function reportQaNative({ runDirectory, repositoryRoot, revision, judgmentPath, integrityKey, cwd }) {
@@ -16,13 +17,14 @@ export async function reportQaNative({ runDirectory, repositoryRoot, revision, j
   const qaIr = readPrivateJson(relative(cwd, join(runDirectory, "qa-ir.json")), { cwd });
   validateContract("QaIrDocument", qaIr);
   const archive = readEvidenceArchive({ directory: join(runDirectory, "evidence"), integrityKey });
+  const expectedBundles = expectedJudgedBundles({ runDirectory, archive, cwd });
   const judgments = readJudgeResults({ runDirectory, judgmentPath, cwd }).map((result) => {
     const bundle = archive.bundles.find((candidate) => candidate.bundleId === result.evidenceBundleId);
     if (!bundle) throw new Error("QA judgment evidence is missing");
     validateContract("JudgeResult", result, { qaIr, evidenceBundle: bundle });
     return { result, bundle };
   });
-  if (judgmentPath === undefined) assertCompleteJudgmentSet(judgments, archive.bundles);
+  if (judgmentPath === undefined) assertCompleteJudgmentSet(judgments, expectedBundles);
   const selected = judgments.filter(({ result }) => ["FAIL", "MANUAL_REVIEW"].includes(result.verdict));
   if (selected.length === 0) throw new Error("QA report has no failing judgments");
 
@@ -47,6 +49,34 @@ export async function reportQaNative({ runDirectory, repositoryRoot, revision, j
     return 0;
   } catch (error) {
     if (created) rmSync(reportDirectory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function expectedJudgedBundles({ runDirectory, archive, cwd }) {
+  const inputPath = relative(cwd, join(runDirectory, "execution-agent-input.json"));
+  const outcomePath = relative(cwd, join(runDirectory, "execution-agent-outcome.json"));
+  const hasInput = entryExists(inputPath, cwd);
+  const hasOutcome = entryExists(outcomePath, cwd);
+  if (!hasInput && !hasOutcome) return archive.bundles;
+  if (!hasInput || !hasOutcome) throw new Error("adaptive execution metadata is incomplete");
+  const input = readPrivateJson(inputPath, { cwd });
+  const outcome = readPrivateJson(outcomePath, { cwd });
+  validateContract("ExecutionAgentInput", input);
+  validateContract("ExecutionAgentOutcome", outcome, { input });
+  if (outcome.type !== "COMPLETED" || input.runId !== archive.manifest.runId) throw new Error("adaptive execution metadata does not match evidence");
+  validateAdaptiveExecutionEvidence({ input, outcome, ...archive });
+  const finalBundle = archive.bundles.filter((bundle) => bundle.scenarioId === outcome.scenarioId).at(-1);
+  if (finalBundle === undefined) throw new Error("adaptive final evidence is missing");
+  return [finalBundle];
+}
+
+function entryExists(path, cwd) {
+  try {
+    lstatSync(join(cwd, path));
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
     throw error;
   }
 }

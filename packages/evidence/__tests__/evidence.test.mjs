@@ -530,6 +530,12 @@ describe("evidence store", () => {
     }
   });
 
+  it("does not exempt contract-like prefixes from opaque token redaction", () => {
+    const opaqueValue = `scenario-${"A".repeat(64)}`;
+
+    expect(redactSensitiveText(JSON.stringify({ opaqueValue }))).toBe(JSON.stringify({ opaqueValue: "[REDACTED]" }));
+  });
+
   it("rejects opaque binary evidence and preserves stored text bytes behind copy-on-read", () => {
     const target = store({
       providerCapabilities: {

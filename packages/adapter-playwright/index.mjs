@@ -337,6 +337,6 @@ function isReadonly(liveRunPolicy) {
 
 function stableId(...parts) {
   const text = parts.filter(part => part !== undefined && part !== null).join(":");
-  const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "item";
+  const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 20) || "item";
   return `${slug}-${canonicalHash(text).slice("sha256:".length, "sha256:".length + 12)}`;
 }

@@ -36,6 +36,7 @@ const GATEWAY_MAX_ELEMENTS = 128;
 const GATEWAY_ELEMENT_TEXT_LIMIT = 1024;
 const GATEWAY_CLEANUP_TIMEOUT_MS = 1_000;
 const GATEWAY_ACTIONS = Object.freeze(["get_current_url", "observe_dom", "observe_aria", "navigate", "go_back", "reload_page", "click_observed_element", "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state"]);
+const adaptiveExecutions = new WeakSet();
 
 export function playwrightExecutionCapabilities() {
   return providerCapabilities({
@@ -537,10 +538,17 @@ export async function runAdaptiveWithPlaywright({
       manifest = execution.manifest;
       outcome = execution.outcome;
     }
-    return Object.freeze({ outcome, bundles: Object.freeze(bundles), manifest, readBlob: gateway.readBlob });
+    const execution = Object.freeze({ outcome, bundles: Object.freeze(bundles), manifest, readBlob: gateway.readBlob });
+    adaptiveExecutions.add(execution);
+    return execution;
   } finally {
     await gateway.close();
   }
+}
+
+export function assertPlaywrightAdaptiveExecution(execution) {
+  if (!execution || typeof execution !== "object" || !adaptiveExecutions.has(execution)) throw new Error("adaptive execution did not originate from the Playwright gateway");
+  return execution;
 }
 
 export async function executeWithPlaywright({

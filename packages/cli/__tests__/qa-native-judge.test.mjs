@@ -3,9 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { compilePlaywrightSpec } from "../../adapter-playwright/index.mjs";
-import { PROVIDER_CAPABILITIES_VERSION, RUNTIME_OUTCOME_VERSION, validateContract } from "../../contracts/index.mjs";
+import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_AGENT_OUTCOME_VERSION, PROVIDER_CAPABILITIES_VERSION, RUNTIME_OUTCOME_VERSION, validateContract } from "../../contracts/index.mjs";
+import { createAdaptiveExecutionInput } from "../../core/index.mjs";
 import { createInMemoryEvidenceStore, writeEvidenceArchive } from "../../evidence/index.mjs";
 import { judgeWithHermes } from "../../provider-hermes/index.mjs";
+import { playwrightBrowserToolCapabilities } from "../../provider-playwright/index.mjs";
 import { judgeQaNative } from "../qa-native-judge.mjs";
 import { createExclusiveQaDirectory, runQaNative, writePrivateJsonExclusive } from "../qa-native.mjs";
 
@@ -68,6 +70,19 @@ describe("qa-native offline judge", () => {
     expect(readJson(join(directory, resultFile))).toMatchObject({ verdict: "PASS", judge: { provider: "hermes" } });
   });
 
+  it("judges only the final adaptive checkpoint while retaining the full evidence archive", async () => {
+    const fixture = persistedRun({ deterministic: true, checkpointsPerScenario: 2, adaptive: true });
+    const judge = vi.fn((args) => judgeWithHermes({ ...args, transport: vi.fn(), model: "hermes-test" }));
+
+    expect(await dispatch(fixture.cwd, { judge })).toBe(0);
+
+    expect(judge).toHaveBeenCalledOnce();
+    expect(judge.mock.calls[0][0].bundle.bundleId).toBe(fixture.bundles.at(-1).bundleId);
+    expect(fixture.bundles).toHaveLength(2);
+    const resultFiles = readdirSync(completedJudgmentDirectory(fixture.runDirectory)).filter((file) => file.startsWith("judge-result-"));
+    expect(resultFiles).toHaveLength(1);
+  });
+
   it("rejects unauthenticated evidence and multi-bundle provider failures without partial output", async () => {
     const unauthenticated = persistedRun({ deterministic: true });
     const stderr = vi.fn();
@@ -106,35 +121,60 @@ async function dispatch(cwd, overrides = {}, { key = integrityKey, stderr = vi.f
   });
 }
 
-function persistedRun({ scenarioCount = 1, deterministic }) {
+function persistedRun({ scenarioCount = 1, checkpointsPerScenario = 1, deterministic, adaptive = false }) {
   const cwd = mkdtempSync(join(tmpdir(), "qa-native-judge-"));
   temporaryDirectories.push(cwd);
   const runDirectory = createExclusiveQaDirectory(".qa/runs/run-1", { cwd });
   const qaIr = compilePlaywrightSpec({ source: sourceFor(scenarioCount), sourcePath: "dashboard.spec.ts" }).qaIr;
-  const store = createInMemoryEvidenceStore({ providerCapabilities: capabilities });
+  const adaptiveInput = adaptive ? createAdaptiveExecutionInput({ qaIr, scenarioId: qaIr.suites[0].scenarios[0].id, baseUrl: "https://example.test/dashboard", runId: "run-1" }) : undefined;
+  const store = createInMemoryEvidenceStore({ providerCapabilities: adaptive ? playwrightBrowserToolCapabilities() : capabilities });
   const bundles = [];
   const expectationIds = [];
   let manifest;
   for (const [index, scenario] of qaIr.suites[0].scenarios.entries()) {
     const expectation = scenario.expectations[0];
     expectationIds.push(expectation.id);
-    const artifact = store.captureArtifact({ id: `visible-text-${index}`, type: "VISIBLE_TEXT", contentType: "text/plain", content: `Dashboard ${index + 1}` });
-    const bundle = store.createBundle({
-      runId: "run-1",
-      scenarioId: scenario.id,
-      checkpointId: scenario.steps.find((step) => step.kind === "CHECKPOINT").checkpointId,
-      capturedAt: `2026-07-25T00:00:0${index}.000Z`,
-      environment: { targetUrl: "https://example.test/dashboard", browser: "chromium", viewport: { width: 1280, height: 720 } },
-      artifacts: [artifact],
-      facts: deterministic ? [{ id: `visible-${index}`, kind: "ELEMENT_OBSERVATION", value: { expectationId: expectation.id, resolution: "FOUND", visible: true } }] : [],
-    });
-    bundles.push(bundle);
-    manifest = store.appendCheckpoint(bundle);
+    for (let checkpointIndex = 0; checkpointIndex < checkpointsPerScenario; checkpointIndex += 1) {
+      const proposal = adaptive ? {
+        schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION,
+        proposalId: `proposal-${checkpointIndex}`,
+        runId: adaptiveInput.runId,
+        scenarioId: adaptiveInput.scenarioId,
+        milestoneId: adaptiveInput.currentMilestoneId,
+        leaseId: adaptiveInput.capabilityLease.leaseId,
+        action: checkpointIndex === checkpointsPerScenario - 1 ? "observe_dom" : "get_current_url",
+        parameters: {},
+      } : undefined;
+      const page = adaptiveInput?.currentPage;
+      const artifacts = adaptive ? [
+        store.captureArtifact({ id: `${proposal.proposalId}:before:dom`, type: "DOM_SNAPSHOT", contentType: "text/html", content: `<button>Dashboard ${index + 1}</button>` }),
+        store.captureArtifact({ id: `${proposal.proposalId}:before:aria`, type: "ARIA_SNAPSHOT", contentType: "text/plain", content: `- button: Dashboard ${index + 1}` }),
+        store.captureArtifact({ id: `${proposal.proposalId}:action`, type: "ACTION_LOG", contentType: "application/json", content: JSON.stringify({ proposal, status: "ACCEPTED", before: page, after: page }) }),
+        store.captureArtifact({ id: `${proposal.proposalId}:after:dom`, type: "DOM_SNAPSHOT", contentType: "text/html", content: `<button>Dashboard ${index + 1}</button>` }),
+        store.captureArtifact({ id: `${proposal.proposalId}:after:aria`, type: "ARIA_SNAPSHOT", contentType: "text/plain", content: `- button: Dashboard ${index + 1}` }),
+      ] : [store.captureArtifact({ id: `visible-text-${index}-${checkpointIndex}`, type: "VISIBLE_TEXT", contentType: "text/plain", content: `Dashboard ${index + 1}` })];
+      const bundle = store.createBundle({
+        runId: "run-1",
+        scenarioId: scenario.id,
+        checkpointId: adaptive ? proposal.proposalId : `${scenario.steps.find((step) => step.kind === "CHECKPOINT").checkpointId}-${checkpointIndex}`,
+        capturedAt: `2026-07-25T00:00:${index}${checkpointIndex}.000Z`,
+        environment: { targetUrl: "https://example.test/dashboard", browser: "chromium", viewport: { width: 1280, height: 720 } },
+        artifacts,
+        facts: deterministic ? [{ id: `visible-${index}-${checkpointIndex}`, kind: "ELEMENT_OBSERVATION", value: { expectationId: expectation.id, resolution: "FOUND", visible: true } }] : [],
+      });
+      bundles.push(bundle);
+      manifest = store.appendCheckpoint(bundle, adaptive ? { stage: "execute" } : undefined);
+    }
   }
 
   writePrivateJsonExclusive(".qa/runs/run-1/qa-ir.json", qaIr, { cwd });
   writeEvidenceArchive({ directory: join(runDirectory, "evidence"), bundles, manifest, readBlob: store.readBlob, integrityKey });
   writePrivateJsonExclusive(".qa/runs/run-1/run.json", { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "execute", type: "COMPLETED" }, { cwd });
+  if (adaptive) {
+    const agentOutcome = { schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION, runId: "run-1", scenarioId: adaptiveInput.scenarioId, type: "COMPLETED", completedMilestoneIds: adaptiveInput.milestones.map((milestone) => milestone.id) };
+    writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-input.json", adaptiveInput, { cwd });
+    writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-outcome.json", agentOutcome, { cwd });
+  }
   return { cwd, runDirectory, qaIr, bundles, expectationIds };
 }
 

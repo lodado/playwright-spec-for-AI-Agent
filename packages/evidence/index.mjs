@@ -30,7 +30,7 @@ const AUTHORIZATION_PATTERN = /(["']?\b(?:proxy[-_\s]?)?authorization\b["']?\s*(
 const COOKIE_PATTERN = /(["']?\b(?:set[-_\s]?)?cookie\b["']?\s*(?::|=|,\s*))(?:(?:"[^"\r\n]*"|'[^'\r\n]*')|[^\r\n,\]}]+)/gi;
 const URL_USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s\/@]*@/gi;
 const HIGH_CONFIDENCE_TOKEN_PATTERN = /\b(?:gh[pousr]_[a-z0-9]{20,}|npm_[a-z0-9]{20,}|sk-(?:proj-)?[a-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9a-z_-]{35}|xox[baprs]-[a-z0-9-]{10,}|eyJ[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,})\b/gi;
-const HIGH_ENTROPY_QUOTED_PATTERN = /(["'])[a-z0-9+\/_-]{40,}={0,2}\1/gi;
+const HIGH_ENTROPY_QUOTED_PATTERN = /(["'])([a-z0-9+\/_-]{40,}={0,2})\1/gi;
 const BINARY_ARTIFACT_TYPES = new Set(["SCREENSHOT", "TRACE"]);
 const MAX_ARCHIVE_METADATA_BYTES = 4 * 1024 * 1024;
 const MAX_ARCHIVE_TOTAL_METADATA_BYTES = 16 * 1024 * 1024;

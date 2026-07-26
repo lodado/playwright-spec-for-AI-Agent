@@ -9,7 +9,7 @@ const MAX_PRIVATE_JSON_BYTES = 4 * 1024 * 1024;
 const REPORT_OPTIONS = new Set(["run-dir", "repository-root", "revision", "judgment"]);
 const REPORT_COMMANDS = new Set(["diagnose", "suggest-fix", "report"]);
 const COMMAND_OPTIONS = Object.freeze({
-  execute: new Set(["spec", "base-url", "run-dir"]),
+  execute: new Set(["spec", "base-url", "run-dir", "provider", "mode"]),
   judge: new Set(["run-dir"]),
   replay: new Set(["run-dir"]),
   diagnose: REPORT_OPTIONS,
@@ -17,7 +17,7 @@ const COMMAND_OPTIONS = Object.freeze({
   report: REPORT_OPTIONS,
 });
 const COMMAND_USAGE = Object.freeze({
-  execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id>",
+  execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> [--provider=playwright --mode=strict | --provider=hermes --mode=adaptive]",
   judge: "qa-native judge --run-dir=.qa/runs/<id>",
   replay: "qa-native replay --run-dir=.qa/runs/<id>",
   diagnose: "qa-native diagnose --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
@@ -177,6 +177,8 @@ function parseRequest(argv) {
         "repository-root": { type: "string" },
         revision: { type: "string" },
         judgment: { type: "string" },
+        provider: { type: "string" },
+        mode: { type: "string" },
       },
     });
   } catch {
@@ -196,12 +198,17 @@ function normalizeRequest(request, cwd) {
   const runDirectory = resolvePrivateQaPath(request.options["run-dir"], { cwd });
   if (request.command === "execute") {
     if (lstatIfExists(runDirectory)) throw new CliError("run directory already exists");
+    const provider = request.options.provider ?? "playwright";
+    const mode = request.options.mode ?? "strict";
+    if (!((provider === "playwright" && mode === "strict") || (provider === "hermes" && mode === "adaptive"))) throw new CliError("execution provider and mode combination is unsupported");
     return Object.freeze({
       command: request.command,
       cwd,
       runDirectory,
       specPath: resolveRegularInput(request.options.spec, { root: cwd, label: "spec" }),
       baseUrl: safeBaseUrl(request.options["base-url"]),
+      provider,
+      mode,
     });
   }
 

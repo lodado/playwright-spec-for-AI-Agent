@@ -1,5 +1,6 @@
 import {
   SEMANTIC_JUDGE_DECISION_VERSION,
+  canonicalHash,
   snapshotContract,
 } from "../contracts/index.mjs";
 import { redactSensitiveText } from "../evidence/index.mjs";
@@ -38,7 +39,11 @@ export function createHermesExecutionProposer({ transport = runHermes, secrets =
       requiredKeys: ["schemaVersion", "proposalId", "runId", "scenarioId", "milestoneId", "leaseId", "action", "parameters"],
       secrets,
     });
-    const proposal = snapshotContract("ExecutionActionProposal", raw);
+    const candidate = snapshotContract("ExecutionActionProposal", raw);
+    const proposal = snapshotContract("ExecutionActionProposal", {
+      ...candidate,
+      proposalId: `proposal-${canonicalHash({ input: snapshotContract("ExecutionAgentInput", input), action: candidate.action, parameters: candidate.parameters }).slice("sha256:".length, "sha256:".length + 16)}`,
+    });
     // ponytail: Hermes CLI exposes no usage metadata; serialized size is the conservative budget proxy until it does.
     const tokensUsed = Math.ceil((query.length + JSON.stringify(proposal).length) / 4);
     return Object.freeze({ proposal, tokensUsed });

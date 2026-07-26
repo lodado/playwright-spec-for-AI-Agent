@@ -1,18 +1,23 @@
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, rmSync } from "node:fs";
 import { basename, join, relative } from "node:path";
-import { TextDecoder } from "node:util";
 import { compilePlaywrightSpec } from "../adapter-playwright/index.mjs";
-import { createExecutionPlan } from "../core/index.mjs";
+import { RUNTIME_OUTCOME_VERSION, validateContract } from "../contracts/index.mjs";
+import { createAdaptiveExecutionInput, createExecutionPlan } from "../core/index.mjs";
 import { writeEvidenceArchive } from "../evidence/index.mjs";
-import { executeWithPlaywright, playwrightExecutionCapabilities } from "../provider-playwright/index.mjs";
+import { createHermesExecutionProposer } from "../provider-hermes/index.mjs";
+import { assertPlaywrightAdaptiveExecution, executeWithPlaywright, playwrightExecutionCapabilities, runAdaptiveWithPlaywright } from "../provider-playwright/index.mjs";
+import { validateAdaptiveExecutionEvidence } from "./qa-native-adaptive-evidence.mjs";
 import { createExclusiveQaDirectory, writePrivateJsonExclusive } from "./qa-native.mjs";
 
 const MAX_SPEC_BYTES = 4 * 1024 * 1024;
 
-export async function executeQaNative({ specPath, baseUrl, runDirectory, integrityKey, cwd }, overrides = {}) {
+export async function executeQaNative({ specPath, baseUrl, runDirectory, integrityKey, cwd, provider = "playwright", mode = "strict" }, overrides = {}) {
   const compile = overrides.compile ?? compilePlaywrightSpec;
   const plan = overrides.plan ?? createExecutionPlan;
   const execute = overrides.execute ?? executeWithPlaywright;
+  const createAdaptiveInput = overrides.createAdaptiveInput ?? createAdaptiveExecutionInput;
+  const createProposer = overrides.createProposer ?? createHermesExecutionProposer;
+  const executeAdaptive = overrides.executeAdaptive ?? runAdaptiveWithPlaywright;
   const writeArchive = overrides.writeArchive ?? writeEvidenceArchive;
   const projectRoot = realpathSync(cwd);
   let created = false;
@@ -23,11 +28,31 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
     const compileResult = compile({ source, sourcePath: relative(projectRoot, specPath) });
     if (!compileResult.ok) throw new Error("QA spec compilation failed");
     const qaIr = compileResult.qaIr;
-    const executionPlan = plan({ qaIr, providerCapabilities: playwrightExecutionCapabilities() });
-    const execution = await execute({ qaIr, plan: executionPlan, baseUrl, runId: basename(runDirectory) });
-    if (execution.outcome?.type !== "COMPLETED" || execution.bundles.length === 0 || execution.manifest === undefined) throw new Error("QA execution failed");
+    let execution;
+    let executionPlan;
+    let agentInput;
+    let agentOutcome;
+    let runtimeOutcome;
+    if (provider === "hermes" && mode === "adaptive") {
+      const scenarios = qaIr.suites.flatMap((suite) => suite.scenarios);
+      if (scenarios.length !== 1) throw new Error("adaptive execution currently requires exactly one scenario");
+      agentInput = createAdaptiveInput({ qaIr, scenarioId: scenarios[0].id, baseUrl, runId: basename(runDirectory) });
+      execution = await executeAdaptive({ input: agentInput, proposeAction: createProposer() });
+      assertPlaywrightAdaptiveExecution(execution);
+      agentOutcome = validateContract("ExecutionAgentOutcome", execution.outcome, { input: agentInput });
+      if (agentOutcome.type !== "COMPLETED") throw new Error("adaptive execution failed");
+      validateAdaptiveExecutionEvidence({ input: agentInput, ...execution, outcome: agentOutcome });
+      runtimeOutcome = validateContract("RuntimeOutcome", { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "execute", type: "COMPLETED" });
+    } else if (provider === "playwright" && mode === "strict") {
+      executionPlan = plan({ qaIr, providerCapabilities: playwrightExecutionCapabilities() });
+      execution = await execute({ qaIr, plan: executionPlan, baseUrl, runId: basename(runDirectory) });
+      runtimeOutcome = validateContract("RuntimeOutcome", execution.outcome);
+    } else {
+      throw new Error("execution provider and mode combination is unsupported");
+    }
+    if (runtimeOutcome.stage !== "execute" || runtimeOutcome.type !== "COMPLETED" || execution.bundles.length === 0 || execution.manifest === undefined) throw new Error("QA execution failed");
     writePrivateJsonExclusive(relative(cwd, join(runDirectory, "qa-ir.json")), qaIr, { cwd });
-    writePrivateJsonExclusive(relative(cwd, join(runDirectory, "execution-plan.json")), executionPlan, { cwd });
+    if (executionPlan !== undefined) writePrivateJsonExclusive(relative(cwd, join(runDirectory, "execution-plan.json")), executionPlan, { cwd });
     writeArchive({
       directory: join(runDirectory, "evidence"),
       bundles: execution.bundles,
@@ -35,7 +60,11 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
       readBlob: execution.readBlob,
       integrityKey,
     });
-    writePrivateJsonExclusive(relative(cwd, join(runDirectory, "run.json")), execution.outcome, { cwd });
+    if (agentInput !== undefined) {
+      writePrivateJsonExclusive(relative(cwd, join(runDirectory, "execution-agent-input.json")), agentInput, { cwd });
+      writePrivateJsonExclusive(relative(cwd, join(runDirectory, "execution-agent-outcome.json")), agentOutcome, { cwd });
+    }
+    writePrivateJsonExclusive(relative(cwd, join(runDirectory, "run.json")), runtimeOutcome, { cwd });
     return 0;
   } catch (error) {
     if (created) rmSync(runDirectory, { recursive: true, force: true });

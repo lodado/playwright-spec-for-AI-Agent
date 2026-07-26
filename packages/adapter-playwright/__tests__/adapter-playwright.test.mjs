@@ -26,6 +26,7 @@ describe("compilePlaywrightSpec", () => {
     });
     expect(first.qaIr.suites).toHaveLength(1);
     expect(first.qaIr.suites[0].scenarios).toHaveLength(1);
+    expect([first.qaIr.id, first.qaIr.suites[0].id, first.qaIr.suites[0].scenarios[0].id, ...first.qaIr.suites[0].scenarios[0].steps.map((step) => step.id), ...first.qaIr.suites[0].scenarios[0].expectations.map((expectation) => expectation.id)].every((id) => id.length <= 33)).toBe(true);
   });
 
   it("records per-test source provenance with exact line and column", () => {

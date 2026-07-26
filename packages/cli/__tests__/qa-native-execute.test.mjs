@@ -1,10 +1,12 @@
+import { createServer } from "node:http";
 import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { chromium } from "@playwright/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RUNTIME_OUTCOME_VERSION, validateContract } from "../../contracts/index.mjs";
+import { EXECUTION_ACTION_PROPOSAL_VERSION, RUNTIME_OUTCOME_VERSION, validateContract } from "../../contracts/index.mjs";
 import { createInMemoryEvidenceStore, readEvidenceArchive } from "../../evidence/index.mjs";
-import { playwrightExecutionCapabilities } from "../../provider-playwright/index.mjs";
+import { playwrightExecutionCapabilities, runAdaptiveWithPlaywright } from "../../provider-playwright/index.mjs";
 import { executeQaNative } from "../qa-native-execute.mjs";
 import { runQaNative } from "../qa-native.mjs";
 
@@ -90,6 +92,48 @@ describe("qa-native execute persistence", () => {
     expect(replay.readBlob(replay.bundles[0].artifacts[0].storageRef).toString("utf8")).toBe("Dashboard");
   });
 
+  it("persists explicit Hermes adaptive execution separately from the runtime outcome", async () => {
+    const cwd = project();
+    const server = createServer((_request, response) => response.end("<!doctype html><button>Dashboard</button>"));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const createProposer = vi.fn(() => async (input) => ({ tokensUsed: 0, proposal: { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: "proposal-complete", runId: input.runId, scenarioId: input.scenarioId, milestoneId: input.currentMilestoneId, leaseId: input.capabilityLease.leaseId, action: "observe_dom", parameters: {} } }));
+    let status;
+    try {
+      status = await runQaNative(["execute", "--spec=dashboard.spec.ts", `--base-url=http://127.0.0.1:${address.port}`, "--run-dir=.qa/runs/adaptive", "--provider=hermes", "--mode=adaptive"], {
+        cwd,
+        env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+        handlers: { execute: (args) => executeQaNative(args, { createProposer, executeAdaptive: (options) => runAdaptiveWithPlaywright({ ...options, browserType: chromium }) }) },
+        stdout: vi.fn(),
+        stderr: vi.fn(),
+      });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+
+    expect(status).toBe(0);
+    const runDirectory = join(cwd, ".qa", "runs", "adaptive");
+    expect(validateContract("ExecutionAgentInput", JSON.parse(readFileSync(join(runDirectory, "execution-agent-input.json"), "utf8")))).toBeTruthy();
+    expect(validateContract("ExecutionAgentOutcome", JSON.parse(readFileSync(join(runDirectory, "execution-agent-outcome.json"), "utf8")))).toBeTruthy();
+    expect(validateContract("RuntimeOutcome", JSON.parse(readFileSync(join(runDirectory, "run.json"), "utf8"))).type).toBe("COMPLETED");
+    expect(existsSync(join(runDirectory, "execution-plan.json"))).toBe(false);
+    expect(createProposer).toHaveBeenCalledOnce();
+  });
+
+  it("rejects adaptive completion output that did not originate from the Playwright gateway", async () => {
+    const cwd = project();
+    const status = await runQaNative(["execute", "--spec=dashboard.spec.ts", "--base-url=https://example.test", "--run-dir=.qa/runs/forged", "--provider=hermes", "--mode=adaptive"], {
+      cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+      handlers: { execute: (args) => executeQaNative(args, { createProposer: () => vi.fn(), executeAdaptive: async () => ({}) }) },
+      stdout: vi.fn(),
+      stderr: vi.fn(),
+    });
+
+    expect(status).toBe(1);
+    expect(existsSync(join(cwd, ".qa", "runs", "forged"))).toBe(false);
+  });
+
   it("removes the run directory when persistence fails", async () => {
     const cwd = project();
     const stderr = vi.fn();
@@ -119,6 +163,6 @@ describe("qa-native execute persistence", () => {
       "./cli/qa-native": "./packages/cli/qa-native.mjs",
       "./cli/qa-native-execute": "./packages/cli/qa-native-execute.mjs",
     });
-    expect(packageJson.files).toEqual(expect.arrayContaining(["packages/cli/qa-native.mjs", "packages/cli/qa-native-execute.mjs"]));
+    expect(packageJson.files).toEqual(expect.arrayContaining(["packages/cli/qa-native.mjs", "packages/cli/qa-native-execute.mjs", "packages/cli/qa-native-adaptive-evidence.mjs"]));
   });
 });
