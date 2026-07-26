@@ -69,10 +69,14 @@ describe("adaptive execution authorization", () => {
     crossOrigin.suites[0].scenarios[0].steps[0].target = { type: "URL", value: "https://attacker.test/collect" };
     expect(() => createAdaptiveExecutionInput({ qaIr: crossOrigin, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-cross-origin" })).toThrow(/base origin/);
 
-    const readonly = adaptiveQaIr();
-    readonly.suites[0].scenarios[0].steps = readonly.suites[0].scenarios[0].steps.filter((step) => step.kind !== "INTERACT");
-    readonly.suites[0].scenarios[0].expectations[0].kind = "NOT_VISIBLE";
-    expect(() => createAdaptiveExecutionInput({ qaIr: readonly, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-readonly" })).toThrow(/no adaptive milestones/);
+    const unsupported = adaptiveQaIr();
+    unsupported.suites[0].scenarios[0].expectations[0].kind = "NOT_VISIBLE";
+    expect(() => createAdaptiveExecutionInput({ qaIr: unsupported, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-unsupported" })).toThrow(/does not support expectation NOT_VISIBLE/);
+
+    const empty = adaptiveQaIr();
+    empty.suites[0].scenarios[0].steps = empty.suites[0].scenarios[0].steps.filter((step) => step.kind !== "INTERACT");
+    empty.suites[0].scenarios[0].expectations = [];
+    expect(() => createAdaptiveExecutionInput({ qaIr: empty, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-empty" })).toThrow(/no adaptive milestones/);
 
     const blocked = adaptiveQaIr();
     blocked.suites[0].scenarios[0].policy.click = "NONE";

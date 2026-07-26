@@ -148,13 +148,15 @@ export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId,
   if (scenario.policy.readDom !== true) throw policyError("execute", "adaptive DOM observation is blocked by scenario policy");
   if (navigationStep && scenario.policy.navigation !== "ALLOWED") throw policyError("execute", "adaptive startup navigation is blocked by scenario policy");
   if (interactionSteps.length > 0 && !["SAFE_ONLY", "ALL"].includes(scenario.policy.click)) throw policyError("execute", "adaptive interaction is blocked by scenario policy");
+  const unsupportedExpectations = scenario.expectations.filter((expectation) => !adaptiveSemanticExpectation(expectation));
+  if (unsupportedExpectations.length > 0) throw contractError("execute", `adaptive execution does not support expectation ${unsupportedExpectations[0].kind}`);
   const startUrl = adaptiveStartUrl(baseUrl, navigationStep);
   const milestones = [
     ...interactionSteps.map((step) => {
       if (step.action !== "CLICK") throw contractError("execute", `${step.action} is not supported by adaptive execution`);
       return { id: step.id, class: step.milestoneClass, status: "PENDING", description: `Perform required ${step.action.toLowerCase()} action.`, requiredAction: "click_observed_element", target: structuredClone(step.target) };
     }),
-    ...scenario.expectations.filter(adaptiveSemanticExpectation).map((expectation) => ({
+    ...scenario.expectations.map((expectation) => ({
       id: expectation.id,
       class: "REQUIRED_SEMANTIC_MILESTONE",
       status: "PENDING",
@@ -194,7 +196,7 @@ function adaptiveStartUrl(baseUrl, navigationStep) {
 }
 
 function adaptiveSemanticExpectation(expectation) {
-  if (!["VISIBLE", "PRESENT", "ROLE", "NAME", "CONTAINS_TEXT"].includes(expectation.kind) || expectation.target === undefined) return false;
+  if (!["VISIBLE", "PRESENT", "ROLE", "NAME"].includes(expectation.kind) || expectation.target === undefined) return false;
   return [expectation.target.accessibleName, expectation.target.text].every((match) => match === undefined || match.kind === "literal");
 }
 
