@@ -748,7 +748,9 @@ export function compareVariants({ baselineSessions = [], candidateSessions = [],
   const candidateRecords = candidateSessions.map(effectiveVariantSession);
   const baseline = variantMetrics(baselineRecords, baselinePrints, baselineFindings);
   const candidate = variantMetrics(candidateRecords, candidatePrints, candidateFindings);
-  const orderConsistency = orderResults.length < 2 || new Set(orderResults.map((item) => item.status ?? item)).size === 1;
+  const orderConsistency = orderResults.length < 2
+    ? "not_available"
+    : Number(new Set(orderResults.map((item) => item.status ?? item)).size === 1);
   const confidence = comparisonConfidence({ baselineRecords, candidateRecords, orderConsistency });
   let status = comparisonStatus({ baseline, candidate, orderConsistency });
   if (baselineRecords.length === 0 || candidateRecords.length === 0) status = "insufficient_evidence";
@@ -783,6 +785,7 @@ export function evaluateReleaseGate({ findings = [], comparisonReport, validityR
   const blockingFindings = findings.filter((finding) => failRules.some((rule) => findingMatchesRule(finding, rule, validityReport)));
   const warningFindings = findings.filter((finding) => !blockingFindings.includes(finding) && warnRules.some((rule) => findingMatchesRule(finding, rule, validityReport)));
   let conclusion = blockingFindings.length > 0 ? "failure" : (warningFindings.length > 0 ? "neutral" : "success");
+  if (comparisonReport?.status === "baseline_better" && conclusion === "success") conclusion = "neutral";
   if (comparisonReport?.status === "unstable" || validityReport?.recommendedUse === "human_validation_required") conclusion = "action_required";
   return Object.freeze({
     conclusion,
@@ -791,6 +794,7 @@ export function evaluateReleaseGate({ findings = [], comparisonReport, validityR
     infrastructureFailure: false,
     reasons: [
       ...(comparisonReport?.status === "unstable" ? ["variant comparison is unstable"] : []),
+      ...(comparisonReport?.status === "baseline_better" ? ["candidate regressed against baseline"] : []),
       ...(validityReport?.calibration?.level === "uncalibrated" ? ["synthetic results are uncalibrated"] : []),
       ...(blockingFindings.length > 0 ? ["blocking release gate finding matched"] : []),
     ],
@@ -821,7 +825,7 @@ function effectiveVariantSession(item) {
 }
 
 function comparisonStatus({ baseline, candidate, orderConsistency }) {
-  if (!orderConsistency) return "unstable";
+  if (orderConsistency === 0) return "unstable";
   const completionDelta = candidate.completionRate - baseline.completionRate;
   const abandonmentDelta = candidate.abandonmentRate - baseline.abandonmentRate;
   const actionDelta = candidate.medianActionCount - baseline.medianActionCount;
@@ -839,12 +843,13 @@ function comparisonConfidence({ baselineRecords, candidateRecords, orderConsiste
     seedStability: "not_available",
     modelAgreement: "not_available",
     calibrationConfidence: "not_available",
-    orderConsistency: orderConsistency ? 1 : 0,
-    overall: enoughPairs && orderConsistency ? "medium" : "low",
+    orderConsistency,
+    overall: enoughPairs && orderConsistency === 1 ? "medium" : "low",
     limitations: [
       ...(!enoughPairs ? ["Small variant sample; do not claim statistical significance."] : []),
       "Relative synthetic comparison only; no absolute conversion prediction.",
-      ...(!orderConsistency ? ["Input/execution order produced inconsistent comparison."] : []),
+      ...(orderConsistency === "not_available" ? ["Comparison order consistency was not measured."] : []),
+      ...(orderConsistency === 0 ? ["Input/execution order produced inconsistent comparison."] : []),
     ],
   };
 }

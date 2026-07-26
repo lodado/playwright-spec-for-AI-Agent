@@ -18,6 +18,7 @@ test("compares paired variant metrics as relative release evidence", () => {
   assert.equal(report.schemaVersion, "variant-comparison-report/0.1");
   assert.equal(report.status, "baseline_better");
   assert.equal(report.winner, "baseline");
+  assert.equal(report.delta.confidence.orderConsistency, 1);
   assert.ok(report.delta.completionDelta < 0);
   assert.ok(report.delta.confidence.limitations.some((item) => item.includes("Relative")));
 });
@@ -44,6 +45,18 @@ test("does not count runtime success when sealed functional evaluation failed", 
   assert.equal(report.baseline.completionRate, 1);
   assert.equal(report.candidate.completionRate, 0);
   assert.equal(report.candidate.failureRate, 1);
+  assert.equal(report.delta.confidence.orderConsistency, "not_available");
+  assert.ok(report.delta.confidence.limitations.some((item) => item.includes("not measured")));
+});
+
+test("release gate never reports a baseline-better comparison as success", () => {
+  const comparisonReport = { status: "baseline_better" };
+  const warning = evaluateReleaseGate({ comparisonReport });
+  const blocked = evaluateReleaseGate({ findings: [finding("f-critical", "critical", "reproduced_synthetic_finding", "high")], comparisonReport });
+
+  assert.equal(warning.conclusion, "neutral");
+  assert.match(warning.reasons.join(" "), /candidate regressed/);
+  assert.equal(blocked.conclusion, "failure");
 });
 
 test("release gate blocks reproduced critical behavioral findings but not uncalibrated exploratory singles", () => {

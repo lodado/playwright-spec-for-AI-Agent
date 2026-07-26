@@ -112,14 +112,14 @@ test("seal failure persists runtime_error instead of leaving a success artifact"
   assert.deepEqual(store.calls.at(-1), ["session", "RUNTIME_ERROR"]);
 });
 
-test("policy receives viewport-safe perception while raw observation remains evidence", async () => {
+test("policy preserves driver-safe visible text while raw observation remains evidence", async () => {
   let policyInput;
   const store = memoryStore();
   const driver = fakeDriver({ successAfterObserve: 99 });
   driver.observe = async () => ({
     page: { url: "http://127.0.0.1:4173/", title: "Fixture", viewport: { width: 390, height: 844 } },
     semantic: {
-      visibleText: ["Above fold", "Secret below fold"],
+      visibleText: ["Above fold"],
       headings: [
         { role: "heading", name: "Above fold", boundingBox: { x: 0, y: 20, width: 200, height: 30 } },
         { role: "heading", name: "Secret below fold", boundingBox: { x: 0, y: 1200, width: 200, height: 30 } },

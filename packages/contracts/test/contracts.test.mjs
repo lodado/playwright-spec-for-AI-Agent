@@ -79,6 +79,23 @@ test("StudySpec validates and round-trips without hidden custom evaluator execut
   assert.throws(() => validateStudySpec({ ...spec, unknown: true }), /unknown field/);
 });
 
+test("StudySpec rejects session identity collisions", () => {
+  const spec = studySpec();
+  assert.throws(() => validateStudySpec({ ...spec, tasks: [spec.tasks[0], { ...spec.tasks[0] }] }), /task id must be unique/);
+  assert.throws(() => validateStudySpec({ ...spec, personas: [{ preset: "same" }, { preset: "other", id: "same" }] }), /persona identity must be unique/);
+  assert.throws(() => validateStudySpec({ ...spec, runtime: { ...spec.runtime, seeds: [101, 101] } }), /seed must be unique/);
+  assert.throws(() => validateStudySpec({
+    ...spec,
+    comparison: {
+      baseline: { id: "same", baseUrl: "https://baseline.test" },
+      candidate: { id: "same", baseUrl: "https://candidate.test" },
+      assignment: "paired",
+      counterbalanceOrder: true,
+      metrics: ["task_completion"],
+    },
+  }), /must differ from baseline id/);
+});
+
 test("stable ids and hashes ignore property order, not runtime wording", () => {
   assert.equal(canonicalHash({ b: 2, a: 1 }), canonicalHash({ a: 1, b: 2 }));
   assert.equal(

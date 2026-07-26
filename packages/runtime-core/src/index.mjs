@@ -542,7 +542,7 @@ function buildPerceivedObservation(observation) {
   const landmarks = (semantic.landmarks ?? []).filter((node) => isViewportSafe(node, viewport));
   const interactiveElements = (semantic.interactiveElements ?? []).filter((node) => isViewportSafe(node, viewport));
   const visibleText = uniqueStrings([
-    ...(semantic.visibleText ?? []).filter((node) => isRecord(node) && isViewportSafe(node, viewport)).flatMap(textParts),
+    ...(semantic.visibleText ?? []).filter((text) => typeof text === "string"),
     ...headings.flatMap(textParts),
     ...landmarks.flatMap(textParts),
     ...interactiveElements.flatMap(textParts),

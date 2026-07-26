@@ -105,6 +105,7 @@ async function startSession({ input, browserType, launchOptions, now }) {
   const makeIssue = (kind, code, message, metadata = {}) => issue(kind, code, message, metadata, now, secretValues);
     const responseContentTypes = new Map();
     let policyViolation;
+    let actionInProgress = false;
     let initialNavigationComplete = false;
     await context.route("**/*", async (route) => {
       const request = route.request();
@@ -125,7 +126,7 @@ async function startSession({ input, browserType, launchOptions, now }) {
         violation = { code: "ACTION_NOT_ALLOWED", message: "State-mutating request is blocked by policy" };
       }
       if (violation) {
-        policyViolation = { ...violation, url: safeUrl(url, secretValues), method };
+        if (actionInProgress) policyViolation = { ...violation, url: safeUrl(url, secretValues), method };
       runtimeIssues.push(makeIssue("network", violation.code, violation.message, { url: safeUrl(url, secretValues), method }));
         await route.abort("blockedbyclient");
         return;
@@ -134,10 +135,11 @@ async function startSession({ input, browserType, launchOptions, now }) {
     });
     if (typeof context.routeWebSocket === "function") {
       await context.routeWebSocket("**/*", (socket) => {
-        const socketUrl = socket.url?.() ?? "unknown";
+      const socketUrl = socket.url?.() ?? "unknown";
       if (!safetyPolicy.allowStateMutation || socketUrl === "unknown" || !isAllowedOrigin(socketUrl, allowedOrigins)) {
-        policyViolation = { code: "ORIGIN_BLOCKED", message: "WebSocket blocked by safety policy", url: safeUrl(socketUrl, secretValues) };
-        runtimeIssues.push(makeIssue("network", "ORIGIN_BLOCKED", policyViolation.message, { url: safeUrl(socketUrl, secretValues) }));
+        const violation = { code: "ORIGIN_BLOCKED", message: "WebSocket blocked by safety policy", url: safeUrl(socketUrl, secretValues) };
+        if (actionInProgress) policyViolation = violation;
+        runtimeIssues.push(makeIssue("network", "ORIGIN_BLOCKED", violation.message, { url: violation.url }));
         socket.close();
       }
       });
@@ -191,7 +193,14 @@ async function startSession({ input, browserType, launchOptions, now }) {
       hadFailure: false,
       runtimeIssues,
       policyViolation: () => policyViolation,
-      setPolicyViolation(value) { policyViolation = value; },
+      beginAction(trackPolicyViolation) {
+        policyViolation = undefined;
+        actionInProgress = trackPolicyViolation;
+      },
+      endAction() {
+        actionInProgress = false;
+        policyViolation = undefined;
+      },
       lastObservation: undefined,
       handles: new Map(),
       closed: false,
@@ -267,6 +276,7 @@ async function executeAction(session, action, now) {
   let actionTarget;
   try {
     actionTarget = await assertActionAllowed(session, action);
+    session.beginAction(["click", "type", "select", "scroll", "back"].includes(action.type));
     if (action.type === "click") {
       await actionTarget.handle.click({ timeout: 10_000 });
     } else if (action.type === "type") {
@@ -322,6 +332,7 @@ async function executeAction(session, action, now) {
       message: safeErrorMessage(error),
     });
   } finally {
+    session.endAction();
     await actionTarget?.handle?.dispose?.().catch(() => undefined);
     await clearHandles(session);
     session.lastObservation = undefined;
@@ -486,7 +497,6 @@ async function captureSemantic(page) {
 async function assertActionAllowed(session, action) {
   if (!action || typeof action.type !== "string") throw policyError("ACTION_NOT_ALLOWED", "Invalid action");
   assertCurrentOrigin(session.page, session.navigationOrigins);
-  if (session.policyViolation()) throw policyError(session.policyViolation().code, session.policyViolation().message);
   const policy = session.safetyPolicy;
   const element = action.elementId ? session.lastObservation.semantic.interactiveElements.find((item) => item.id === action.elementId) : undefined;
   if (["click", "type", "select", "ignore"].includes(action.type) && !element) throw policyError("ELEMENT_NOT_FOUND", "Element was not in the latest perceived observation");
@@ -690,7 +700,14 @@ function safeUrl(value, secretValues = []) {
     url.password = "";
     url.search = "";
     url.hash = "";
-    return redactSecrets(url.toString(), secretValues);
+    try {
+      const pathname = decodeURIComponent(url.pathname);
+      const redactedPathname = redactRawSecrets(pathname, secretValues);
+      if (redactedPathname !== pathname) url.pathname = redactedPathname;
+      return redactRawSecrets(url.toString(), secretValues);
+    } catch {
+      return redactSecrets(url.toString(), secretValues);
+    }
   } catch {
     return "invalid-url";
   }
@@ -714,9 +731,21 @@ function issue(kind, code, message, metadata, now, secretValues = []) {
 }
 
 function redactSecrets(value, secretValues) {
+  return redactEncodedSecrets(redactRawSecrets(value, secretValues), secretValues);
+}
+
+function redactRawSecrets(value, secretValues) {
+  return secretValues.reduce((redacted, secret) => redacted.split(secret).join("[REDACTED]"), String(value));
+}
+
+function redactEncodedSecrets(value, secretValues) {
   return secretValues.reduce((redacted, secret) => {
-    const encoded = encodeURIComponent(secret);
-    return [secret, encoded, encoded.toLowerCase()].reduce((text, candidate) => text.split(candidate).join("[REDACTED]"), redacted);
+    try {
+      const encoded = encodeURIComponent(secret);
+      return [encoded, encoded.toLowerCase()].reduce((text, candidate) => text.split(candidate).join("[REDACTED]"), redacted);
+    } catch {
+      return redacted;
+    }
   }, String(value));
 }
 

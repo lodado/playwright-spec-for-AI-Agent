@@ -132,6 +132,24 @@ describe("playwright behavioral driver", () => {
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
   });
 
+  it("records blocked background requests without poisoning later actions", async () => {
+    if (!browserAvailable) return;
+    const app = await serve(`<script>fetch('/background',{method:'POST'}).catch(()=>{})</script><h1>Ready</h1>`);
+    const driver = createPlaywrightDriver({ browserType: chromium });
+    const dir = await tempDir();
+    const handle = await driver.start(input("background", app.url, dir, { allowStateMutation: false }));
+    const observation = await driver.observe(handle);
+
+    expect(observation.runtime.networkFailures).toContainEqual(expect.objectContaining({ severity: "ACTION_NOT_ALLOWED", method: "POST" }));
+    expect(await driver.execute(handle, { type: "wait", durationMs: 0, reasonCode: "settle" })).toMatchObject({ status: "success" });
+    await driver.observe(handle);
+    expect(await driver.execute(handle, { type: "wait", durationMs: 0, reasonCode: "settle_again" })).toMatchObject({ status: "success" });
+
+    await driver.close(handle);
+    await app.close();
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  });
+
   it("revalidates retained elements and excludes values and off-viewport semantics", async () => {
     if (!browserAvailable) return;
     const app = await serve(`<title>super-secret</title><h1>Visible heading</h1><p>Token: super-secret</p><input aria-label="API key" value="super-secret"><input type="checkbox" aria-label="Remember" checked><button id="swap">Continue</button><h2 style="position:absolute;top:2000px">Offscreen secret</h2><script>console.error('super-secret');setTimeout(()=>swap.replaceWith(Object.assign(document.createElement('button'),{textContent:'Continue'})),150)</script>`);
@@ -158,10 +176,11 @@ describe("playwright behavioral driver", () => {
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
   });
 
-  it("redacts plain and URL-encoded fixture secrets reflected in URL paths", async () => {
+  it("redacts mixed-case and fully percent-encoded fixture secrets reflected in URL paths", async () => {
     if (!browserAvailable) return;
-    const secret = "path/secret";
-    const encodedSecret = encodeURIComponent(secret);
+    const secret = "A/B";
+    const mixedCaseEncodedSecret = "A%2fB";
+    const fullyEncodedSecret = "%41%2F%42";
     const app = await serve(`<h1>Reflected path</h1>`);
     const driver = createPlaywrightDriver({ browserType: chromium });
     const dir = await tempDir();
@@ -170,7 +189,7 @@ describe("playwright behavioral driver", () => {
       environment: {
         baseUrl: app.url,
         allowedOrigins: [app.url],
-        startPath: `/reflected/${secret}/${encodedSecret}`,
+        startPath: `/reflected/${mixedCaseEncodedSecret}/${fullyEncodedSecret}`,
         viewport: { width: 390, height: 844 },
       },
       valueRefs: { token: secret },
@@ -180,10 +199,26 @@ describe("playwright behavioral driver", () => {
     const action = await driver.execute(handle, { type: "wait", durationMs: 0, reasonCode: "inspect" });
     const recorded = JSON.stringify({ observation, action });
     expect(recorded).not.toContain(secret);
-    expect(recorded.toLowerCase()).not.toContain(encodedSecret.toLowerCase());
+    expect(recorded.toLowerCase()).not.toContain(mixedCaseEncodedSecret.toLowerCase());
+    expect(recorded.toLowerCase()).not.toContain(fullyEncodedSecret.toLowerCase());
     expect(recorded).toContain("[REDACTED]");
 
     await driver.close(handle);
+    const malformedHandle = await driver.start({
+      ...input("malformed-path-secret", app.url, path.join(dir, "malformed"), {}),
+      environment: {
+        baseUrl: app.url,
+        allowedOrigins: [app.url],
+        startPath: `/malformed/%E0%A4%A/${encodeURIComponent(secret)}`,
+        viewport: { width: 390, height: 844 },
+      },
+      valueRefs: { token: secret },
+    });
+    const malformedRecorded = JSON.stringify(await driver.observe(malformedHandle));
+    expect(malformedRecorded.toLowerCase()).not.toContain(encodeURIComponent(secret).toLowerCase());
+    expect(malformedRecorded).toContain("[REDACTED]");
+
+    await driver.close(malformedHandle);
     await app.close();
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
   });

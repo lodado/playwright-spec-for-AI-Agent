@@ -96,6 +96,9 @@ export function validateStudySpec(value) {
   nonEmptyArray(value.tasks, "$.tasks").forEach((task, index) => validateTask(task, `$.tasks[${index}]`));
   nonEmptyArray(value.personas, "$.personas").forEach((persona, index) => validatePersona(persona, `$.personas[${index}]`));
   validateRuntimeConfig(value.runtime, "$.runtime");
+  uniqueIdentities(value.tasks, (task) => task.id, "$.tasks", "task id");
+  uniqueIdentities(value.personas, (persona) => persona.id ?? persona.preset, "$.personas", "persona identity");
+  uniqueIdentities(value.runtime.seeds, (seed) => seed, "$.runtime.seeds", "seed");
   validateEvidencePolicy(value.evidence, "$.evidence");
   validateEvaluationPolicy(value.evaluation, "$.evaluation");
   optional(value.comparison, validateVariantComparisonSpec, "$.comparison");
@@ -255,6 +258,7 @@ export function validateVariantComparisonSpec(value, path = "$") {
   object(value, path, ["baseline", "candidate", "assignment", "counterbalanceOrder", "metrics"]);
   validateVariantRef(value.baseline, `${path}.baseline`);
   validateVariantRef(value.candidate, `${path}.candidate`);
+  if (value.baseline.id === value.candidate.id) throw new ContractValidationError("must differ from baseline id", `${path}.candidate.id`);
   oneOf(value.assignment, ["paired", "independent"], `${path}.assignment`);
   boolean(value.counterbalanceOrder, `${path}.counterbalanceOrder`);
   arrayOf((metric, metricPath) => oneOf(metric, ["task_completion", "action_count", "backtrack", "failed_interaction", "abandonment", "finding_recurrence", "route_entropy"], metricPath))(value.metrics, `${path}.metrics`);
@@ -635,6 +639,15 @@ function nonEmptyArray(value, path) {
   array(value, path);
   if (value.length === 0) throw new ContractValidationError("must not be empty", path);
   return value;
+}
+
+function uniqueIdentities(values, identity, path, label) {
+  const seen = new Set();
+  values.forEach((value, index) => {
+    const id = identity(value);
+    if (seen.has(id)) throw new ContractValidationError(`${label} must be unique`, `${path}[${index}]`);
+    seen.add(id);
+  });
 }
 
 function arrayOf(validator) {

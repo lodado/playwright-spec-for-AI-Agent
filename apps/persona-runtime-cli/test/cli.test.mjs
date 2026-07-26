@@ -67,6 +67,41 @@ test("fake sessions generate sealed JSON and HTML without a model", async () => 
   await rm(root, { recursive: true, force: true });
 });
 
+test("variant comparison receives findings from their affected sessions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "persona-variant-"));
+  const variantStudy = structuredClone(study);
+  variantStudy.personas = [{ preset: "careful_business_buyer" }];
+  variantStudy.runtime.seeds = [101, 102];
+  variantStudy.tasks[0].successOracles = [{ id: "done", type: "visible_text", operation: "contains", value: "Complete" }];
+  variantStudy.comparison = {
+    baseline: { id: "baseline", baseUrl: "https://baseline.test" },
+    candidate: { id: "candidate", baseUrl: "https://candidate.test" },
+    assignment: "paired",
+    counterbalanceOrder: true,
+    metrics: ["task_completion", "finding_recurrence"],
+  };
+  const completed = await runPersonaStudy({
+    study: variantStudy,
+    outputDir: root,
+    driverFactory: () => variantDriver(),
+    policyFactory: () => {
+      let attempted = false;
+      return {
+        sampledPolicy: { seed: 1 },
+        decide() {
+          if (!attempted) { attempted = true; return { type: "click", elementId: "submit", reasonCode: "try_submit" }; }
+          return { type: "finish", reasonCode: "done" };
+        },
+      };
+    },
+  });
+  assert.ok(completed.variant.candidate.recurringFindingCount > completed.variant.baseline.recurringFindingCount);
+  assert.deepEqual(completed.variant.findingIds, completed.findings.map(finding => finding.id));
+  assert.equal(completed.variant.delta.confidence.orderConsistency, "not_available");
+  assert.match(await readFile(join(root, "reports/report.html"), "utf8"), /&quot;orderConsistency&quot;:\s*&quot;not_available&quot;/);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("checked oracle requires captured checked state", async () => {
   const root = await mkdtemp(join(tmpdir(), "persona-checked-"));
   const checkedStudy = structuredClone(study);
@@ -223,6 +258,33 @@ function fakeDriver() {
       };
     },
     async execute() { return { status: "success", evidenceIds: ["shot-1"], evidence: [] }; },
+    async close() { return { evidence: [] }; },
+  };
+}
+
+function variantDriver() {
+  let variant;
+  let complete = false;
+  return {
+    async start(input) { variant = input.variant; return {}; },
+    async observe() {
+      return {
+        page: { url: "https://example.test/task", title: "Task", viewport: { width: 390, height: 844 } },
+        semantic: {
+          visibleText: [complete ? "Complete" : "Ready"],
+          headings: [],
+          landmarks: [],
+          interactiveElements: [{ id: "submit", role: "button", name: "Submit", visible: true, enabled: true, viewportPosition: { inViewport: true } }],
+        },
+        visual: { screenshotEvidenceId: "shot-1" },
+        runtime: { consoleIssues: [], networkFailures: [], pendingRequestCount: 0, loadingIndicators: [] },
+        evidence: [{ id: "shot-1", type: "screenshot", contentHash: "sha256:fake", metadata: {} }],
+      };
+    },
+    async execute() {
+      if (variant === "baseline") complete = true;
+      return { status: variant === "baseline" ? "success" : "failure", evidenceIds: ["shot-1"], evidence: [] };
+    },
     async close() { return { evidence: [] }; },
   };
 }
