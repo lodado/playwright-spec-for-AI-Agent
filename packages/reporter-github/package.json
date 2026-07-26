@@ -1,0 +1,21 @@
+{
+  "name": "@persona-runtime/reporter-github",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Persona Runtime GitHub behavioral PR reporter.",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "build": "node --check src/index.mjs",
+    "typecheck": "node --check src/index.mjs && node --check test/*.test.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
