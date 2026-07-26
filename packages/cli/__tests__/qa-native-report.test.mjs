@@ -120,7 +120,7 @@ describe("qa-native GitHub Issue publication", () => {
       repository: "owner/example",
       publication: "ISSUE",
       action: "CREATED",
-      issue: { number: 42, url: "https://github.com/owner/example/issues/42" },
+      target: { publication: "ISSUE", number: 42, url: "https://github.com/owner/example/issues/42" },
     });
   });
 

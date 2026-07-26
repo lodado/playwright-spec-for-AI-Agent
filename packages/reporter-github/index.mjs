@@ -56,8 +56,10 @@ export async function publishGitHubFailureIssue({
   const targetRepository = repositorySlug(repository);
   validateInputs(input, secrets, targetRepository);
   const safeLabels = validateLabels(labels ?? issueLabels(input, secrets), secrets);
+  const publicationFingerprint = createFailureFingerprint({ ...input, secrets });
   const title = issueTitle(input, secrets);
-  const body = renderGitHubFailureIssue({ ...input, secrets });
+  const occurrence = { count: 1, firstSeen: input.evidenceBundle.capturedAt, lastSeen: input.evidenceBundle.capturedAt };
+  const body = renderGitHubFailureIssue({ ...input, publicationFingerprint, occurrence, secrets });
   const files = input.codeContext.snippets.map(({ path, contentHash }) => ({ path, contentHash }));
   if (await verifyCodeContext({ repository: targetRepository, revision: input.codeContext.revision, files }) !== true) throw new Error("GitHub repository does not match the pinned Code Context");
   const published = await transport({ repository: targetRepository, title, body, labels: safeLabels });
@@ -67,7 +69,8 @@ export async function publishGitHubFailureIssue({
     repository,
     publication: "ISSUE",
     action: "CREATED",
-    issue: { number: published.number, url: published.url },
+    target: { publication: "ISSUE", number: published.number, url: published.url },
+    occurrence,
     source: {
       runId: input.evidenceBundle.runId,
       judgeResultId: input.judgeResult.resultId,
@@ -75,11 +78,30 @@ export async function publishGitHubFailureIssue({
       codeContextBundleId: input.codeContext.bundleId,
       ...(input.recommendation ? { repairRecommendationId: input.recommendation.recommendationId } : {}),
     },
-    publicationFingerprint: "UNASSIGNED",
+    publicationFingerprint,
   });
 }
 
-export function renderGitHubFailureIssue({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, recommendation, secrets = [] } = {}) {
+export function createFailureFingerprint({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, secrets = [] } = {}) {
+  const input = jsonSnapshot({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext });
+  validateInputs(input, secrets);
+  const expectationIds = input.judgeResult.expectationResults
+    .filter((result) => !["MATCHED", "NOT_APPLICABLE"].includes(result.status))
+    .map((result) => result.expectationId)
+    .sort();
+  return canonicalHash({
+    scenarioId: input.evidenceBundle.scenarioId,
+    expectationIds,
+    failureOrigin: input.diagnosis.origin,
+    normalizedSymptom: input.diagnosis.symptom.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 1_000),
+    route: fingerprintRoute(input.evidenceBundle.environment.targetUrl),
+    componentHint: [...input.codeContext.candidates].sort((left, right) => right.relevanceScore - left.relevanceScore || (left.path < right.path ? -1 : left.path > right.path ? 1 : 0))[0]?.path ?? "UNLOCATED",
+  });
+}
+
+export function renderGitHubFailureIssue({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, recommendation, publicationFingerprint = createFailureFingerprint({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, secrets }), occurrence = { count: 1, firstSeen: evidenceBundle?.capturedAt, lastSeen: evidenceBundle?.capturedAt }, secrets = [] } = {}) {
+  if (!/^sha256:[0-9a-f]{64}$/.test(publicationFingerprint)) throw new Error("GitHub publication fingerprint is invalid");
+  if (!occurrence || !Number.isSafeInteger(occurrence.count) || occurrence.count < 1 || occurrence.count > Number.MAX_SAFE_INTEGER || typeof occurrence.firstSeen !== "string" || occurrence.firstSeen.length === 0 || occurrence.firstSeen.length > 128 || typeof occurrence.lastSeen !== "string" || occurrence.lastSeen.length === 0 || occurrence.lastSeen.length > 128) throw new Error("GitHub publication occurrence is invalid");
   const input = jsonSnapshot({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, recommendation });
   validateInputs(input, secrets);
   const scenario = input.qaIr.suites.flatMap((suite) => suite.scenarios).find((item) => item.id === input.evidenceBundle.scenarioId);
@@ -104,6 +126,9 @@ export function renderGitHubFailureIssue({ qaIr, judgeResult, evidenceBundle, di
     `- Run: ${code(input.evidenceBundle.runId, secrets)}`,
     `- Judge Result: ${code(input.judgeResult.resultId, secrets)}`,
     `- Repository revision: ${code(input.codeContext.revision, secrets)}`,
+    `- Occurrence count: **${occurrence.count}**`,
+    `- First seen: ${code(occurrence.firstSeen, secrets)}`,
+    `- Last seen: ${code(occurrence.lastSeen, secrets)}`,
     "",
     "## Symptom",
     "",
@@ -142,6 +167,7 @@ export function renderGitHubFailureIssue({ qaIr, judgeResult, evidenceBundle, di
     `Code context: ${code(input.codeContext.bundleId, secrets)}`,
     ...(input.recommendation ? [`Repair recommendation: ${code(input.recommendation.recommendationId, secrets)}`] : []),
     "",
+    `<!-- qa-fingerprint: ${publicationFingerprint} -->`,
   ];
   const body = lines.join("\n");
   if (body.length > 65_536) throw new Error("GitHub Issue body exceeds size limit");
@@ -216,6 +242,17 @@ function safeUrl(value, secrets) {
 
 function safeRunId(value) {
   return /^[A-Za-z0-9._-]{1,128}$/.test(value) ? value : "REPLACE_WITH_RUN_ID";
+}
+
+function fingerprintRoute(value) {
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol)) return "unavailable";
+    const depth = url.pathname.split("/").filter(Boolean).length;
+    return depth === 0 ? "/" : `/${Array(depth).fill(":segment").join("/")}`;
+  } catch {
+    return "unavailable";
+  }
 }
 
 function labelSlug(value) {

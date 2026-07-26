@@ -3,22 +3,24 @@ import { compilePlaywrightSpec } from "../../adapter-playwright/index.mjs";
 import { CODE_CONTEXT_VERSION, JUDGE_RESULT_VERSION, PROVIDER_CAPABILITIES_VERSION, canonicalHash, validateContract } from "../../contracts/index.mjs";
 import { createInMemoryEvidenceStore } from "../../evidence/index.mjs";
 import { diagnoseFailure } from "../../remediation/index.mjs";
-import { publishGitHubFailureIssue } from "../index.mjs";
+import { createFailureFingerprint, publishGitHubFailureIssue, renderGitHubFailureIssue } from "../index.mjs";
 
-function fixture() {
+function fixture({ runId = "run-1", targetUrl = "https://user:secret@example.test/dashboard?token=secret", origin = "PRODUCT_CODE" } = {}) {
   const qaIr = compilePlaywrightSpec({ source: `// @qa-scenario: DASHBOARD_READONLY\ntest.describe("dashboard", () => {\n  // @qa-live-policy: readonly\n  test("shows dashboard", async ({ page }) => {\n    await expect(page.getByText("Welcome Dashboard")).toBeVisible();\n  });\n});`, sourcePath: "dashboard.spec.ts" }).qaIr;
   const scenario = qaIr.suites[0].scenarios[0];
   const expectation = scenario.expectations[0];
   const store = createInMemoryEvidenceStore({ providerCapabilities: { schemaVersion: PROVIDER_CAPABILITIES_VERSION, providerId: "fixture", actions: [], evidence: ["VISIBLE_TEXT"] } });
   const artifact = store.captureArtifact({ id: "visible-text", type: "VISIBLE_TEXT", contentType: "text/plain", content: "Dashboard unavailable" });
-  const evidenceBundle = store.createBundle({ runId: "run-1", scenarioId: scenario.id, checkpointId: "final", capturedAt: "2026-07-26T00:00:00.000Z", environment: { targetUrl: "https://user:secret@example.test/dashboard?token=secret", browser: "chromium", viewport: { width: 1280, height: 720 } }, artifacts: [artifact], facts: [] });
+  const fact = { id: "api-error", kind: "API_CONTRACT_ERROR", value: "schema mismatch" };
+  const evidenceRefs = origin === "API_CONTRACT" ? [fact.id] : [artifact.id];
+  const evidenceBundle = store.createBundle({ runId, scenarioId: scenario.id, checkpointId: "final", capturedAt: "2026-07-26T00:00:00.000Z", environment: { targetUrl, browser: "chromium", viewport: { width: 1280, height: 720 } }, artifacts: [artifact], facts: origin === "API_CONTRACT" ? [fact] : [] });
   const judgeBody = {
     schemaVersion: JUDGE_RESULT_VERSION,
     qaIrId: qaIr.id,
     evidenceBundleId: evidenceBundle.bundleId,
     verdict: "FAIL",
     confidence: 0.82,
-    expectationResults: [{ expectationId: expectation.id, status: "CONTRADICTED", confidence: 0.82, evidenceRefs: [artifact.id], rationale: "Expected dashboard copy is missing. SESSION-SECRET ![x](https://attacker.test) @org/team" }],
+    expectationResults: [{ expectationId: expectation.id, status: "CONTRADICTED", confidence: 0.82, evidenceRefs, rationale: "Expected dashboard copy is missing. SESSION-SECRET ![x](https://attacker.test) @org/team" }],
     uncertainty: [],
     judge: { provider: "hermes", model: "fixture", promptVersion: "judge/0.1" },
     inputHash: canonicalHash({ qaIrId: qaIr.id, evidenceBundleId: evidenceBundle.bundleId }),
@@ -47,7 +49,7 @@ describe("GitHub failure Issue reporter", () => {
     const verifyCodeContext = vi.fn(async () => true);
     const result = await publishGitHubFailureIssue({ repository: "Owner/Example", ...input, verifyCodeContext, transport: async (request) => { transport(request); return { number: 42, url: "https://github.com/owner/example/issues/42" }; } });
 
-    expect(validateContract("GitHubPublicationResult", result)).toMatchObject({ action: "CREATED", issue: { number: 42 }, publicationFingerprint: "UNASSIGNED" });
+    expect(validateContract("GitHubPublicationResult", result)).toMatchObject({ action: "CREATED", target: { publication: "ISSUE", number: 42 }, publicationFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) });
     const request = transport.mock.calls[0][0];
     expect(request.labels).toEqual(expect.arrayContaining(["qa-runtime", "auto-generated", "origin:product-code"]));
     expect(request.title).toMatch(/^\[QA\]/);
@@ -57,8 +59,31 @@ describe("GitHub failure Issue reporter", () => {
     expect(request.body).not.toContain("example.test");
     expect(request.body).toContain("qa-native replay --run-dir=.qa/runs/run-1");
     expect(request.body).not.toMatch(/!\[x\]\(|@org\/team/);
+    expect(request.body).toContain(`<!-- qa-fingerprint: ${result.publicationFingerprint} -->`);
     expect(JSON.stringify(request)).not.toMatch(/SESSION-SECRET|user:secret|token=secret|export function/);
     expect(verifyCodeContext).toHaveBeenCalledWith({ repository: "Owner/Example", revision: "a".repeat(40), files: [{ path: "src/Dashboard.jsx", contentHash: `sha256:${"b".repeat(64)}` }] });
+  });
+
+  it("fingerprints stable failure meaning without run, query, credential, or evidence IDs", () => {
+    const first = fixture();
+    const second = fixture({ runId: "run-999", targetUrl: "https://other:credential@example.test/dashboard?new=secret#fragment" });
+    expect(createFailureFingerprint(first)).toBe(createFailureFingerprint(second));
+
+    const changed = fixture({ origin: "API_CONTRACT" });
+    expect(createFailureFingerprint(changed)).not.toBe(createFailureFingerprint(first));
+
+    const reordered = fixture();
+    const secondary = { ...reordered.codeContext.candidates[0], path: "src/Secondary.jsx", relevanceScore: 0.2 };
+    const secondarySnippet = { ...reordered.codeContext.snippets[0], path: secondary.path, contentHash: `sha256:${"c".repeat(64)}` };
+    const { bundleId: _bundleId, ...contextBody } = structuredClone(reordered.codeContext);
+    const codeContextBody = { ...contextBody, candidates: [secondary, ...contextBody.candidates], snippets: [secondarySnippet, ...contextBody.snippets] };
+    const codeContext = { ...codeContextBody, bundleId: `code-context-${canonicalHash(codeContextBody).slice("sha256:".length, "sha256:".length + 16)}` };
+    const reversedBody = { ...codeContextBody, candidates: [...codeContextBody.candidates].reverse(), snippets: [...codeContextBody.snippets].reverse() };
+    const reversed = { ...reversedBody, bundleId: `code-context-${canonicalHash(reversedBody).slice("sha256:".length, "sha256:".length + 16)}` };
+    expect(createFailureFingerprint({ ...reordered, codeContext })).toBe(createFailureFingerprint({ ...reordered, codeContext: reversed }));
+
+    expect(() => createFailureFingerprint({ ...first, codeContext: { ...structuredClone(first.codeContext), failureDiagnosisId: "diagnosis-other" } })).toThrow(/does not belong/);
+    expect(() => renderGitHubFailureIssue({ ...first, publicationFingerprint: "sha256:bad" })).toThrow(/fingerprint/);
   });
 
   it("rejects PASS publication and invalid transport results", async () => {

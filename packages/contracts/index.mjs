@@ -22,7 +22,7 @@ export const SEMANTIC_JUDGE_DECISION_VERSION = "semantic-judge-decision/0.1";
 export const FAILURE_DIAGNOSIS_VERSION = "failure-diagnosis/0.1";
 export const CODE_CONTEXT_VERSION = "code-context/0.1";
 export const REPAIR_RECOMMENDATION_VERSION = "repair-recommendation/0.1";
-export const GITHUB_PUBLICATION_RESULT_VERSION = "github-publication-result/0.1";
+export const GITHUB_PUBLICATION_RESULT_VERSION = "github-publication-result/0.2";
 
 export const VERDICTS = Object.freeze(["PASS", "FAIL", "SKIP", "MANUAL_REVIEW"]);
 export const EXPECTATION_STATUSES = Object.freeze(["MATCHED", "CONTRADICTED", "NOT_OBSERVED", "AMBIGUOUS", "NOT_APPLICABLE"]);
@@ -1005,23 +1005,48 @@ function validateRepairRecommendation(value, path, context = {}) {
 function validateGitHubPublicationResult(value, path) {
   const contract = "GitHubPublicationResult";
   object(value, path, contract);
-  allowedKeys(value, ["schemaVersion", "repository", "publication", "action", "issue", "source", "publicationFingerprint"], path, contract);
+  allowedKeys(value, ["schemaVersion", "repository", "publication", "action", "target", "matches", "occurrence", "source", "publicationFingerprint"], path, contract);
   exact(value.schemaVersion, GITHUB_PUBLICATION_RESULT_VERSION, `${path}.schemaVersion`, contract);
   repositorySlug(value.repository, `${path}.repository`, contract);
-  exact(value.publication, "ISSUE", `${path}.publication`, contract);
-  exact(value.action, "CREATED", `${path}.action`, contract);
-  object(value.issue, `${path}.issue`, contract);
-  allowedKeys(value.issue, ["number", "url"], `${path}.issue`, contract);
-  boundedInteger(value.issue.number, 1, Number.MAX_SAFE_INTEGER, `${path}.issue.number`, contract);
-  boundedString(value.issue.url, 2_048, `${path}.issue.url`, contract);
-  let issueUrl;
-  try { issueUrl = new URL(value.issue.url); } catch { fail(contract, `${path}.issue.url`, "must be a GitHub Issue URL"); }
-  if (issueUrl?.protocol !== "https:" || issueUrl.hostname !== "github.com" || issueUrl.port || issueUrl.username || issueUrl.password || issueUrl.search || issueUrl.hash || issueUrl.pathname.toLowerCase() !== `/${value.repository}/issues/${value.issue.number}`.toLowerCase()) fail(contract, `${path}.issue.url`, "must match the published GitHub Issue");
+  oneOf(value.publication, ["ISSUE", "DRAFT_PR", "UNRESOLVED"], `${path}.publication`, contract);
+  oneOf(value.action, ["CREATED", "UPDATED", "NOOP", "AMBIGUOUS"], `${path}.action`, contract);
+  if (value.action === "AMBIGUOUS") {
+    exact(value.publication, "UNRESOLVED", `${path}.publication`, contract);
+    if (value.target !== undefined || value.occurrence !== undefined) fail(contract, path, "ambiguous publication cannot select a target");
+    array(value.matches, `${path}.matches`, contract);
+    if (value.matches.length < 2 || value.matches.length > 10) fail(contract, `${path}.matches`, "must contain 2 to 10 matches");
+    value.matches.forEach((match, index) => validateGitHubPublicationTarget(match, `${path}.matches[${index}]`, value.repository, contract));
+    const matchKeys = value.matches.map((match) => `${match.publication}:${match.number}`);
+    if (new Set(matchKeys).size !== matchKeys.length) fail(contract, `${path}.matches`, "must contain unique publications");
+  } else {
+    oneOf(value.publication, ["ISSUE", "DRAFT_PR"], `${path}.publication`, contract);
+    if (value.matches !== undefined) fail(contract, `${path}.matches`, "is only allowed for ambiguous publication");
+    validateGitHubPublicationTarget(value.target, `${path}.target`, value.repository, contract);
+    exact(value.target.publication, value.publication, `${path}.target.publication`, contract);
+    object(value.occurrence, `${path}.occurrence`, contract);
+    allowedKeys(value.occurrence, ["count", "firstSeen", "lastSeen"], `${path}.occurrence`, contract);
+    boundedInteger(value.occurrence.count, 1, Number.MAX_SAFE_INTEGER, `${path}.occurrence.count`, contract);
+    boundedString(value.occurrence.firstSeen, 128, `${path}.occurrence.firstSeen`, contract);
+    boundedString(value.occurrence.lastSeen, 128, `${path}.occurrence.lastSeen`, contract);
+    if (value.action === "CREATED" && value.occurrence.count !== 1) fail(contract, `${path}.occurrence.count`, "must be 1 for a created publication");
+  }
   object(value.source, `${path}.source`, contract);
   allowedKeys(value.source, ["runId", "judgeResultId", "failureDiagnosisId", "codeContextBundleId", "repairRecommendationId"], `${path}.source`, contract);
   for (const key of ["runId", "judgeResultId", "failureDiagnosisId", "codeContextBundleId"]) boundedString(value.source[key], 512, `${path}.source.${key}`, contract);
   if (value.source.repairRecommendationId !== undefined) boundedString(value.source.repairRecommendationId, 512, `${path}.source.repairRecommendationId`, contract);
-  exact(value.publicationFingerprint, "UNASSIGNED", `${path}.publicationFingerprint`, contract);
+  sha256Hash(value.publicationFingerprint, `${path}.publicationFingerprint`, contract);
+}
+
+function validateGitHubPublicationTarget(value, path, repository, contract) {
+  object(value, path, contract);
+  allowedKeys(value, ["publication", "number", "url"], path, contract);
+  oneOf(value.publication, ["ISSUE", "DRAFT_PR"], `${path}.publication`, contract);
+  boundedInteger(value.number, 1, Number.MAX_SAFE_INTEGER, `${path}.number`, contract);
+  boundedString(value.url, 2_048, `${path}.url`, contract);
+  let url;
+  try { url = new URL(value.url); } catch { fail(contract, `${path}.url`, "must be a GitHub publication URL"); }
+  const segment = value.publication === "ISSUE" ? "issues" : "pull";
+  if (url?.protocol !== "https:" || url.hostname !== "github.com" || url.port || url.username || url.password || url.search || url.hash || url.pathname.toLowerCase() !== `/${repository}/${segment}/${value.number}`.toLowerCase()) fail(contract, `${path}.url`, "must match the GitHub publication");
 }
 
 function validateSourceProvenance(value, path, contract) {
