@@ -130,11 +130,19 @@ function stepsFromLegacy(legacy, test, discriminator, expectations, interactions
 }
 
 function normalizeExpectations(expectations, body, parseBody) {
-  if (expectations.length > 0) return expectations;
-  if (!parseBody) return [];
+  if (!parseBody) return expectations;
   const parsed = parseReadOnlyExpectations(body);
-  if (parsed.length > 0) return parsed;
+  const roleVisibility = parseRoleVisibilityExpectations(body);
+  if (expectations.length > 0) return [...expectations, ...roleVisibility];
+  if (parsed.length > 0 || roleVisibility.length > 0) return [...parsed, ...roleVisibility];
   return parseRegexContainTextExpectations(body);
+}
+
+function parseRoleVisibilityExpectations(body) {
+  return [...body.matchAll(/expect\(\s*page\.getByRole\(\s*(["'])([^"'\\]*)\1\s*,\s*\{\s*name\s*:\s*(["'])([^"'\\]*)\3\s*\}\s*\)\s*\)\.toBeVisible\(\s*\)/g)].map((match) => ({
+    type: "visible",
+    locator: { kind: "role", role: match[2], name: match[4] },
+  }));
 }
 
 function parseExecutableInteraction(body) {
@@ -160,6 +168,7 @@ function parseExecutableInteraction(body) {
 
 function isSupportedInteractionAssertion(line) {
   return /^await\s+expect\(\s*page\.(?:getByTestId|getByText)\(\s*(["'])([^"'\\]*)\1\s*\)\s*\)(?:\.not)?\.toBeVisible\(\s*\)\s*;?$/.test(line)
+    || /^await\s+expect\(\s*page\.getByRole\(\s*(["'])([^"'\\]*)\1\s*,\s*\{\s*name\s*:\s*(["'])([^"'\\]*)\3\s*\}\s*\)\s*\)\.toBeVisible\(\s*\)\s*;?$/.test(line)
     || /^await\s+expect\(\s*page\.(?:getByTestId|getByText)\(\s*(["'])([^"'\\]*)\1\s*\)\s*\)\.toContainText\(\s*(["'])([^"'\\]*)\3\s*\)\s*;?$/.test(line)
     || /^await\s+expect\(\s*page\.(?:getByTestId|getByText)\(\s*(["'])([^"'\\]*)\1\s*\)\s*\)\.toContainText\(\s*\/((?:\\\/|[^/])+?)\/\s*\)\s*;?$/.test(line);
 }

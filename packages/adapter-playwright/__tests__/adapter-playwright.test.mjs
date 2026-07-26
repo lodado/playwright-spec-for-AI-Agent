@@ -147,6 +147,19 @@ describe("compilePlaywrightSpec", () => {
     ]);
   });
 
+  it("preserves literal role and accessible-name dialog expectations for adaptive milestones", () => {
+    const source = `// @qa-scenario: DIALOG\n// @qa-page: /settings\n// @qa-live-policy: safe-interaction\ntest("dialog", async ({ page }) => {\n  await page.getByTestId("settings").click();\n  await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();\n});\n`;
+
+    const result = compilePlaywrightSpec({ source, sourcePath: "dialog.spec.ts" });
+
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.qaIr.suites[0].scenarios[0].expectations).toMatchObject([{
+      kind: "VISIBLE",
+      target: { role: "dialog", accessibleName: { kind: "literal", value: "Settings" } },
+    }]);
+  });
+
   it("fails executable interactions atomically when any action is unsupported", () => {
     const interaction = `// @qa-scenario: MIXED\n// @qa-live-policy: safe-interaction\ntest("mixed", async ({ page }) => {\n  // await page.getByTestId("comment-only").click();\n  await page.getByTestId("menu").click();\n  await page.locator(".unsafe").click();\n  await page.getByTestId("name").fill("value");\n  await expect(page.locator(".result")).toHaveCount(1);\n});\n`;
     const result = compilePlaywrightSpec({ source: interaction, sourcePath: "mixed.spec.ts" });
