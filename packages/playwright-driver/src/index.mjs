@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 const DEFAULT_STABILIZATION = Object.freeze({ domQuietMs: 100, maxWaitMs: 2_500, ignoreUrlPatterns: [], loadingSelectorHints: [] });
@@ -19,6 +19,14 @@ const INTERACTIVE_SELECTOR = [
   "[contenteditable='true']",
 ].join(",");
 const DESTRUCTIVE_PATTERN = /\b(pay|payment|checkout|purchase|subscribe|unsubscribe|billing|delete|remove|destroy|archive|cancel plan|confirm|send|transfer|wire|결제|구독|삭제|탈퇴|해지|확인|송금)\b/i;
+const FORBIDDEN_ACTION_PATTERNS = Object.freeze({
+  payment: /\b(pay|payment|checkout|purchase|billing|transfer|wire|결제|송금)\b/i,
+  subscription_change: /\b(subscribe|unsubscribe|subscription|cancel plan|구독|해지)\b/i,
+  account_delete: /\b(delete|remove|close)\s+(my\s+)?account\b|\b(account_delete|탈퇴)\b/i,
+  data_delete: /\b(delete|remove|destroy|archive)\b|\b(data_delete|삭제)\b/i,
+  send_message: /\b(send|submit)\s+(message|email|mail)\b|\bsend_message\b/i,
+  confirm_destructive: DESTRUCTIVE_PATTERN,
+});
 
 /**
  * Creates a behavioral BrowserDriver backed by direct Playwright. Runtime callers only receive opaque
@@ -58,10 +66,16 @@ export function createPlaywrightDriver({ browserType, browserName = "chromium", 
 async function startSession({ input, browserType, launchOptions, now }) {
   const sessionId = requiredString(input.sessionId, "sessionId");
   const environment = input.environment ?? {};
-  const baseUrl = requiredString(environment.baseUrl, "environment.baseUrl");
+  const baseUrl = httpUrl(requiredString(environment.baseUrl, "environment.baseUrl"), "environment.baseUrl");
   const startUrl = resolveStartUrl(baseUrl, environment.startPath);
   const allowedOrigins = normalizeOrigins(environment.allowedOrigins?.length ? environment.allowedOrigins : [new URL(baseUrl).origin]);
   assertAllowedOrigin(startUrl, allowedOrigins);
+  const baseOrigin = new URL(baseUrl).origin;
+  const safetyPolicy = normalizeSafetyPolicy(input.safetyPolicy);
+  const navigationOrigins = safetyPolicy.allowExternalOrigin ? allowedOrigins : [baseOrigin];
+  assertAllowedOrigin(startUrl, navigationOrigins);
+  const evidencePolicy = normalizeEvidencePolicy(input.evidencePolicy ?? input.study?.evidence);
+  const storageState = environment.storageStatePath ? await resolveStorageStatePath(environment.storageStatePath) : undefined;
   const evidenceDir = path.resolve(input.evidenceDir ?? path.join(".qa", "sessions", sessionId));
   const screenshotDir = path.join(evidenceDir, "screenshots");
   const tracePath = path.join(evidenceDir, "trace.zip");
@@ -76,19 +90,37 @@ async function startSession({ input, browserType, launchOptions, now }) {
       viewport: environment.viewport ?? { width: 1280, height: 720 },
       locale: environment.locale,
       timezoneId: environment.timezoneId,
-      storageState: environment.storageStatePath,
+      storageState,
       acceptDownloads: true,
       downloadsPath,
       serviceWorkers: "block",
+      ...(evidencePolicy.video === "off" ? {} : { recordVideo: { dir: path.join(evidenceDir, "videos") } }),
     });
     const runtimeIssues = [];
+    const responseContentTypes = new Map();
     let policyViolation;
+    let initialNavigationComplete = false;
     await context.route("**/*", async (route) => {
       const request = route.request();
       const url = request.url();
+      const method = request.method?.() ?? "GET";
+      const isNavigation = request.isNavigationRequest?.() === true;
+      const contentType = request.headers?.()["content-type"] ?? "";
+      let violation;
       if (!isAllowedOrigin(url, allowedOrigins) || hasCredentials(url)) {
-        policyViolation = { code: "ORIGIN_BLOCKED", message: "Blocked request outside allowedOrigins", url: safeUrl(url), method: request.method?.() };
-        runtimeIssues.push(issue("network", "ORIGIN_BLOCKED", policyViolation.message, { url: safeUrl(url), method: request.method?.() }, now));
+        violation = { code: "ORIGIN_BLOCKED", message: "Blocked request outside allowedOrigins" };
+      } else if (initialNavigationComplete && isNavigation && !safetyPolicy.allowNavigation) {
+        violation = { code: "ACTION_NOT_ALLOWED", message: "Navigation is blocked by policy" };
+      } else if (initialNavigationComplete && isNavigation && !isAllowedOrigin(url, navigationOrigins)) {
+        violation = { code: "ORIGIN_BLOCKED", message: "External-origin navigation is blocked by policy" };
+      } else if (!safetyPolicy.allowFileUpload && /^multipart\/form-data\b/i.test(contentType)) {
+        violation = { code: "ACTION_NOT_ALLOWED", message: "File upload is blocked by policy" };
+      } else if (!safetyPolicy.allowStateMutation && !["GET", "HEAD"].includes(method.toUpperCase())) {
+        violation = { code: "ACTION_NOT_ALLOWED", message: "State-mutating request is blocked by policy" };
+      }
+      if (violation) {
+        policyViolation = { ...violation, url: safeUrl(url), method };
+        runtimeIssues.push(issue("network", violation.code, violation.message, { url: safeUrl(url), method }, now));
         await route.abort("blockedbyclient");
         return;
       }
@@ -104,7 +136,7 @@ async function startSession({ input, browserType, launchOptions, now }) {
         }
       });
     }
-    await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
+    if (evidencePolicy.trace) await context.tracing.start({ screenshots: true, snapshots: false, sources: false });
     const page = await context.newPage();
     page.on("console", (message) => {
       if (["error", "warning", "warn"].includes(message.type())) runtimeIssues.push(issue("console", message.type(), truncate(message.text(), 2_000), {}, now));
@@ -112,19 +144,25 @@ async function startSession({ input, browserType, launchOptions, now }) {
     page.on("pageerror", (error) => runtimeIssues.push(issue("pageerror", "PAGE_ERROR", truncate(error.message, 2_000), {}, now)));
     page.on("requestfailed", (request) => runtimeIssues.push(issue("network", "REQUEST_FAILED", request.failure()?.errorText ?? "request failed", { url: safeUrl(request.url()), method: request.method() }, now)));
     page.on("response", (response) => {
-      if (response.status() >= 400) runtimeIssues.push(issue("network", "HTTP_STATUS", `HTTP ${response.status()}`, { url: safeUrl(response.url()), status: response.status() }, now));
+      const metadata = { url: safeUrl(response.url()), method: response.request().method(), status: response.status() };
+      responseContentTypes.set(response.url(), response.headers()["content-type"]);
+      runtimeIssues.push(issue("network", response.status() >= 400 ? "HTTP_STATUS" : "HTTP_RESPONSE", `HTTP ${response.status()}`, metadata, now));
     });
-    page.on("download", async (download) => runtimeIssues.push(issue("download", "DOWNLOAD", await download.suggestedFilename(), { url: safeUrl(download.url()) }, now)));
+    page.on("download", async (download) => {
+      const filename = await download.suggestedFilename();
+      runtimeIssues.push(issue("download", "DOWNLOAD", filename, { url: safeUrl(download.url()), filename, mimeType: responseContentTypes.get(download.url()) }, now));
+    });
     page.on("popup", (popup) => {
-      runtimeIssues.push(issue("browser", "POPUP", "Unexpected popup opened", { url: safeUrl(popup.url()) }, now));
+    runtimeIssues.push(issue("popup", "POPUP", "Unexpected popup opened", { url: safeUrl(popup.url()) }, now));
       void popup.close().catch(() => undefined);
     });
     page.on("dialog", async (dialog) => {
-      runtimeIssues.push(issue("browser", "DIALOG", truncate(dialog.message(), 2_000), {}, now));
+    runtimeIssues.push(issue("dialog", "DIALOG", truncate(dialog.message(), 2_000), {}, now));
       await dialog.dismiss().catch(() => undefined);
     });
     await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: input.navigationTimeoutMs ?? 30_000 });
-    assertCurrentOrigin(page, allowedOrigins);
+    initialNavigationComplete = true;
+    assertCurrentOrigin(page, navigationOrigins);
 
     const session = {
       browser,
@@ -132,15 +170,18 @@ async function startSession({ input, browserType, launchOptions, now }) {
       page,
       sessionId,
       allowedOrigins,
+      navigationOrigins,
       evidenceDir,
       screenshotDir,
       tracePath,
       stabilization: { ...DEFAULT_STABILIZATION, ...(input.stabilization ?? {}) },
-      safetyPolicy: normalizeSafetyPolicy(input.safetyPolicy),
+      safetyPolicy,
+      evidencePolicy,
       fixtureRoot: input.fixtureRoot ? path.resolve(input.fixtureRoot) : undefined,
       valueRefs: input.valueRefs ?? {},
       observationSequence: 0,
       screenshotSequence: 0,
+      hadFailure: false,
       runtimeIssues,
       policyViolation: () => policyViolation,
       setPolicyViolation(value) { policyViolation = value; },
@@ -158,18 +199,25 @@ async function startSession({ input, browserType, launchOptions, now }) {
 }
 
 async function observeSession(session, now) {
+  if (!session.safetyPolicy.allowRead) throw policyError("ACTION_NOT_ALLOWED", "Reading the page is blocked by policy");
   await stabilizePage(session.page, session.stabilization);
-  assertCurrentOrigin(session.page, session.allowedOrigins);
+  assertCurrentOrigin(session.page, session.navigationOrigins);
   const observationId = `${session.sessionId}:obs:${++session.observationSequence}`;
-  const screenshotEvidenceId = `${observationId}:screenshot:${++session.screenshotSequence}`;
-  const screenshotPath = path.join(session.screenshotDir, `${session.observationSequence}.png`);
-  await session.page.screenshot({ path: screenshotPath, fullPage: false });
-  const screenshotEvidence = await fileEvidence(screenshotEvidenceId, "screenshot", screenshotPath, session.evidenceDir);
+  let screenshotEvidence;
+  if (session.evidencePolicy.screenshot === "every_action") {
+    const screenshotEvidenceId = `${observationId}:screenshot:${++session.screenshotSequence}`;
+    const screenshotPath = path.join(session.screenshotDir, `${session.observationSequence}.png`);
+    await session.page.screenshot({ path: screenshotPath, fullPage: false, mask: [session.page.locator("input,textarea,[contenteditable='true']")] });
+    screenshotEvidence = await fileEvidence(screenshotEvidenceId, "screenshot", screenshotPath, session.evidenceDir);
+  }
   const runtimeEvidence = session.runtimeIssues.map(runtimeIssueEvidence);
 
   const capturedSemantic = await captureSemantic(session.page);
-  session.handles.clear();
-  capturedSemantic.interactiveElements.forEach((element) => session.handles.set(element.id, element.selector));
+  await clearHandles(session);
+  for (const element of capturedSemantic.interactiveElements) {
+    const handle = await session.page.locator(element.selector).elementHandle();
+    if (handle) session.handles.set(element.id, { handle, role: element.role, name: element.name, fingerprint: element.fingerprint });
+  }
   const semantic = {
     visibleText: capturedSemantic.visibleText,
     headings: capturedSemantic.headings,
@@ -189,7 +237,7 @@ async function observeSession(session, now) {
     },
     semantic,
     visual: {
-      screenshotEvidenceId,
+      ...(screenshotEvidence ? { screenshotEvidenceId: screenshotEvidence.id } : {}),
       occludedElementFingerprints: capturedSemantic.occludedElementFingerprints,
     },
     runtime: {
@@ -199,7 +247,7 @@ async function observeSession(session, now) {
       loadingIndicators: capturedSemantic.loadingIndicators,
     },
     oracleSignals: { satisfied: [], violated: [], unknown: [] },
-    evidence: [screenshotEvidence, ...runtimeEvidence],
+    evidence: [...(screenshotEvidence ? [screenshotEvidence] : []), ...runtimeEvidence],
   });
   session.lastObservation = observation;
   return observation;
@@ -209,18 +257,16 @@ async function executeAction(session, action, now) {
   if (!session.lastObservation) throw new Error("observe must be called before execute");
   const observationId = session.lastObservation.id;
   const urlBefore = session.page.url();
+  let actionTarget;
   try {
-    assertActionAllowed(session, action);
+    actionTarget = await assertActionAllowed(session, action);
     if (action.type === "click") {
-      const target = targetFor(session, action.elementId);
-      await target.click({ timeout: 10_000 });
+      await actionTarget.handle.click({ timeout: 10_000 });
     } else if (action.type === "type") {
-      const target = targetFor(session, action.elementId);
       const value = valueFor(session, action.valueRef);
-      await target.fill(value, { timeout: 10_000 });
+      await actionTarget.handle.fill(value, { timeout: 10_000 });
     } else if (action.type === "select") {
-      const target = targetFor(session, action.elementId);
-      await target.selectOption(action.value, { timeout: 10_000 });
+      await actionTarget.handle.selectOption(action.value, { timeout: 10_000 });
     } else if (action.type === "scroll") {
       await session.page.mouse.wheel(0, scrollDelta(action));
     } else if (action.type === "back") {
@@ -233,12 +279,15 @@ async function executeAction(session, action, now) {
       throw new Error(`unsupported action type: ${action?.type}`);
     }
     await stabilizePage(session.page, session.stabilization);
-    assertCurrentOrigin(session.page, session.allowedOrigins);
-    if (session.policyViolation()) throw new Error(session.policyViolation().code);
-    const screenshotEvidenceId = `${observationId}:action:${++session.screenshotSequence}`;
-    const screenshotPath = path.join(session.screenshotDir, `after-${session.screenshotSequence}.png`);
-    await session.page.screenshot({ path: screenshotPath, fullPage: false });
-    const screenshotEvidence = await fileEvidence(screenshotEvidenceId, "screenshot", screenshotPath, session.evidenceDir);
+    assertCurrentOrigin(session.page, session.navigationOrigins);
+    if (session.policyViolation()) throw policyError(session.policyViolation().code, session.policyViolation().message);
+    let screenshotEvidence;
+    if (session.evidencePolicy.screenshot === "every_action") {
+      const screenshotEvidenceId = `${observationId}:action:${++session.screenshotSequence}`;
+      const screenshotPath = path.join(session.screenshotDir, `after-${session.screenshotSequence}.png`);
+      await session.page.screenshot({ path: screenshotPath, fullPage: false, mask: [session.page.locator("input,textarea,[contenteditable='true']")] });
+      screenshotEvidence = await fileEvidence(screenshotEvidenceId, "screenshot", screenshotPath, session.evidenceDir);
+    }
     return Object.freeze({
       schemaVersion: "action-result/0.1",
       status: "success",
@@ -247,11 +296,12 @@ async function executeAction(session, action, now) {
       urlBefore,
       urlAfter: session.page.url(),
       timestamp: now(),
-      evidenceIds: [screenshotEvidenceId],
-      evidence: [screenshotEvidence],
+      evidenceIds: screenshotEvidence ? [screenshotEvidence.id] : [],
+      evidence: screenshotEvidence ? [screenshotEvidence] : [],
     });
   } catch (error) {
-    const failureEvidence = await captureFailureScreenshot(session, observationId);
+    session.hadFailure = true;
+    const failureEvidence = session.evidencePolicy.screenshot === "off" ? [] : await captureFailureScreenshot(session, observationId);
     return Object.freeze({
       schemaVersion: "action-result/0.1",
       status: isPolicyError(error) ? "blocked" : "failure",
@@ -265,7 +315,8 @@ async function executeAction(session, action, now) {
       message: safeErrorMessage(error),
     });
   } finally {
-    session.handles.clear();
+    await actionTarget?.handle?.dispose?.().catch(() => undefined);
+    await clearHandles(session);
     session.lastObservation = undefined;
   }
 }
@@ -275,17 +326,31 @@ async function closeSession(session) {
   session.closed = true;
   let closeError;
   let traceEvidence;
-  try {
-    await session.context.tracing.stop({ path: session.tracePath });
-    traceEvidence = await fileEvidence(`${session.sessionId}:trace`, "trace", session.tracePath, session.evidenceDir);
-  } catch (error) {
-    closeError = error;
-    await rm(session.tracePath, { force: true }).catch(() => undefined);
+  let videoEvidence;
+  const video = session.page.video?.();
+  if (session.evidencePolicy.trace) {
+    try {
+      await session.context.tracing.stop({ path: session.tracePath });
+      traceEvidence = await fileEvidence(`${session.sessionId}:trace`, "trace", session.tracePath, session.evidenceDir);
+    } catch (error) {
+      closeError = error;
+      await rm(session.tracePath, { force: true }).catch(() => undefined);
+    }
   }
   try { await session.context.close(); } catch (error) { closeError ??= error; }
+  if (video) {
+    try {
+      const videoPath = await video.path();
+      if (session.evidencePolicy.video === "all" || session.hadFailure) {
+        videoEvidence = await fileEvidence(`${session.sessionId}:video`, "video", videoPath, session.evidenceDir);
+      } else {
+        await rm(videoPath, { force: true });
+      }
+    } catch (error) { closeError ??= error; }
+  }
   try { await session.browser.close(); } catch (error) { closeError ??= error; }
   if (closeError) throw closeError;
-  return { evidence: traceEvidence ? [traceEvidence] : [] };
+  return { evidence: [traceEvidence, videoEvidence].filter(Boolean) };
 }
 
 async function stabilizePage(page, policy) {
@@ -308,7 +373,7 @@ async function captureSemantic(page) {
   const data = await page.locator("body").evaluate((body, selector) => {
     const normalize = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
     const roleOf = (element) => element.getAttribute("role") || ({ A: "link", BUTTON: "button", INPUT: inputRole(element), TEXTAREA: "textbox", SELECT: "combobox", SUMMARY: "button" }[element.tagName] ?? "generic");
-    const nameOf = (element) => normalize(element.getAttribute("aria-label") || element.getAttribute("title") || element.innerText || element.value || element.getAttribute("alt") || element.getAttribute("name"));
+    const nameOf = (element) => normalize(element.getAttribute("aria-label") || element.getAttribute("title") || element.innerText || element.getAttribute("alt") || element.getAttribute("name"));
     const visible = (element, rect) => {
       const style = getComputedStyle(element);
       return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) > 0.01;
@@ -321,11 +386,37 @@ async function captureSemantic(page) {
       return top === element || element.contains(top);
     };
     const fingerprint = (element, role, name, rect) => [role, name, element.id || "", element.getAttribute("data-testid") || element.getAttribute("data-test") || "", location.pathname, Math.round(rect.top), Math.round(rect.left)].join("|");
-    const node = (element) => ({ role: roleOf(element), name: nameOf(element), text: normalize(element.innerText || element.textContent).slice(0, 500) });
-    const headings = [...body.querySelectorAll("h1,h2,h3,h4,h5,h6,[role='heading']")].map(node).filter((item) => item.text || item.name).slice(0, 32);
-    const landmarks = [...body.querySelectorAll("main,nav,header,footer,aside,section,[role='main'],[role='navigation'],[role='banner'],[role='contentinfo']")].map(node).filter((item) => item.text || item.name).slice(0, 32);
-    const visibleText = normalize(body.innerText).split(/(?<=[.!?])\s+|\n+/).map((item) => item.trim()).filter(Boolean).slice(0, 80);
-    const loadingIndicators = [...body.querySelectorAll("[aria-busy='true'],[role='progressbar'],.loading,.spinner")].map((element) => normalize(element.innerText || element.getAttribute("aria-label") || element.className)).filter(Boolean).slice(0, 16);
+    const viewportText = (root) => {
+      const parts = [];
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let textNode = walker.nextNode(); textNode; textNode = walker.nextNode()) {
+        const parent = textNode.parentElement;
+        if (!parent || !normalize(textNode.data)) continue;
+        const style = getComputedStyle(parent);
+        if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) <= 0.01) continue;
+        const range = document.createRange();
+        range.selectNodeContents(textNode);
+        if ([...range.getClientRects()].some((rect) => inViewport(rect) && topOwnsPoint(parent, rect))) parts.push(textNode.data);
+      }
+      return normalize(parts.join(" "));
+    };
+    const node = (element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        role: roleOf(element),
+        name: nameOf(element),
+        text: viewportText(element).slice(0, 500),
+        boundingBox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        viewportPosition: { inViewport: visible(element, rect) && inViewport(rect), occluded: !topOwnsPoint(element, rect) },
+      };
+    };
+    const headings = [...body.querySelectorAll("h1,h2,h3,h4,h5,h6,[role='heading']")].map(node).filter((item) => item.viewportPosition.inViewport && !item.viewportPosition.occluded && (item.text || item.name)).slice(0, 32);
+    const landmarks = [...body.querySelectorAll("main,nav,header,footer,aside,section,[role='main'],[role='navigation'],[role='banner'],[role='contentinfo']")].map(node).filter((item) => item.viewportPosition.inViewport && !item.viewportPosition.occluded && (item.text || item.name)).slice(0, 32);
+    const visibleText = viewportText(body).split(/(?<=[.!?])\s+|\n+/).map((item) => item.trim()).filter(Boolean).slice(0, 80);
+    const loadingIndicators = [...body.querySelectorAll("[aria-busy='true'],[role='progressbar'],.loading,.spinner")].filter((element) => {
+      const rect = element.getBoundingClientRect();
+      return visible(element, rect) && inViewport(rect);
+    }).map((element) => normalize(element.innerText || element.getAttribute("aria-label") || element.className)).filter(Boolean).slice(0, 16);
     const elements = [];
     const occluded = [];
     [...body.querySelectorAll(selector)].slice(0, 256).forEach((element, selectorOrdinal) => {
@@ -339,7 +430,8 @@ async function captureSemantic(page) {
         selectorOrdinal,
         role,
         name,
-        text: normalize(element.innerText || element.value || element.textContent).slice(0, 500),
+        text: normalize(element.innerText || element.textContent).slice(0, 500),
+        checked: ["checkbox", "radio"].includes(role) ? Boolean(element.checked) : undefined,
         enabled: !element.disabled && element.getAttribute("aria-disabled") !== "true",
         focused: document.activeElement === element,
         viewportVisible,
@@ -369,6 +461,7 @@ async function captureSemantic(page) {
         role: publicElement.role,
         name: publicElement.name,
         text: publicElement.text,
+        ...(publicElement.checked === undefined ? {} : { checked: publicElement.checked }),
         enabled: publicElement.enabled,
         focused: publicElement.focused,
         visible: publicElement.viewportVisible && !publicElement.occluded,
@@ -383,9 +476,10 @@ async function captureSemantic(page) {
   };
 }
 
-function assertActionAllowed(session, action) {
+async function assertActionAllowed(session, action) {
   if (!action || typeof action.type !== "string") throw policyError("ACTION_NOT_ALLOWED", "Invalid action");
-  assertCurrentOrigin(session.page, session.allowedOrigins);
+  assertCurrentOrigin(session.page, session.navigationOrigins);
+  if (session.policyViolation()) throw policyError(session.policyViolation().code, session.policyViolation().message);
   const policy = session.safetyPolicy;
   const element = action.elementId ? session.lastObservation.semantic.interactiveElements.find((item) => item.id === action.elementId) : undefined;
   if (["click", "type", "select", "ignore"].includes(action.type) && !element) throw policyError("ELEMENT_NOT_FOUND", "Element was not in the latest perceived observation");
@@ -394,14 +488,99 @@ function assertActionAllowed(session, action) {
   if ((action.type === "click" || action.type === "back") && !policy.allowClick) throw policyError("ACTION_NOT_ALLOWED", "Click/back actions are blocked by policy");
   if (action.type === "type" && !policy.allowTyping) throw policyError("ACTION_NOT_ALLOWED", "Typing is blocked by policy");
   if (action.type === "select" && !policy.allowTyping) throw policyError("ACTION_NOT_ALLOWED", "Select is blocked by policy");
-  if (action.type === "scroll" && !policy.allowNavigation) throw policyError("ACTION_NOT_ALLOWED", "Scrolling is blocked by policy");
-  if (element && policy.stopBeforeConfirmation && DESTRUCTIVE_PATTERN.test(`${element.role} ${element.name} ${element.text} ${action.reasonCode ?? ""}`)) throw policyError("ACTION_NOT_ALLOWED", "Destructive confirmation/payment action blocked");
+  if (["scroll", "back"].includes(action.type) && !policy.allowNavigation) throw policyError("ACTION_NOT_ALLOWED", "Navigation is blocked by policy");
+  if (policy.forbiddenActions.includes(action.reasonCode)) throw policyError("ACTION_NOT_ALLOWED", "Action is forbidden by policy");
+
+  if (!["click", "type", "select"].includes(action.type)) return undefined;
+  const liveTarget = await liveTargetFor(session, action.elementId);
+  const live = liveTarget.live;
+  if (live.role !== element.role || live.name !== element.name || live.fingerprint !== element.fingerprint) {
+    await liveTarget.handle.dispose().catch(() => undefined);
+    throw policyError("ELEMENT_NOT_FOUND", "Observed element changed before action");
+  }
+  if (!live.visible || !live.inViewport || live.occluded || !live.enabled) {
+    await liveTarget.handle.dispose().catch(() => undefined);
+    throw policyError("ACTION_NOT_ALLOWED", "Element is no longer visible and enabled");
+  }
+  if (live.fileInput && !policy.allowFileUpload) {
+    await liveTarget.handle.dispose().catch(() => undefined);
+    throw policyError("ACTION_NOT_ALLOWED", "File upload is blocked by policy");
+  }
+  if (action.type === "click" && live.formSubmit && !policy.allowStateMutation) {
+    await liveTarget.handle.dispose().catch(() => undefined);
+    throw policyError("ACTION_NOT_ALLOWED", "Form submission is blocked by policy");
+  }
+  if (action.type === "click" && live.navigates && !policy.allowNavigation) {
+    await liveTarget.handle.dispose().catch(() => undefined);
+    throw policyError("ACTION_NOT_ALLOWED", "Navigation is blocked by policy");
+  }
+  if (action.type === "click" && live.targetUrl && !isAllowedOrigin(live.targetUrl, session.navigationOrigins)) {
+    await liveTarget.handle.dispose().catch(() => undefined);
+    throw policyError("ORIGIN_BLOCKED", "External-origin navigation is blocked by policy");
+  }
+  const description = `${live.role} ${live.name} ${live.text} ${action.reasonCode ?? ""}`;
+  if (policy.stopBeforeConfirmation && DESTRUCTIVE_PATTERN.test(description)) {
+    await liveTarget.handle.dispose().catch(() => undefined);
+    throw policyError("ACTION_NOT_ALLOWED", "Destructive confirmation/payment action blocked");
+  }
+  if (policy.forbiddenActions.some((name) => FORBIDDEN_ACTION_PATTERNS[name]?.test(description))) {
+    await liveTarget.handle.dispose().catch(() => undefined);
+    throw policyError("ACTION_NOT_ALLOWED", "Action is forbidden by policy");
+  }
+  return liveTarget;
 }
 
-function targetFor(session, elementId) {
-  const selector = session.handles.get(elementId);
-  if (!selector) throw policyError("ELEMENT_NOT_FOUND", "Observed element handle is unavailable");
-  return session.page.locator(selector);
+async function liveTargetFor(session, elementId) {
+  const retained = session.handles.get(elementId);
+  if (!retained) throw policyError("ELEMENT_NOT_FOUND", "Observed element handle is unavailable");
+  const handle = retained.handle;
+  let live;
+  try {
+    live = await handle.evaluate((element) => {
+    const normalize = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+    const inputRole = (input) => {
+      const type = (input.getAttribute("type") || "text").toLowerCase();
+      if (["checkbox", "radio", "button", "submit", "search", "slider"].includes(type)) return type === "submit" ? "button" : type;
+      return "textbox";
+    };
+    const role = element.getAttribute("role") || ({ A: "link", BUTTON: "button", INPUT: inputRole(element), TEXTAREA: "textbox", SELECT: "combobox", SUMMARY: "button" }[element.tagName] ?? "generic");
+    const name = normalize(element.getAttribute("aria-label") || element.getAttribute("title") || element.innerText || element.getAttribute("alt") || element.getAttribute("name"));
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const visible = element.isConnected && rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) > 0.01;
+    const inViewport = rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth;
+    const x = Math.min(Math.max(rect.left + rect.width / 2, 0), innerWidth - 1);
+    const y = Math.min(Math.max(rect.top + rect.height / 2, 0), innerHeight - 1);
+    const top = document.elementFromPoint(x, y);
+    const occluded = visible && inViewport && top !== element && !element.contains(top);
+    const type = (element.getAttribute("type") || "").toLowerCase();
+    const form = element.form;
+    const formSubmit = Boolean(form && ((element.tagName === "BUTTON" && (!type || type === "submit")) || (element.tagName === "INPUT" && ["submit", "image"].includes(type))));
+    const targetUrl = element.tagName === "A" && element.href ? element.href : formSubmit ? form.action : undefined;
+    return {
+      role,
+      name,
+      text: normalize(element.innerText || element.textContent).slice(0, 500),
+      fingerprint: [role, name, element.id || "", element.getAttribute("data-testid") || element.getAttribute("data-test") || "", location.pathname, Math.round(rect.top), Math.round(rect.left)].join("|"),
+      enabled: !element.disabled && element.getAttribute("aria-disabled") !== "true",
+      visible,
+      inViewport,
+      occluded,
+      fileInput: element.tagName === "INPUT" && type === "file",
+      formSubmit,
+      navigates: Boolean((element.tagName === "A" && element.href) || formSubmit),
+      targetUrl,
+    };
+    });
+  } catch {
+    throw policyError("ELEMENT_NOT_FOUND", "Observed element is no longer available");
+  }
+  return { handle, live };
+}
+
+async function clearHandles(session) {
+  await Promise.all([...session.handles.values()].map((item) => item.handle?.dispose?.().catch(() => undefined)));
+  session.handles.clear();
 }
 
 function valueFor(session, valueRef) {
@@ -423,6 +602,14 @@ function normalizeSafetyPolicy(policy = {}) {
   };
 }
 
+function normalizeEvidencePolicy(policy = {}) {
+  return {
+    screenshot: ["off", "on_failure", "every_action"].includes(policy.screenshot) ? policy.screenshot : "every_action",
+    trace: policy.trace !== false,
+    video: ["off", "on_failure", "all"].includes(policy.video) ? policy.video : "off",
+  };
+}
+
 async function loadBrowserType(browserName) {
   const mod = await import("@playwright/test");
   const type = mod[browserName];
@@ -436,11 +623,31 @@ function requiredString(value, name) {
 }
 
 function resolveStartUrl(baseUrl, startPath = "/") {
-  return new URL(startPath, baseUrl).toString();
+  return httpUrl(new URL(startPath, baseUrl).toString(), "environment.startPath");
 }
 
 function normalizeOrigins(origins) {
-  return origins.map((origin) => new URL(origin).origin);
+  return origins.map((origin, index) => new URL(httpUrl(origin, `environment.allowedOrigins[${index}]`)).origin);
+}
+
+function httpUrl(value, name) {
+  let url;
+  try { url = new URL(value); } catch { throw new TypeError(`${name} must be a valid HTTP(S) URL`); }
+  if (!["http:", "https:"].includes(url.protocol)) throw new TypeError(`${name} must be a valid HTTP(S) URL`);
+  if (["169.254.169.254", "100.100.100.200"].includes(url.hostname)) throw new TypeError(`${name} targets a blocked metadata host`);
+  const operatorHosts = process.env.PERSONA_RUNTIME_ALLOWED_HOSTS?.split(",").map((host) => host.trim().toLowerCase()).filter(Boolean);
+  if (operatorHosts?.length && !operatorHosts.includes(url.hostname.toLowerCase())) throw new TypeError(`${name} is outside PERSONA_RUNTIME_ALLOWED_HOSTS`);
+  return url.toString();
+}
+
+async function resolveStorageStatePath(value) {
+  const root = await realpath(process.cwd());
+  const resolved = await realpath(path.resolve(root, requiredString(value, "environment.storageStatePath")));
+  const relative = path.relative(root, resolved);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw policyError("ACTION_NOT_ALLOWED", "storageStatePath must resolve within the workspace");
+  }
+  return resolved;
 }
 
 function assertAllowedOrigin(url, allowedOrigins) {
@@ -483,6 +690,10 @@ function issue(kind, code, message, metadata, now) {
     severity: code,
     message,
     ...(metadata.url ? { url: metadata.url } : {}),
+    ...(metadata.method ? { method: metadata.method } : {}),
+    ...(metadata.status === undefined ? {} : { status: metadata.status }),
+    ...(metadata.filename ? { filename: metadata.filename } : {}),
+    ...(metadata.mimeType ? { mimeType: metadata.mimeType } : {}),
     timestamp: now(),
   });
 }
@@ -491,7 +702,7 @@ async function captureFailureScreenshot(session, observationId) {
   const id = `${observationId}:failure:${++session.screenshotSequence}`;
   const screenshotPath = path.join(session.screenshotDir, `failure-${session.screenshotSequence}.png`);
   try {
-    await session.page.screenshot({ path: screenshotPath, fullPage: false });
+    await session.page.screenshot({ path: screenshotPath, fullPage: false, mask: [session.page.locator("input,textarea,[contenteditable='true']")] });
     return [await fileEvidence(id, "screenshot", screenshotPath, session.evidenceDir)];
   } catch {
     return [];

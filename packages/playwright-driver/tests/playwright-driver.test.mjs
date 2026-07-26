@@ -1,5 +1,5 @@
 import { chromium } from "@playwright/test";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -97,7 +97,88 @@ describe("playwright behavioral driver", () => {
     await app.close();
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
   });
+
+  it("enforces navigation, mutation, upload, and external-origin policy", async () => {
+    if (!browserAvailable) return;
+    const external = await serve(`<h1>External</h1>`);
+    const app = await serve(`<a href="${external.url}">External</a><form action="/submitted"><button>Submit form</button></form><button onclick="fetch('/mutate',{method:'POST'})">Mutate</button><button onclick="fetch('/upload',{method:'POST',body:new FormData()})">Upload</button>`);
+    const driver = createPlaywrightDriver({ browserType: chromium });
+    const dir = await tempDir();
+    const environment = { baseUrl: app.url, allowedOrigins: [app.url, external.url], viewport: { width: 390, height: 844 } };
+
+    const navigation = await driver.start({ ...input("navigation", app.url, path.join(dir, "navigation"), { allowClick: true, allowNavigation: false }), environment });
+    let observation = await driver.observe(navigation);
+    expect(await driver.execute(navigation, { type: "click", elementId: elementId(observation, "External"), reasonCode: "follow_link" })).toMatchObject({ status: "blocked", message: "Navigation is blocked by policy" });
+    observation = await driver.observe(navigation);
+    expect(await driver.execute(navigation, { type: "back", reasonCode: "go_back" })).toMatchObject({ status: "blocked", message: "Navigation is blocked by policy" });
+
+    const externalBlocked = await driver.start({ ...input("external", app.url, path.join(dir, "external"), { allowClick: true, allowNavigation: true, allowExternalOrigin: false }), environment });
+    observation = await driver.observe(externalBlocked);
+    expect(await driver.execute(externalBlocked, { type: "click", elementId: elementId(observation, "External"), reasonCode: "follow_link" })).toMatchObject({ status: "blocked", message: "External-origin navigation is blocked by policy" });
+
+    const mutation = await driver.start({ ...input("mutation", app.url, path.join(dir, "mutation"), { allowClick: true, allowNavigation: true, allowStateMutation: false }), environment });
+    observation = await driver.observe(mutation);
+    expect(await driver.execute(mutation, { type: "click", elementId: elementId(observation, "Submit form"), reasonCode: "submit" })).toMatchObject({ status: "blocked", message: "Form submission is blocked by policy" });
+    observation = await driver.observe(mutation);
+    expect(await driver.execute(mutation, { type: "click", elementId: elementId(observation, "Mutate"), reasonCode: "mutate" })).toMatchObject({ status: "blocked", message: "State-mutating request is blocked by policy" });
+
+    const upload = await driver.start({ ...input("upload", app.url, path.join(dir, "upload"), { allowClick: true, allowNavigation: true, allowStateMutation: true, allowFileUpload: false }), environment });
+    observation = await driver.observe(upload);
+    expect(await driver.execute(upload, { type: "click", elementId: elementId(observation, "Upload"), reasonCode: "upload" })).toMatchObject({ status: "blocked", message: "File upload is blocked by policy" });
+
+    await driver.closeAll();
+    await app.close();
+    await external.close();
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  });
+
+  it("revalidates retained elements and excludes values and off-viewport semantics", async () => {
+    if (!browserAvailable) return;
+    const app = await serve(`<h1>Visible heading</h1><input aria-label="API key" value="super-secret"><input type="checkbox" aria-label="Remember" checked><button id="swap">Continue</button><h2 style="position:absolute;top:2000px">Offscreen secret</h2><script>setTimeout(()=>swap.replaceWith(Object.assign(document.createElement('button'),{textContent:'Continue'})),150)</script>`);
+    const driver = createPlaywrightDriver({ browserType: chromium });
+    const dir = await tempDir();
+    const handle = await driver.start(input("toctou", app.url, dir, { allowClick: true }));
+    const observation = await driver.observe(handle);
+    expect(JSON.stringify(observation.semantic)).not.toContain("super-secret");
+    expect(JSON.stringify(observation.semantic)).not.toContain("Offscreen secret");
+    expect(observation.semantic.headings[0]).toMatchObject({ text: "Visible heading", viewportPosition: { inViewport: true } });
+    expect(observation.semantic.interactiveElements.find((item) => item.name === "Remember")).toMatchObject({ checked: true });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(await driver.execute(handle, { type: "click", elementId: elementId(observation, "Continue"), reasonCode: "continue" })).toMatchObject({ status: "blocked", message: "Observed element changed before action" });
+    await driver.close(handle);
+    await app.close();
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  });
+
+  it("honors disabled screenshot and trace evidence while retaining successful network metadata", async () => {
+    if (!browserAvailable) return;
+    const app = await serve(`<h1>Hello</h1>`);
+    const driver = createPlaywrightDriver({ browserType: chromium });
+    const dir = await tempDir();
+    const handle = await driver.start({ ...input("policy", app.url, dir, {}), evidencePolicy: { screenshot: "off", trace: false, video: "off" } });
+    const observation = await driver.observe(handle);
+    expect(observation.visual).not.toHaveProperty("screenshotEvidenceId");
+    expect(observation.evidence.every((item) => item.type !== "screenshot")).toBe(true);
+    expect(observation.runtime.networkFailures).toContainEqual(expect.objectContaining({ severity: "HTTP_RESPONSE", method: "GET", status: 200 }));
+    expect(await driver.close(handle)).toEqual({ evidence: [] });
+    await app.close();
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  });
+
+  it("rejects non-HTTP URLs and storage state outside the workspace", async () => {
+    const driver = createPlaywrightDriver({ browserType: chromium });
+    const dir = await tempDir();
+    await writeFile(path.join(dir, "state.json"), "{}");
+    await expect(driver.start(input("scheme", "file:///tmp/page.html", path.join(dir, "scheme"), {}))).rejects.toThrow("environment.baseUrl must be a valid HTTP(S) URL");
+    await expect(driver.start(input("metadata", "http://169.254.169.254/latest/meta-data", path.join(dir, "metadata"), {}))).rejects.toThrow("blocked metadata host");
+    await expect(driver.start({ ...input("storage", "http://127.0.0.1/", path.join(dir, "storage"), {}), environment: { baseUrl: "http://127.0.0.1/", storageStatePath: path.join(dir, "state.json") } })).rejects.toThrow("storageStatePath must resolve within the workspace");
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  });
 });
+
+function elementId(observation, name) {
+  return observation.semantic.interactiveElements.find((item) => item.name === name).id;
+}
 
 function input(sessionId, baseUrl, evidenceDir, safetyPolicy) {
   return {
