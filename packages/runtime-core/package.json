@@ -10,6 +10,9 @@
   "files": [
     "src"
   ],
+  "dependencies": {
+    "@persona-runtime/contracts": "workspace:*"
+  },
   "scripts": {
     "build": "node --check src/index.mjs",
     "typecheck": "node --check src/index.mjs && node --check test/runtime-core.test.mjs",

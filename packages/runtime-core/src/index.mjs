@@ -1,11 +1,15 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import {
+  EVIDENCE_MANIFEST_VERSION,
+  validateEvidenceManifest,
+} from "@persona-runtime/contracts";
 
 export const RUNTIME_SESSION_SCHEMA_VERSION = "runtime-session/0.1";
 export const OBSERVATION_SCHEMA_VERSION = "observation/0.1";
 export const INTERACTION_EVENT_SCHEMA_VERSION = "interaction-event/0.1";
-export const EVIDENCE_MANIFEST_SCHEMA_VERSION = "evidence-manifest/0.1";
+export const EVIDENCE_MANIFEST_SCHEMA_VERSION = EVIDENCE_MANIFEST_VERSION;
 
 export const SESSION_PHASES = Object.freeze([
   "CREATED",
@@ -249,7 +253,7 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
       try {
         await driver.close(handle);
       } catch (error) {
-        if (!TERMINAL_PHASES.includes(session.phase)) {
+        if (session.phase !== "RUNTIME_ERROR") {
           await setPhase("RUNTIME_ERROR", { terminalReason: { code: RUNTIME_ERROR_CODES.DRIVER_FAILED, message: "driver close failed" } });
         }
       }
@@ -303,9 +307,10 @@ export function createFileSessionStore({ rootDir, sessionId } = {}) {
 }
 
 export function deriveInteractionEvent({ sessionId, index, observation, action, result, now = new Date() } = {}) {
+  const eventId = stableEventId(sessionId, index);
   const event = {
     schemaVersion: INTERACTION_EVENT_SCHEMA_VERSION,
-    id: stableEventId(sessionId, index),
+    id: eventId,
     sessionId,
     index,
     timestamp: toIso(now),
@@ -317,7 +322,9 @@ export function deriveInteractionEvent({ sessionId, index, observation, action, 
     },
     urlBefore: observation.page?.url ?? "about:blank",
     urlAfter: result.urlAfter ?? observation.page?.url ?? "about:blank",
-    evidenceIds: Array.isArray(result.evidenceIds) ? [...result.evidenceIds] : [],
+    evidenceIds: Array.isArray(result.evidenceIds) && result.evidenceIds.length > 0
+      ? [...result.evidenceIds]
+      : [`evidence-${eventId}`],
     derivedSignals: {
       progressChanged: Boolean(result.progressChanged),
       backtrack: action.type === "back" || result.backtrack === true,
@@ -337,6 +344,7 @@ async function sealSessionEvidence({ session, observations, events, store, now }
     sessionId: session.sessionId,
     createdAt: session.startedAt,
     sealedAt: toIso(now),
+    sealed: true,
     studyHash: hashJson({ studyId: session.studyId, taskId: session.taskId }),
     policyHash: hashJson(session.sampledPolicy),
     entries: [
@@ -355,7 +363,7 @@ async function sealSessionEvidence({ session, observations, events, store, now }
     ],
     redactionSummary: { redactedCount: 0, rulesVersion: "runtime-core/0.1" },
   };
-  const manifest = deepFreeze({ ...manifestBody, manifestHash: hashJson(manifestBody) });
+  const manifest = validateEvidenceManifest({ ...manifestBody, manifestHash: hashJson(manifestBody) });
   try {
     await store.sealManifest?.(manifest);
   } catch (error) {
@@ -522,7 +530,7 @@ function canTransition(from, to) {
   if (from === "QUEUED") return to === "STARTING_BROWSER";
   if (from === "STARTING_BROWSER") return to === "RUNNING" || to === "RUNTIME_ERROR";
   if (from === "RUNNING") return TERMINAL_PHASES.includes(to);
-  if (TERMINAL_PHASES.includes(from)) return to === "EVIDENCE_SEALED";
+  if (TERMINAL_PHASES.includes(from)) return to === "EVIDENCE_SEALED" || (to === "RUNTIME_ERROR" && from !== "RUNTIME_ERROR");
   if (from === "EVIDENCE_SEALED") return to === "EVALUATED";
   if (from === "EVALUATED") return to === "REPORTED";
   return false;

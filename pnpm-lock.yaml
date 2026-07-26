@@ -60,7 +60,11 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@24.13.3)
 
-  packages/runtime-core: {}
+  packages/runtime-core:
+    dependencies:
+      '@persona-runtime/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
 packages:
 

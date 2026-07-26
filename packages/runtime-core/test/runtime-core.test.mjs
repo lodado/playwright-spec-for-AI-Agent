@@ -56,12 +56,33 @@ test("runs one observation per action and seals evidence after closing the drive
   assert.equal(result.session.phase, "EVIDENCE_SEALED");
   assert.equal(result.session.status, "success");
   assert.equal(result.session.evidenceManifestId, "manifest-session-1");
+  assert.equal(result.manifest.schemaVersion, "evidence-manifest/0.2");
+  assert.equal(result.manifest.sealed, true);
+  assert.equal(result.events[0].evidenceIds.length > 0, true);
   assert.deepEqual(result.events.map((event) => event.observationId), ["observation-session-1-0"]);
   assert.equal(result.observations.length, 2);
   assert.ok(order.indexOf("close") < order.indexOf("seal"));
   const eventsJsonl = await readFile(join(rootDir, "sessions/session-1/events.jsonl"), "utf8");
   assert.equal(eventsJsonl.trim().split("\n").length, 1);
   await removeFileSessionStore(rootDir);
+});
+
+test("driver close failure replaces a success with runtime_error", async () => {
+  const result = await runSession({
+    study,
+    task: study.tasks[0],
+    persona: study.personas[0],
+    seed: 101,
+    runId: "run-close-error",
+    sessionId: "session-close-error",
+    driver: fakeDriver({ successAfterObserve: 1, closeError: new Error("browser crashed") }),
+    policy: { decide: () => ({ type: "finish", reasonCode: "done" }) },
+    oracle: { evaluate: () => ({ definitiveSuccess: true }) },
+    store: memoryStore(),
+  });
+
+  assert.equal(result.session.status, "runtime_error");
+  assert.equal(result.session.terminalReason.code, "DRIVER_FAILED");
 });
 
 test("evaluation and reporting only advance after evidence is sealed", async () => {
@@ -182,7 +203,7 @@ test("aborted signal stops scheduling new sessions", async () => {
   );
 });
 
-function fakeDriver({ order = [], successAfterObserve = 1, asyncStart, asyncClose } = {}) {
+function fakeDriver({ order = [], successAfterObserve = 1, asyncStart, asyncClose, closeError } = {}) {
   let observes = 0;
   return {
     async start() {
@@ -206,6 +227,7 @@ function fakeDriver({ order = [], successAfterObserve = 1, asyncStart, asyncClos
     async close() {
       order.push("close");
       await asyncClose?.();
+      if (closeError) throw closeError;
     },
   };
 }
