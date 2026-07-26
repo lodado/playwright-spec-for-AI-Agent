@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_AGENT_INPUT_VERSION } from "../../contracts/index.mjs";
-import { createAdaptiveActionAuthorizer } from "../index.mjs";
+import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_ACTION_RESULT_VERSION, EXECUTION_AGENT_INPUT_VERSION } from "../../contracts/index.mjs";
+import { advanceAdaptiveMilestone, createAdaptiveActionAuthorizer } from "../index.mjs";
 
 function executionAgentInput() {
   return {
@@ -30,6 +30,19 @@ function clickProposal() {
     leaseId: "lease-safe-ui",
     action: "click_observed_element",
     parameters: { observationId: "observation-3", elementId: "element-settings" },
+  };
+}
+
+function acceptedResult(input, proposal) {
+  return {
+    schemaVersion: EXECUTION_ACTION_RESULT_VERSION,
+    resultId: `result-${proposal.proposalId}`,
+    proposalId: proposal.proposalId,
+    accepted: true,
+    policyReason: "ACCEPTED",
+    evidenceRefs: [`${proposal.proposalId}:action`],
+    page: { ...input.currentPage, domGeneration: input.currentPage.domGeneration + 1 },
+    remainingBudget: { ...input.remainingBudget, actions: input.remainingBudget.actions - 1, turns: input.remainingBudget.turns - 1 },
   };
 }
 
@@ -107,5 +120,48 @@ describe("adaptive execution authorization", () => {
       parameters: { observationId: "observation-3", elementId: "element-settings", state: "visible", timeoutMs: 6 },
     };
     expect(() => createAdaptiveActionAuthorizer({ input, now: () => 1_000 }).authorize({ proposal: wait })).toThrow(/remaining time budget/);
+  });
+
+  it("advances exact milestones only after their bound required action", () => {
+    const input = executionAgentInput();
+    const observe = { ...clickProposal(), proposalId: "proposal-observe", action: "observe_dom", parameters: {} };
+    expect(advanceAdaptiveMilestone({ input, proposal: observe, result: acceptedResult(input, observe), observation: input.recentObservations[0] })).toBeUndefined();
+
+    const click = clickProposal();
+    const transition = advanceAdaptiveMilestone({ input, proposal: click, result: acceptedResult(input, click) });
+    expect(transition.input).toMatchObject({
+      currentMilestoneId: "dialog-visible",
+      milestones: [
+        { id: "open-settings", status: "COMPLETED" },
+        { id: "dialog-visible", status: "PENDING" },
+      ],
+      recentObservations: [],
+    });
+  });
+
+  it("finishes with a non-verdict outcome when a semantic target is observed", () => {
+    const input = executionAgentInput();
+    input.milestones[0].status = "COMPLETED";
+    input.milestones[1].target = { role: "dialog", accessibleName: { kind: "literal", value: "Settings" } };
+    input.currentMilestoneId = "dialog-visible";
+    input.recentObservations = [];
+    input.capabilityLease.actions.push("observe_aria");
+    const observe = { ...clickProposal(), proposalId: "proposal-dialog", milestoneId: "dialog-visible", action: "observe_aria", parameters: {} };
+    const observation = {
+      observationId: "observation-dialog",
+      pageId: input.currentPage.pageId,
+      domGeneration: input.currentPage.domGeneration,
+      elements: [{ elementId: "element-dialog", milestoneIds: ["dialog-visible"], allowedActions: [], role: "dialog", accessibleName: "Settings" }],
+    };
+
+    const transition = advanceAdaptiveMilestone({ input, proposal: observe, result: acceptedResult(input, observe), observation });
+    expect(transition.outcome).toEqual({
+      schemaVersion: "execution-agent-outcome/0.1",
+      runId: input.runId,
+      scenarioId: input.scenarioId,
+      type: "COMPLETED",
+      completedMilestoneIds: ["open-settings", "dialog-visible"],
+    });
+    expect(transition.outcome).not.toHaveProperty("verdict");
   });
 });

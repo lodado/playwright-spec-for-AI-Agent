@@ -362,13 +362,6 @@ describe("Playwright browser tool gateway", () => {
   it("rejects navigation after an interaction", async () => {
     const fixture = fakeBrowser();
     const input = executionAgentInput();
-    input.milestones = [{
-      id: "open-settings",
-      class: "REQUIRED_SEMANTIC_MILESTONE",
-      status: "PENDING",
-      description: "Reach settings.",
-      target: { testId: "settings" },
-    }];
     input.capabilityLease.actions.push("navigate", "go_back", "reload_page");
     const gateway = await openGateway({ input, browserType: fixture.browserType });
     const observed = await gateway.execute({
@@ -468,8 +461,46 @@ describe("Playwright browser tool gateway", () => {
     expect(fixture.candidate.elementHandle).toHaveBeenCalledTimes(1);
     expect(fixture.calls).toContainEqual(["click", "settings"]);
     expect(await artifactText(gateway, execution.bundle)).toEqual(expect.stringMatching(/before|action|after/i));
+    expect(gateway.agentInput()).toMatchObject({
+      currentMilestoneId: "dialog-visible",
+      milestones: [
+        { id: "open-settings", status: "COMPLETED" },
+        { id: "dialog-visible", status: "PENDING" },
+      ],
+      recentObservations: [],
+    });
     expect(fixture.screenshots).toEqual([]);
 
+    await gateway.close();
+  });
+
+  it("returns a non-verdict outcome when the final semantic milestone is observed", async () => {
+    const fixture = fakeBrowser();
+    const input = executionAgentInput();
+    input.milestones = [{
+      id: "settings-visible",
+      class: "REQUIRED_SEMANTIC_MILESTONE",
+      status: "PENDING",
+      description: "Settings entry is visible.",
+      target: { testId: "settings" },
+    }];
+    input.currentMilestoneId = "settings-visible";
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
+
+    const execution = await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "observe_dom"),
+      tokensUsed: 1,
+    });
+
+    expect(execution.outcome).toEqual({
+      schemaVersion: "execution-agent-outcome/0.1",
+      runId: input.runId,
+      scenarioId: input.scenarioId,
+      type: "COMPLETED",
+      completedMilestoneIds: ["settings-visible"],
+    });
+    expect(execution.outcome).not.toHaveProperty("verdict");
+    expect(() => gateway.agentInput()).toThrow(/complete/i);
     await gateway.close();
   });
 

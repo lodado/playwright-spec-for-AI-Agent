@@ -6,6 +6,7 @@ import {
   validateContract,
 } from "../contracts/index.mjs";
 import {
+  advanceAdaptiveMilestone,
   createAdaptiveActionAuthorizer,
   executePlan,
   providerCapabilities,
@@ -115,6 +116,9 @@ export async function openPlaywrightBrowserToolGateway({
 
     let currentPage = { ...initialInput.currentPage, url: gatewayUrl(page, initialInput.capabilityLease.allowedOrigins) };
     let remainingBudget = { ...initialInput.remainingBudget };
+    let milestones = structuredClone(initialInput.milestones);
+    let currentMilestoneId = initialInput.currentMilestoneId;
+    let outcome;
     let recentObservations = [];
     let manifest;
     let observationSequence = 0;
@@ -122,9 +126,12 @@ export async function openPlaywrightBrowserToolGateway({
     const usedProposalIds = new Set();
 
     function agentInput() {
+      if (outcome !== undefined) throw new Error("adaptive execution is complete");
       remainingBudget.timeMs = Math.min(remainingBudget.timeMs, Math.max(0, Math.floor(deadline - readFiniteClock(clock))));
       return snapshotContract("ExecutionAgentInput", {
         ...initialInput,
+        milestones: structuredClone(milestones),
+        currentMilestoneId,
         currentPage: { ...currentPage },
         recentObservations: structuredClone(recentObservations),
         remainingBudget: { ...remainingBudget },
@@ -238,7 +245,20 @@ export async function openPlaywrightBrowserToolGateway({
           facts,
         });
         manifest = store.appendCheckpoint(bundle, { stage: "execute", ...(manifest === undefined ? {} : { manifest }) });
-        return Object.freeze({ result, bundle, manifest, ...(observation ? { observation: snapshotContract("ExecutionAgentInput", { ...agentInput(), recentObservations: [observation.contract] }).recentObservations[0] } : {}) });
+        const observedContract = observation?.contract;
+        const transition = advanceAdaptiveMilestone({ input: beforeInput, proposal: authorization.proposal, result, ...(observedContract ? { observation: observedContract } : {}) });
+        if (transition?.input) {
+          milestones = structuredClone(transition.input.milestones);
+          currentMilestoneId = transition.input.currentMilestoneId;
+          recentObservations = [];
+          handles.clear();
+        } else if (transition?.outcome) {
+          milestones = milestones.map((item) => item.id === beforeInput.currentMilestoneId ? { ...item, status: "COMPLETED" } : item);
+          outcome = transition.outcome;
+          recentObservations = [];
+          handles.clear();
+        }
+        return Object.freeze({ result, bundle, manifest, ...(observedContract ? { observation: observedContract } : {}), ...(outcome ? { outcome } : {}) });
       } catch (error) {
         if (operationStarted) {
           failed = true;
@@ -326,7 +346,7 @@ async function captureGatewayPage(page, currentPage, allowedOrigins, timing, sec
 }
 
 async function observeGatewayElements({ page, input, currentPage, sequence, secrets, deadline, clock }) {
-  const locator = page.locator("button, [role='button'], [role='menuitem'], a[href], input, select, textarea, [tabindex]");
+  const locator = page.locator("button, [role='button'], [role='menuitem'], dialog, [role='dialog'], a[href], input, select, textarea, [tabindex]");
   const timing = { deadline, clock };
   const count = await runGatewayBrowserOperation(timing, () => locator.count());
   if (!Number.isInteger(count) || count < 0 || count > GATEWAY_MAX_ELEMENTS) throw new Error("gateway element observation exceeds its bound");

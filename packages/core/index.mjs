@@ -1,5 +1,6 @@
 import {
   CONTRACT_VIOLATION,
+  EXECUTION_AGENT_OUTCOME_VERSION,
   EXECUTION_PLAN_VERSION,
   PROVIDER_CAPABILITIES_VERSION,
   RUNTIME_OUTCOME_VERSION,
@@ -133,6 +134,60 @@ export function createAdaptiveActionAuthorizer({ input, now = Date.now } = {}) {
   }
 
   return Object.freeze({ authorize, remainingBudget });
+}
+
+export function advanceAdaptiveMilestone({ input, proposal, result, observation } = {}) {
+  const inputSnapshot = snapshotContract("ExecutionAgentInput", input);
+  const proposalSnapshot = snapshotContract("ExecutionActionProposal", proposal);
+  const resultSnapshot = snapshotContract("ExecutionActionResult", result, { input: inputSnapshot, proposal: proposalSnapshot });
+  const observationSnapshot = observation === undefined ? undefined : snapshotContract("ExecutionAgentInput", {
+    ...inputSnapshot,
+    recentObservations: [observation],
+  }).recentObservations[0];
+  const milestone = inputSnapshot.milestones.find((item) => item.id === inputSnapshot.currentMilestoneId);
+  const boundElement = referencedMilestoneElement(inputSnapshot, proposalSnapshot, milestone.id);
+  const matchedObservation = ["observe_dom", "observe_aria"].includes(proposalSnapshot.action)
+    && observationSnapshot?.pageId === inputSnapshot.currentPage.pageId
+    && observationSnapshot.domGeneration === inputSnapshot.currentPage.domGeneration
+    && observationSnapshot.elements.some((element) => element.milestoneIds.includes(milestone.id));
+  const acceptedBoundAction = ["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposalSnapshot.action) && boundElement !== undefined;
+  const satisfied = resultSnapshot.accepted && (
+    (milestone.class === "REQUIRED_EXACT_ACTION" && proposalSnapshot.action === milestone.requiredAction && (!["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposalSnapshot.action) || boundElement !== undefined))
+    || (milestone.class === "REQUIRED_SEMANTIC_MILESTONE" && (matchedObservation || (proposalSnapshot.action === "wait_for_element_state" && ["present", "visible"].includes(proposalSnapshot.parameters.state) && boundElement !== undefined)))
+    || (milestone.class === "OPTIONAL_HINT" && acceptedBoundAction)
+  );
+  if (!satisfied) return undefined;
+
+  const milestones = inputSnapshot.milestones.map((item) => item.id === milestone.id ? { ...item, status: "COMPLETED" } : item);
+  const next = milestones.find((item) => item.status === "PENDING" && item.class !== "OPTIONAL_HINT");
+  if (next === undefined) {
+    return Object.freeze({
+      outcome: snapshotContract("ExecutionAgentOutcome", {
+        schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION,
+        runId: inputSnapshot.runId,
+        scenarioId: inputSnapshot.scenarioId,
+        type: "COMPLETED",
+        completedMilestoneIds: milestones.filter((item) => item.status === "COMPLETED").map((item) => item.id),
+      }, { input: inputSnapshot }),
+    });
+  }
+  return Object.freeze({
+    input: snapshotContract("ExecutionAgentInput", {
+      ...inputSnapshot,
+      milestones,
+      currentMilestoneId: next.id,
+      currentPage: resultSnapshot.page,
+      recentObservations: [],
+      remainingBudget: resultSnapshot.remainingBudget,
+    }),
+  });
+}
+
+function referencedMilestoneElement(input, proposal, milestoneId) {
+  if (!["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposal.action)) return undefined;
+  const observation = input.recentObservations.find((item) => item.observationId === proposal.parameters.observationId);
+  if (observation?.pageId !== input.currentPage.pageId || observation.domGeneration !== input.currentPage.domGeneration) return undefined;
+  return observation.elements.find((item) => item.elementId === proposal.parameters.elementId && item.milestoneIds.includes(milestoneId));
 }
 
 function nodesForScenario(suite, scenario) {
