@@ -1,12 +1,17 @@
 import {
+  FINDING_VERSION,
+  FRICTION_POINT_VERSION,
   FUNCTIONAL_EVALUATION_VERSION,
   SIMULATION_VALIDITY_VERSION,
   ContractValidationError,
   validateBehavioralFingerprint,
   validateEvidenceManifest,
+  validateFinding,
+  validateFrictionPoint,
   validateFunctionalEvaluation,
   validateSessionRecord,
   validateSimulationValidityReport,
+  stableId,
 } from "@persona-runtime/contracts";
 
 export const EVALUATOR_ERROR_CODES = Object.freeze({
@@ -524,4 +529,154 @@ function jaccard(left, right) {
 
 function clamp01(value) {
   return Math.max(0, Math.min(1, value));
+}
+
+
+export function extractFrictionPoints({ session, functionalEvaluation, observations = [], events = [], manifest } = {}) {
+  const latest = [...observations].sort((left, right) => (left.sequence ?? 0) - (right.sequence ?? 0)).at(-1);
+  const lastEvent = [...events].sort((left, right) => (left.index ?? 0) - (right.index ?? 0)).at(-1);
+  const points = [];
+  for (const event of events) {
+    if (!event.derivedSignals?.failedInteraction && !event.derivedSignals?.noProgress && event.result?.status === "success") continue;
+    const evidenceIds = event.evidenceIds?.filter(Boolean) ?? [];
+    if (evidenceIds.length === 0) continue;
+    points.push(makeFrictionPoint({
+      session,
+      route: routeKey(event.urlAfter ?? event.urlBefore),
+      category: event.derivedSignals?.failedInteraction ? "functional" : "behavioral",
+      observation: event.derivedSignals?.failedInteraction ? `Action ${event.action?.type} failed or was blocked on ${routeKey(event.urlBefore)}.` : `Action ${event.action?.type} made no progress on ${routeKey(event.urlBefore)}.`,
+      interpretation: event.derivedSignals?.failedInteraction ? "The user-facing interaction did not complete successfully." : "The session showed a repeated or stalled step before task completion.",
+      severityCandidate: event.derivedSignals?.failedInteraction ? "high" : "medium",
+      eventIds: [event.id],
+      evidenceIds,
+      elementFingerprint: event.action?.elementId,
+    }));
+  }
+
+  if (functionalEvaluation && functionalEvaluation.status !== "success" && lastEvent) {
+    const oracleIds = [...(functionalEvaluation.violatedOracleIds ?? []), ...(functionalEvaluation.unknownOracleIds ?? [])];
+    const evidenceIds = functionalEvaluation.evidenceIds?.length ? functionalEvaluation.evidenceIds : lastEvent.evidenceIds ?? [];
+    if (oracleIds.length > 0 && evidenceIds.length > 0) {
+      points.push(makeFrictionPoint({
+        session,
+        route: routeKey(latest?.page?.url ?? lastEvent.urlAfter),
+        category: functionalEvaluation.status === "runtime_error" ? "functional" : "behavioral",
+        observation: `${functionalEvaluation.status} with oracle signal(s): ${oracleIds.join(", ")}.`,
+        interpretation: "The sealed evidence did not prove deterministic task success.",
+        severityCandidate: functionalEvaluation.status === "failure" || functionalEvaluation.status === "runtime_error" ? "high" : "medium",
+        eventIds: [lastEvent.id],
+        evidenceIds,
+        oracleIds,
+      }));
+    }
+  }
+
+  if (manifest) {
+    const manifestEvidenceIds = new Set(manifest.entries?.map((entry) => entry.id) ?? []);
+    return points.filter((point) => point.evidenceIds.every((id) => manifestEvidenceIds.has(id)));
+  }
+  return points;
+}
+
+export function clusterFrictionPoints(frictionPoints = []) {
+  const groups = new Map();
+  for (const point of frictionPoints) {
+    const key = frictionClusterKey(point);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(point);
+  }
+  return [...groups.entries()].map(([key, points]) => Object.freeze({ key, points: Object.freeze(points) }));
+}
+
+export function createFindings({ frictionPoints = [], sessions = [], minimumRecurrence = 2, validityReport } = {}) {
+  const sessionById = new Map(sessions.map((item) => [item.sessionId ?? item.session?.sessionId, item.session ?? item]));
+  return clusterFrictionPoints(frictionPoints).map(({ key, points }) => {
+    const affectedSessionIds = unique(points.map((point) => point.sessionId));
+    const affectedSessions = affectedSessionIds.map((id) => sessionById.get(id)).filter(Boolean);
+    const severity = severityFromPoints(points, affectedSessionIds.length);
+    const maturity = affectedSessionIds.length >= minimumRecurrence ? "reproduced_synthetic_finding" : "exploratory_signal";
+    const evidenceConfidence = points.every((point) => point.evidenceIds.length > 0 && point.eventIds.length > 0) ? 1 : 0;
+    const recurrenceConfidence = ratio(affectedSessionIds.length, Math.max(sessions.length || affectedSessionIds.length, 1));
+    const calibrationUnavailable = validityReport?.calibration?.level !== "calibrated";
+    const finding = {
+      schemaVersion: FINDING_VERSION,
+      id: stableId("finding", [key, affectedSessionIds]),
+      fingerprint: stableId("findingfp", [key]),
+      title: titleForFinding(points[0]),
+      category: points[0].category,
+      severity,
+      maturity,
+      observation: summarizeObservations(points),
+      interpretation: points[0].interpretation,
+      recommendation: recommendationFor(points[0]),
+      affectedSessionIds,
+      affectedPersonaIds: unique(affectedSessions.map((session) => session.personaId).filter(Boolean)),
+      affectedTaskIds: unique(affectedSessions.map((session) => session.taskId).filter(Boolean)),
+      eventIds: unique(points.flatMap((point) => point.eventIds)),
+      evidenceIds: unique(points.flatMap((point) => point.evidenceIds)),
+      recurrenceRate: recurrenceConfidence,
+      confidence: {
+        evidenceConfidence,
+        recurrenceConfidence,
+        seedStability: "not_available",
+        modelAgreement: "not_available",
+        calibrationConfidence: calibrationUnavailable ? "not_available" : 0.5,
+        orderConsistency: "not_available",
+        overall: evidenceConfidence === 1 && affectedSessionIds.length >= minimumRecurrence && !calibrationUnavailable ? "high" : (evidenceConfidence === 1 && affectedSessionIds.length >= minimumRecurrence ? "medium" : "low"),
+        limitations: [
+          ...(affectedSessionIds.length < minimumRecurrence ? ["Finding is not recurrent enough for reproduced maturity."] : []),
+          ...(calibrationUnavailable ? ["Synthetic result is not calibrated with human reference data."] : []),
+        ],
+      },
+      humanValidation: {
+        required: calibrationUnavailable && ["critical", "high"].includes(severity),
+        level: calibrationUnavailable && ["critical", "high"].includes(severity) ? "required" : "recommended",
+        reason: calibrationUnavailable ? "Uncalibrated synthetic finding needs human review before release claims." : "Evidence-linked synthetic finding.",
+      },
+    };
+    return validateFinding(finding);
+  });
+}
+
+function makeFrictionPoint({ session, category, observation, interpretation, severityCandidate, route, elementFingerprint, oracleIds = [], eventIds, evidenceIds }) {
+  return validateFrictionPoint({
+    schemaVersion: FRICTION_POINT_VERSION,
+    id: stableId("friction", [session?.sessionId, category, route, elementFingerprint, oracleIds, eventIds]),
+    sessionId: session?.sessionId ?? "unknown-session",
+    category,
+    observation,
+    interpretation,
+    severityCandidate,
+    ...(route ? { route } : {}),
+    ...(elementFingerprint ? { elementFingerprint } : {}),
+    oracleIds,
+    eventIds,
+    evidenceIds: unique(evidenceIds),
+    evaluatorConfidence: 0.9,
+  });
+}
+
+function frictionClusterKey(point) {
+  return [point.category, point.route ?? "", point.elementFingerprint ?? "", [...point.oracleIds].sort().join("+")].join("|");
+}
+
+function severityFromPoints(points, affectedCount) {
+  if (points.some((point) => point.severityCandidate === "critical")) return "critical";
+  if (points.some((point) => point.severityCandidate === "high") || affectedCount >= 3) return "high";
+  if (points.some((point) => point.severityCandidate === "medium")) return "medium";
+  return "low";
+}
+
+function titleForFinding(point) {
+  if (point.category === "functional") return `Functional friction on ${point.route ?? "task"}`;
+  return `Behavioral friction on ${point.route ?? "task"}`;
+}
+
+function summarizeObservations(points) {
+  return `${points.length} evidence-linked friction point(s): ${points.map((point) => point.observation).join(" ")}`;
+}
+
+function recommendationFor(point) {
+  if (point.category === "functional") return "Inspect the failing interaction and deterministic oracle evidence before release.";
+  return "Review the route, visible affordances, and repeated no-progress action evidence with a human reviewer.";
 }
