@@ -196,6 +196,7 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
   let handle;
   const events = [];
   const observations = [];
+  const driverEvidence = [];
   const budgets = createBudget(task, now());
 
   const saveSession = async () => store.saveSession?.(session);
@@ -210,14 +211,31 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
     await setPhase("VALIDATED");
     await setPhase("QUEUED");
     await setPhase("STARTING_BROWSER");
-    handle = await driver.start({ study, task, persona, seed, variant, sessionId, signal });
+    handle = await driver.start({
+      study,
+      task,
+      persona,
+      seed,
+      variant,
+      sessionId,
+      signal,
+      environment: {
+        ...study.environment,
+        startPath: task.startPath ?? study.environment?.startPath,
+      },
+      safetyPolicy: task.safetyPolicy,
+      evidenceDir: store.sessionDir,
+      valueRefs: study.environment?.fixtures ?? {},
+    });
     await setPhase("RUNNING");
 
     while (true) {
       throwIfAborted(signal);
       enforceBudget(budgets, now());
 
-      const observation = normalizeObservation(await driver.observe(handle, { signal }), sessionId, observations.length);
+      const rawObservation = await driver.observe(handle, { signal });
+      driverEvidence.push(...evidenceFrom(rawObservation));
+      const observation = normalizeObservation(rawObservation, sessionId, observations.length);
       observations.push(observation);
       await store.appendObservation?.(observation);
 
@@ -237,6 +255,7 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
 
       budgets.consume(action);
       const result = normalizeActionResult(await driver.execute(handle, action, { signal }));
+      driverEvidence.push(...evidenceFrom(result));
       const event = deriveInteractionEvent({ sessionId, index: events.length, observation, action, result });
       events.push(event);
       await store.appendEvent?.(event);
@@ -251,7 +270,8 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
   } finally {
     if (handle !== undefined) {
       try {
-        await driver.close(handle);
+        const closeResult = await driver.close(handle);
+        driverEvidence.push(...evidenceFrom(closeResult));
       } catch (error) {
         if (session.phase !== "RUNTIME_ERROR") {
           await setPhase("RUNTIME_ERROR", { terminalReason: { code: RUNTIME_ERROR_CODES.DRIVER_FAILED, message: "driver close failed" } });
@@ -264,7 +284,7 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
     await setPhase("MANUAL_REVIEW", { terminalReason: { code: "NO_TERMINAL_RESULT", message: "session ended without a terminal result" } });
   }
 
-  const manifest = await sealSessionEvidence({ session, observations, events, store, now: now() });
+  const manifest = await sealSessionEvidence({ session, observations, events, driverEvidence, store, now: now() });
   await setPhase("EVIDENCE_SEALED", { evidenceManifestId: manifest.id });
   return deepFreeze({ session, manifest, observations, events });
 }
@@ -336,7 +356,7 @@ export function deriveInteractionEvent({ sessionId, index, observation, action, 
   return deepFreeze(event);
 }
 
-async function sealSessionEvidence({ session, observations, events, store, now }) {
+async function sealSessionEvidence({ session, observations, events, driverEvidence, store, now }) {
   const manifestBody = {
     schemaVersion: EVIDENCE_MANIFEST_SCHEMA_VERSION,
     id: `manifest-${session.sessionId}`,
@@ -348,6 +368,7 @@ async function sealSessionEvidence({ session, observations, events, store, now }
     studyHash: hashJson({ studyId: session.studyId, taskId: session.taskId }),
     policyHash: hashJson(session.sampledPolicy),
     entries: [
+      ...deduplicateEvidence(driverEvidence),
       ...observations.map((observation) => ({
         id: `evidence-${observation.id}`,
         type: "semantic_snapshot",
@@ -436,11 +457,34 @@ function normalizeObservation(observation, sessionId, sequence) {
     sequence,
     timestamp: observation.timestamp ?? new Date().toISOString(),
     page: observation.page ?? { url: "about:blank", title: "", viewport: { width: 0, height: 0 } },
-    semantic: observation.semantic ?? { visibleText: [], headings: [], landmarks: [], interactiveElements: [] },
-    visual: observation.visual ?? {},
-    runtime: observation.runtime ?? { consoleIssues: [], networkFailures: [], pendingRequestCount: 0, loadingIndicators: [] },
+    semantic: {
+      visibleText: observation.semantic?.visibleText ?? [],
+      headings: observation.semantic?.headings ?? [],
+      landmarks: observation.semantic?.landmarks ?? [],
+      interactiveElements: observation.semantic?.interactiveElements ?? [],
+    },
+    visual: {
+      screenshotEvidenceId: observation.visual?.screenshotEvidenceId ?? `missing-screenshot-${sessionId}-${sequence}`,
+      ...(observation.visual?.occludedElementFingerprints
+        ? { occludedElementFingerprints: observation.visual.occludedElementFingerprints }
+        : {}),
+    },
+    runtime: {
+      consoleIssues: observation.runtime?.consoleIssues ?? [],
+      networkFailures: observation.runtime?.networkFailures ?? [],
+      pendingRequestCount: observation.runtime?.pendingRequestCount ?? 0,
+      loadingIndicators: observation.runtime?.loadingIndicators ?? [],
+    },
     oracleSignals: observation.oracleSignals ?? { satisfied: [], violated: [], unknown: [] },
   });
+}
+
+function evidenceFrom(value) {
+  return Array.isArray(value?.evidence) ? value.evidence.filter(isRecord).map(item => structuredClone(item)) : [];
+}
+
+function deduplicateEvidence(entries) {
+  return [...new Map(entries.map(entry => [entry.id, entry])).values()];
 }
 
 function normalizeActionResult(result) {

@@ -92,7 +92,7 @@ describe("playwright behavioral driver", () => {
     expect(observation.visual.screenshotEvidenceId).toContain("screenshot");
     expect(observation.semantic.headings[0]).toMatchObject({ text: "Hello" });
     expect(observation.runtime.consoleIssues.some((item) => item.message.includes("broken widget"))).toBe(true);
-    expect(observation.runtime.networkFailures.some((item) => item.code === "HTTP_STATUS" || item.code === "REQUEST_FAILED" || item.code === "ORIGIN_BLOCKED")).toBe(true);
+    expect(observation.runtime.networkFailures.some((item) => ["HTTP_STATUS", "REQUEST_FAILED", "ORIGIN_BLOCKED"].includes(item.severity))).toBe(true);
     await driver.close(handle);
     await app.close();
     cleanup.push(() => rm(dir, { recursive: true, force: true }));

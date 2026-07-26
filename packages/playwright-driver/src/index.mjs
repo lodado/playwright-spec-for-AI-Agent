@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 const DEFAULT_STABILIZATION = Object.freeze({ domQuietMs: 100, maxWaitMs: 2_500, ignoreUrlPatterns: [], loadingSelectorHints: [] });
@@ -44,8 +44,9 @@ export function createPlaywrightDriver({ browserType, browserName = "chromium", 
     },
     async close(handle) {
       const session = assertSession(handle);
-      await closeSession(session);
+      const result = await closeSession(session);
       sessions.delete(session);
+      return result;
     },
     async closeAll() {
       await Promise.all([...sessions].map(closeSession));
@@ -163,12 +164,16 @@ async function observeSession(session, now) {
   const screenshotEvidenceId = `${observationId}:screenshot:${++session.screenshotSequence}`;
   const screenshotPath = path.join(session.screenshotDir, `${session.observationSequence}.png`);
   await session.page.screenshot({ path: screenshotPath, fullPage: false });
+  const screenshotEvidence = await fileEvidence(screenshotEvidenceId, "screenshot", screenshotPath, session.evidenceDir);
+  const runtimeEvidence = session.runtimeIssues.map(runtimeIssueEvidence);
 
   const capturedSemantic = await captureSemantic(session.page);
   session.handles.clear();
   capturedSemantic.interactiveElements.forEach((element) => session.handles.set(element.id, element.selector));
   const semantic = {
-    ...capturedSemantic,
+    visibleText: capturedSemantic.visibleText,
+    headings: capturedSemantic.headings,
+    landmarks: capturedSemantic.landmarks,
     interactiveElements: capturedSemantic.interactiveElements.map(({ selector: _selector, ...element }) => Object.freeze(element)),
   };
   const observation = Object.freeze({
@@ -185,20 +190,16 @@ async function observeSession(session, now) {
     semantic,
     visual: {
       screenshotEvidenceId,
-      screenshotPath: path.relative(session.evidenceDir, screenshotPath),
-      occludedElementFingerprints: semantic.occludedElementFingerprints,
+      occludedElementFingerprints: capturedSemantic.occludedElementFingerprints,
     },
     runtime: {
-      consoleIssues: session.runtimeIssues.filter((item) => item.kind === "console" || item.kind === "pageerror"),
-      networkFailures: session.runtimeIssues.filter((item) => item.kind === "network"),
-      downloads: session.runtimeIssues.filter((item) => item.kind === "download"),
-      browserIssues: session.runtimeIssues.filter((item) => item.kind === "browser"),
+      consoleIssues: session.runtimeIssues.filter((item) => item.type === "console" || item.type === "pageerror"),
+      networkFailures: session.runtimeIssues.filter((item) => item.type === "network"),
       pendingRequestCount: 0,
-      loadingIndicators: semantic.loadingIndicators,
-      stabilizationIncomplete: false,
+      loadingIndicators: capturedSemantic.loadingIndicators,
     },
     oracleSignals: { satisfied: [], violated: [], unknown: [] },
-    evidenceIds: [screenshotEvidenceId],
+    evidence: [screenshotEvidence, ...runtimeEvidence],
   });
   session.lastObservation = observation;
   return observation;
@@ -237,6 +238,7 @@ async function executeAction(session, action, now) {
     const screenshotEvidenceId = `${observationId}:action:${++session.screenshotSequence}`;
     const screenshotPath = path.join(session.screenshotDir, `after-${session.screenshotSequence}.png`);
     await session.page.screenshot({ path: screenshotPath, fullPage: false });
+    const screenshotEvidence = await fileEvidence(screenshotEvidenceId, "screenshot", screenshotPath, session.evidenceDir);
     return Object.freeze({
       schemaVersion: "action-result/0.1",
       status: "success",
@@ -246,9 +248,10 @@ async function executeAction(session, action, now) {
       urlAfter: session.page.url(),
       timestamp: now(),
       evidenceIds: [screenshotEvidenceId],
-      evidence: [{ id: screenshotEvidenceId, type: "screenshot", relativePath: path.relative(session.evidenceDir, screenshotPath) }],
+      evidence: [screenshotEvidence],
     });
   } catch (error) {
+    const failureEvidence = await captureFailureScreenshot(session, observationId);
     return Object.freeze({
       schemaVersion: "action-result/0.1",
       status: isPolicyError(error) ? "blocked" : "failure",
@@ -257,7 +260,8 @@ async function executeAction(session, action, now) {
       urlBefore,
       urlAfter: session.page.url(),
       timestamp: now(),
-      evidenceIds: [],
+      evidenceIds: failureEvidence.map(item => item.id),
+      evidence: failureEvidence,
       message: safeErrorMessage(error),
     });
   } finally {
@@ -267,15 +271,21 @@ async function executeAction(session, action, now) {
 }
 
 async function closeSession(session) {
-  if (session.closed) return;
+  if (session.closed) return { evidence: [] };
   session.closed = true;
+  let closeError;
+  let traceEvidence;
   try {
     await session.context.tracing.stop({ path: session.tracePath });
-  } catch {
+    traceEvidence = await fileEvidence(`${session.sessionId}:trace`, "trace", session.tracePath, session.evidenceDir);
+  } catch (error) {
+    closeError = error;
     await rm(session.tracePath, { force: true }).catch(() => undefined);
   }
-  await session.context.close().catch(() => undefined);
-  await session.browser.close().catch(() => undefined);
+  try { await session.context.close(); } catch (error) { closeError ??= error; }
+  try { await session.browser.close(); } catch (error) { closeError ??= error; }
+  if (closeError) throw closeError;
+  return { evidence: traceEvidence ? [traceEvidence] : [] };
 }
 
 async function stabilizePage(page, policy) {
@@ -354,7 +364,19 @@ async function captureSemantic(page) {
     landmarks: data.landmarks,
     interactiveElements: data.interactiveElements.map((element, index) => {
       const { selectorOrdinal, ...publicElement } = element;
-      return { ...publicElement, id: `el_${index + 1}`, selector: `${INTERACTIVE_SELECTOR} >> nth=${selectorOrdinal}` };
+      return {
+        id: `el_${index + 1}`,
+        role: publicElement.role,
+        name: publicElement.name,
+        text: publicElement.text,
+        enabled: publicElement.enabled,
+        focused: publicElement.focused,
+        visible: publicElement.viewportVisible && !publicElement.occluded,
+        viewportPosition: { inViewport: publicElement.viewportVisible, occluded: publicElement.occluded },
+        boundingBox: publicElement.boundingBox,
+        fingerprint: publicElement.fingerprint,
+        selector: `${INTERACTIVE_SELECTOR} >> nth=${selectorOrdinal}`,
+      };
     }),
     occludedElementFingerprints: data.occludedElementFingerprints,
     loadingIndicators: data.loadingIndicators,
@@ -367,7 +389,7 @@ function assertActionAllowed(session, action) {
   const policy = session.safetyPolicy;
   const element = action.elementId ? session.lastObservation.semantic.interactiveElements.find((item) => item.id === action.elementId) : undefined;
   if (["click", "type", "select", "ignore"].includes(action.type) && !element) throw policyError("ELEMENT_NOT_FOUND", "Element was not in the latest perceived observation");
-  if (element && (!element.viewportVisible || element.occluded)) throw policyError("ACTION_NOT_ALLOWED", "Element is not visible to the persona");
+  if (element && (!element.visible || !element.viewportPosition?.inViewport || element.viewportPosition?.occluded)) throw policyError("ACTION_NOT_ALLOWED", "Element is not visible to the persona");
   if (element && !element.enabled && ["click", "type", "select"].includes(action.type)) throw policyError("ACTION_NOT_ALLOWED", "Element is disabled");
   if ((action.type === "click" || action.type === "back") && !policy.allowClick) throw policyError("ACTION_NOT_ALLOWED", "Click/back actions are blocked by policy");
   if (action.type === "type" && !policy.allowTyping) throw policyError("ACTION_NOT_ALLOWED", "Typing is blocked by policy");
@@ -455,7 +477,52 @@ function safeUrl(value) {
 }
 
 function issue(kind, code, message, metadata, now) {
-  return Object.freeze({ id: `issue-${hash({ kind, code, message, metadata }).slice(0, 12)}`, kind, code, message, metadata, timestamp: now() });
+  return Object.freeze({
+    id: `issue-${hash({ kind, code, message, metadata }).slice(0, 12)}`,
+    type: kind === "browser" ? "popup" : kind,
+    severity: code,
+    message,
+    ...(metadata.url ? { url: metadata.url } : {}),
+    timestamp: now(),
+  });
+}
+
+async function captureFailureScreenshot(session, observationId) {
+  const id = `${observationId}:failure:${++session.screenshotSequence}`;
+  const screenshotPath = path.join(session.screenshotDir, `failure-${session.screenshotSequence}.png`);
+  try {
+    await session.page.screenshot({ path: screenshotPath, fullPage: false });
+    return [await fileEvidence(id, "screenshot", screenshotPath, session.evidenceDir)];
+  } catch {
+    return [];
+  }
+}
+
+async function fileEvidence(id, type, absolutePath, evidenceDir) {
+  const content = await readFile(absolutePath);
+  const details = await stat(absolutePath);
+  return Object.freeze({
+    id,
+    type,
+    relativePath: path.relative(evidenceDir, absolutePath),
+    contentHash: `sha256:${createHash("sha256").update(content).digest("hex")}`,
+    byteSize: details.size,
+    metadata: {},
+  });
+}
+
+function runtimeIssueEvidence(runtimeIssue) {
+  const type = runtimeIssue.type === "network"
+    ? "network_failure"
+    : runtimeIssue.type === "download"
+      ? "download"
+      : "console_issue";
+  return Object.freeze({
+    id: `evidence-${runtimeIssue.id}`,
+    type,
+    contentHash: `sha256:${hash(runtimeIssue)}`,
+    metadata: structuredClone(runtimeIssue),
+  });
 }
 
 function scrollDelta(action) {
