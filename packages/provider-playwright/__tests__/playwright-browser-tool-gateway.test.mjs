@@ -6,7 +6,7 @@ import {
 } from "../../contracts/index.mjs";
 import * as provider from "../index.mjs";
 
-const { openPlaywrightBrowserToolGateway } = provider;
+const { openPlaywrightBrowserToolGateway, runAdaptiveWithPlaywright } = provider;
 
 function executionAgentInput() {
   return {
@@ -246,6 +246,46 @@ async function artifactText(gateway, bundle) {
 }
 
 describe("Playwright browser tool gateway", () => {
+  it("closes the browser when the adaptive proposer fails", async () => {
+    const fixture = fakeBrowser();
+
+    await expect(runAdaptiveWithPlaywright({
+      input: executionAgentInput(),
+      browserType: fixture.browserType,
+      proposeAction: async () => { throw new Error("proposer failed"); },
+    })).rejects.toThrow(/proposer failed/i);
+
+    expect(fixture.browser.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds adaptive proposer latency by the remaining run budget", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const fixture = fakeBrowser();
+      const input = executionAgentInput();
+      input.remainingBudget.timeMs = 1_000;
+      let proposerCalled = false;
+      const running = runAdaptiveWithPlaywright({
+        input,
+        browserType: fixture.browserType,
+        proposeAction: async () => {
+          proposerCalled = true;
+          return new Promise(() => undefined);
+        },
+      });
+      const rejection = expect(running).rejects.toThrow(/time budget/i);
+      await vi.waitFor(() => expect(proposerCalled).toBe(true));
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await rejection;
+      expect(fixture.browser.close).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns current URL evidence without taking screenshots", async () => {
     const fixture = fakeBrowser();
     const input = executionAgentInput();

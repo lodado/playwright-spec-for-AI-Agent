@@ -361,7 +361,8 @@ async function observeGatewayElements({ page, input, currentPage, sequence, secr
       const credentialPattern = /password|secret|token|api[-_ ]?key|authorization|credential|session|csrf|nonce|recovery[-_ ]?code|one[-_ ]?time|otp|passcode|private[-_ ]?key/i;
       const tag = element.tagName.toLowerCase();
       const text = (element.textContent ?? "").trim().slice(0, maxChars + 1);
-      const role = element.getAttribute("role") || (tag === "button" ? "button" : tag === "a" ? "link" : undefined);
+      const role = element.getAttribute("role") || (tag === "button" ? "button" : tag === "a" ? "link" : tag === "dialog" ? "dialog" : undefined);
+      const semanticContainer = tag === "dialog" || role === "dialog";
       let protectedElement = false;
       for (let current = element; current && !protectedElement; current = current.parentElement) {
         protectedElement = credentialPattern.test(["name", "id", "class", "aria-label", "autocomplete", "data-testid"].map((name) => current.getAttribute(name) ?? "").join(" "));
@@ -369,10 +370,11 @@ async function observeGatewayElements({ page, input, currentPage, sequence, secr
       return {
         tag,
         role,
-        accessibleName: protectedElement ? "[REDACTED]" : element.getAttribute("aria-label") || text,
-        text: protectedElement ? "[REDACTED]" : text,
+        accessibleName: protectedElement ? "[REDACTED]" : element.getAttribute("aria-label") || (semanticContainer ? "" : text),
+        text: protectedElement ? "[REDACTED]" : semanticContainer ? "" : text,
         testId: element.getAttribute("data-testid") || undefined,
         protected: protectedElement,
+        semanticContainer,
         anchor: element.closest("a[href]") !== null,
         form: element.closest("form") !== null,
         editable: element.isContentEditable || ["input", "select", "textarea"].includes(tag),
@@ -381,7 +383,7 @@ async function observeGatewayElements({ page, input, currentPage, sequence, secr
     }, GATEWAY_ELEMENT_TEXT_LIMIT));
     if (!metadata || typeof metadata.text !== "string" || metadata.text.length > GATEWAY_ELEMENT_TEXT_LIMIT) throw new Error("gateway element metadata is invalid or truncated");
     const protectedValue = [metadata.accessibleName, metadata.text].some((value) => typeof value === "string" && secrets.some((secret) => secret.length > 0 && value.includes(secret)));
-    const safe = !metadata.protected && !protectedValue && !metadata.anchor && !metadata.form && !metadata.editable && !metadata.disabled;
+    const safe = !metadata.protected && !protectedValue && !metadata.semanticContainer && !metadata.anchor && !metadata.form && !metadata.editable && !metadata.disabled;
     const elementId = `element-${canonicalHash({ observationId, index }).slice("sha256:".length, "sha256:".length + 16)}`;
     const milestoneIds = metadata.protected || protectedValue ? [] : input.milestones.filter((milestone) => milestone.target && gatewayTargetMatches(milestone.target, metadata)).map((milestone) => milestone.id);
     const allowedActions = [
@@ -507,6 +509,38 @@ function redactGatewayValue(value, secrets) {
   if (Array.isArray(value)) return value.map((item) => redactGatewayValue(item, secrets));
   if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactGatewayValue(item, secrets)]));
   return value;
+}
+
+export async function runAdaptiveWithPlaywright({
+  input,
+  proposeAction,
+  browserName = "chromium",
+  browserType,
+  viewport,
+  secrets = [],
+  now = () => new Date().toISOString(),
+  clock = Date.now,
+} = {}) {
+  if (typeof proposeAction !== "function") throw new Error("proposeAction must be a function");
+  const gateway = await openPlaywrightBrowserToolGateway({ input, browserName, browserType, viewport, secrets, now, clock });
+  const bundles = [];
+  let manifest;
+  let outcome;
+  try {
+    while (outcome === undefined) {
+      const proposerInput = gateway.agentInput();
+      const proposed = await runGatewayBrowserOperation({ deadline: readFiniteClock(clock) + proposerInput.remainingBudget.timeMs, clock }, () => proposeAction(proposerInput));
+      if (!proposed?.proposal || typeof proposed.proposal !== "object") throw new Error("adaptive proposer must return a proposal and token usage");
+      if (!Number.isInteger(proposed.tokensUsed) || proposed.tokensUsed < 0) throw new Error("adaptive proposer token usage must be a non-negative integer");
+      const execution = await gateway.execute({ proposal: proposed.proposal, tokensUsed: proposed.tokensUsed });
+      bundles.push(execution.bundle);
+      manifest = execution.manifest;
+      outcome = execution.outcome;
+    }
+    return Object.freeze({ outcome, bundles: Object.freeze(bundles), manifest, readBlob: gateway.readBlob });
+  } finally {
+    await gateway.close();
+  }
 }
 
 export async function executeWithPlaywright({
