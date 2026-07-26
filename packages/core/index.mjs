@@ -5,6 +5,7 @@ import {
   RUNTIME_OUTCOME_VERSION,
   RUNTIME_ERROR_CODES,
   canonicalHash,
+  snapshotContract,
   validateContract,
 } from "../contracts/index.mjs";
 
@@ -77,6 +78,61 @@ export function validateExecutionPlanBinding({ qaIr, plan, providerCapabilities 
   });
   if (canonicalHash(plan) !== canonicalHash(expected)) throw contractError("execute", "execution plan does not match QA IR and provider capabilities");
   return plan;
+}
+
+export function createAdaptiveActionAuthorizer({ input, now = Date.now } = {}) {
+  if (typeof now !== "function") throw contractError("execute", "now must be a function");
+  const inputSnapshot = snapshotContract("ExecutionAgentInput", input);
+  const readNow = () => {
+    const value = now();
+    if (!Number.isFinite(value)) throw contractError("execute", "now must return a finite number");
+    return value;
+  };
+  const startedAt = readNow();
+  const deadline = startedAt + inputSnapshot.remainingBudget.timeMs;
+  const seenProposalIds = new Set();
+  let actions = inputSnapshot.remainingBudget.actions;
+  let turns = inputSnapshot.remainingBudget.turns;
+  let timeMs = inputSnapshot.remainingBudget.timeMs;
+  let tokens = inputSnapshot.remainingBudget.tokens;
+
+  function remainingBudget() {
+    timeMs = Math.min(timeMs, Math.max(0, Math.floor(deadline - readNow())));
+    return Object.freeze({ actions, turns, timeMs, tokens });
+  }
+
+  function authorize({ proposal, tokensUsed = 0 } = {}) {
+    const proposalSnapshot = snapshotContract("ExecutionActionProposal", proposal);
+    if (!Number.isInteger(tokensUsed) || tokensUsed < 0) throw contractError("execute", "tokensUsed must be a non-negative integer");
+    if (seenProposalIds.has(proposalSnapshot.proposalId)) throw contractError("execute", "action proposal was already consumed");
+    const before = remainingBudget();
+    if (before.actions < 1 || before.turns < 1 || before.timeMs < 1 || tokensUsed > before.tokens || before.tokens < 1) throw contractError("execute", "adaptive execution budget is exhausted");
+    seenProposalIds.add(proposalSnapshot.proposalId);
+    actions -= 1;
+    turns -= 1;
+    tokens -= tokensUsed;
+
+    if (proposalSnapshot.runId !== inputSnapshot.runId || proposalSnapshot.scenarioId !== inputSnapshot.scenarioId) throw contractError("execute", "action proposal is bound to a different run or scenario");
+    if (proposalSnapshot.milestoneId !== inputSnapshot.currentMilestoneId) throw contractError("execute", "action proposal does not target the current milestone");
+    if (proposalSnapshot.leaseId !== inputSnapshot.capabilityLease.leaseId || !inputSnapshot.capabilityLease.actions.includes(proposalSnapshot.action)) throw contractError("execute", "action is outside the capability lease");
+    if (proposalSnapshot.action === "wait_for_element_state" && proposalSnapshot.parameters.timeoutMs > remainingBudget().timeMs) throw contractError("execute", "wait exceeds the remaining time budget");
+
+    const milestone = inputSnapshot.milestones.find((item) => item.id === inputSnapshot.currentMilestoneId);
+    const passiveRecoveryActions = ["observe_dom", "observe_aria", "get_current_url", "scroll_view", "wait_for_element_state"];
+    if (milestone.class === "REQUIRED_EXACT_ACTION" && proposalSnapshot.action !== milestone.requiredAction && !passiveRecoveryActions.includes(proposalSnapshot.action)) throw contractError("execute", "action does not match the required exact action");
+    if (["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposalSnapshot.action)) {
+      const observation = inputSnapshot.recentObservations.find((item) => item.observationId === proposalSnapshot.parameters.observationId);
+      if (!observation || observation.pageId !== inputSnapshot.currentPage.pageId || observation.domGeneration !== inputSnapshot.currentPage.domGeneration) throw contractError("execute", "stale observation cannot authorize an action");
+      const element = observation.elements.find((item) => item.elementId === proposalSnapshot.parameters.elementId);
+      if (!element) throw contractError("execute", "unknown element cannot authorize an action");
+      if (!element.allowedActions.includes(proposalSnapshot.action)) throw contractError("execute", "element does not allow the proposed action");
+      if (["click_observed_element", "hover_observed_element"].includes(proposalSnapshot.action) && !element.milestoneIds.includes(milestone.id)) throw contractError("execute", "observed element does not match the current milestone");
+    }
+    if (proposalSnapshot.action === "navigate" && !inputSnapshot.capabilityLease.allowedOrigins.includes(new URL(proposalSnapshot.parameters.url).origin)) throw contractError("execute", "navigation origin is outside the capability lease");
+    return Object.freeze({ proposal: proposalSnapshot, remainingBudget: remainingBudget() });
+  }
+
+  return Object.freeze({ authorize, remainingBudget });
 }
 
 function nodesForScenario(suite, scenario) {

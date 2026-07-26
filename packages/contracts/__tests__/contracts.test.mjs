@@ -70,6 +70,21 @@ function qaIr() {
   };
 }
 
+function executionPlan() {
+  return {
+    schemaVersion: EXECUTION_PLAN_VERSION,
+    planId: "plan-1",
+    qaIrId: "qa-ir-dashboard",
+    nodes: [
+      { nodeId: "navigate", suiteId: "suite-dashboard", scenarioId: "scenario-dashboard-loads", stepId: "navigate", kind: "NAVIGATE", milestoneClass: "REQUIRED_SEMANTIC_MILESTONE", action: "NAVIGATE", evidence: [], policy },
+      { nodeId: "observe", suiteId: "suite-dashboard", scenarioId: "scenario-dashboard-loads", stepId: "observe", kind: "OBSERVE", action: "OBSERVE", evidence: ["VISIBLE_TEXT"], policy },
+    ],
+    edges: [{ from: "navigate", to: "observe" }],
+    retryPolicy: { maxAttempts: 1 },
+    timeoutPolicy: { perNodeMs: 30_000, runMs: 120_000 },
+  };
+}
+
 function evidenceBundle() {
   return {
     schemaVersion: EVIDENCE_BUNDLE_VERSION,
@@ -201,7 +216,31 @@ describe("documented runtime contracts", () => {
 
     const invalid = qaIr();
     invalid.suites[0].scenarios[0].steps[0].milestoneClass = "OPTIONAL_EXACT_ACTION";
-    expect(() => validateContract("QaIrDocument", invalid)).toThrow(/REQUIRED_EXACT_ACTION/);
+    expect(() => validateContract("QaIrDocument", invalid)).toThrow(/REQUIRED_SEMANTIC_MILESTONE/);
+
+    const weakened = qaIr();
+    weakened.suites[0].scenarios[0].steps[0] = {
+      id: "click",
+      kind: "INTERACT",
+      milestoneClass: "OPTIONAL_HINT",
+      action: "CLICK",
+      target: { testId: "settings" },
+    };
+    expect(() => validateContract("QaIrDocument", weakened)).toThrow(/REQUIRED_EXACT_ACTION/);
+  });
+
+  it("rejects unknown fields inside execution-plan nodes, edges, and policies", () => {
+    const node = executionPlan();
+    node.nodes[0].injected = true;
+    expect(() => validateContract("ExecutionPlan", node)).toThrow(/injected/);
+
+    const edge = executionPlan();
+    edge.edges[0].injected = true;
+    expect(() => validateContract("ExecutionPlan", edge)).toThrow(/injected/);
+
+    const retry = executionPlan();
+    retry.retryPolicy.extra = true;
+    expect(() => validateContract("ExecutionPlan", retry)).toThrow(/extra/);
   });
 
   it("validates documented core shapes and exact versions", () => {
@@ -228,15 +267,7 @@ describe("documented runtime contracts", () => {
         evidence: ["VISIBLE_TEXT"],
         unsupportedEvidence: ["RAW_BROWSER_SESSION_DUMP"],
       },
-      ExecutionPlan: {
-        schemaVersion: EXECUTION_PLAN_VERSION,
-        planId: "plan-1",
-        qaIrId: "qa-ir-dashboard",
-        nodes: [{ nodeId: "navigate", stepId: "navigate" }, { nodeId: "observe", stepId: "observe" }],
-        edges: [{ from: "navigate", to: "observe" }],
-        retryPolicy: { maxAttempts: 1 },
-        timeoutPolicy: { perNodeMs: 30_000, runMs: 120_000 },
-      },
+      ExecutionPlan: executionPlan(),
       RuntimeOutcome: { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "judge", type: "ERROR", code: CONTRACT_VIOLATION, message: "invalid judge payload" },
       DeterministicEvaluationResult: {
         schemaVersion: DETERMINISTIC_EVALUATION_VERSION,
@@ -323,9 +354,9 @@ describe("documented runtime contracts", () => {
 
   it("rejects wrong versions and missing documented nested structures", () => {
     expect(() => validateContract("ArtifactEnvelope", { artifactVersion: "artifact/9", artifactId: "a", contentHash: "h", createdAt: "t", producer: {}, payload: {} })).toThrow(/artifact\/0.1/);
-    expect(() => validateContract("QaIrDocument", { ...qaIr(), schemaVersion: "qa-ir/9" })).toThrow(/qa-ir\/0.1/);
+    expect(() => validateContract("QaIrDocument", { ...qaIr(), schemaVersion: "qa-ir/9" })).toThrow(/qa-ir\/0.2/);
     expect(() => validateContract("QaIrDocument", { ...qaIr(), suites: [{ id: "suite", title: "Dashboard", tags: [], provenance: [] }] })).toThrow(/scenarios/);
-    expect(() => validateContract("ExecutionPlan", { schemaVersion: EXECUTION_PLAN_VERSION, planId: "p", qaIrId: "q", nodes: [], edges: [], retryPolicy: {} })).toThrow(/timeoutPolicy/);
+    expect(() => validateContract("ExecutionPlan", { schemaVersion: EXECUTION_PLAN_VERSION, planId: "p", qaIrId: "q", nodes: [], edges: [], retryPolicy: { maxAttempts: 1 } })).toThrow(/timeoutPolicy/);
     expect(() => validateContract("EvidenceBundle", { ...evidenceBundle(), environment: { targetUrl: "https://example.test" } })).toThrow(/browser/);
     expect(() => validateContract("EvidenceBundle", { ...evidenceBundle(), facts: [{ id: "fact-bad", kind: "URL" }] })).toThrow(/value/);
     expect(() => validateContract("EvidenceBundle", { ...evidenceBundle(), facts: [{ id: "fact-element", kind: "ELEMENT_OBSERVATION", value: { expectationId: "expect-heading", visible: true } }] })).toThrow(/resolution/);

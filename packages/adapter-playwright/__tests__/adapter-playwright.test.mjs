@@ -20,7 +20,7 @@ describe("compilePlaywrightSpec", () => {
     expect(JSON.stringify(first)).not.toContain("generatedAt");
     expect(first.qaIr.source).toEqual({
       adapter: "adapter-playwright",
-      adapterVersion: "0.1.0",
+      adapterVersion: "0.2.0",
       uri: "dashboard.spec.ts",
       revision: "abc123",
     });
@@ -38,7 +38,7 @@ describe("compilePlaywrightSpec", () => {
         start: { line: 4, column: 1, offset: source.indexOf("test(") },
         end: { line: 6, column: 2, offset: source.indexOf("});") + 1 },
       },
-      adapter: { name: "adapter-playwright", version: "0.1.0" },
+      adapter: { name: "adapter-playwright", version: "0.2.0" },
       contentHash: canonicalHash(source.slice(source.indexOf("test("), source.indexOf("});") + 1)),
       revision: "abc123",
     });

@@ -2,11 +2,15 @@ import { createHash } from "node:crypto";
 
 export const CONTRACT_VIOLATION = "CONTRACT_VIOLATION";
 export const ARTIFACT_VERSION = "artifact/0.1";
-export const QA_IR_VERSION = "qa-ir/0.1";
+export const QA_IR_VERSION = "qa-ir/0.2";
 export const COMPILE_RESULT_VERSION = "compile-result/0.1";
 export const DIAGNOSTIC_VERSION = "diagnostic/0.1";
 export const PROVIDER_CAPABILITIES_VERSION = "provider-capabilities/0.1";
-export const EXECUTION_PLAN_VERSION = "execution-plan/0.1";
+export const EXECUTION_PLAN_VERSION = "execution-plan/0.2";
+export const EXECUTION_AGENT_INPUT_VERSION = "execution-agent-input/0.1";
+export const EXECUTION_ACTION_PROPOSAL_VERSION = "execution-action-proposal/0.1";
+export const EXECUTION_ACTION_RESULT_VERSION = "execution-action-result/0.1";
+export const EXECUTION_AGENT_OUTCOME_VERSION = "execution-agent-outcome/0.1";
 export const RUNTIME_OUTCOME_VERSION = "runtime-outcome/0.1";
 export const DETERMINISTIC_EVALUATION_VERSION = "deterministic-evaluation/0.1";
 export const EVIDENCE_BUNDLE_VERSION = "evidence-bundle/0.1";
@@ -21,6 +25,19 @@ export const REPAIR_RECOMMENDATION_VERSION = "repair-recommendation/0.1";
 export const VERDICTS = Object.freeze(["PASS", "FAIL", "SKIP", "MANUAL_REVIEW"]);
 export const EXPECTATION_STATUSES = Object.freeze(["MATCHED", "CONTRADICTED", "NOT_OBSERVED", "AMBIGUOUS", "NOT_APPLICABLE"]);
 export const MILESTONE_CLASSES = Object.freeze(["REQUIRED_EXACT_ACTION", "REQUIRED_SEMANTIC_MILESTONE", "OPTIONAL_HINT"]);
+export const ADAPTIVE_ACTIONS = Object.freeze([
+  "observe_dom",
+  "observe_aria",
+  "get_current_url",
+  "navigate",
+  "click_observed_element",
+  "press_key",
+  "hover_observed_element",
+  "scroll_view",
+  "wait_for_element_state",
+  "go_back",
+  "reload_page",
+]);
 export const RUNTIME_ERROR_CODES = Object.freeze([
   "BROWSER_START_FAILED",
   "AUTHENTICATION_FAILED",
@@ -58,6 +75,10 @@ const schemas = {
   Diagnostic: validateDiagnostic,
   ProviderCapabilities: validateProviderCapabilities,
   ExecutionPlan: validateExecutionPlan,
+  ExecutionAgentInput: validateExecutionAgentInput,
+  ExecutionActionProposal: validateExecutionActionProposal,
+  ExecutionActionResult: validateExecutionActionResult,
+  ExecutionAgentOutcome: validateExecutionAgentOutcome,
   RuntimeOutcome: validateRuntimeOutcome,
   DeterministicEvaluationResult: validateDeterministicEvaluationResult,
   EvidenceBundle: validateEvidenceBundle,
@@ -125,6 +146,15 @@ export function validateContract(contract, value, context = {}) {
   if (!validate) fail(contract, "$", "is not a known contract");
   validate(value, "$", context);
   return value;
+}
+
+export function snapshotContract(contract, value, context = {}) {
+  validateContract(contract, value, context);
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) fail(contract, "$", "must be JSON-serializable");
+  const snapshot = JSON.parse(serialized);
+  validateContract(contract, snapshot, context);
+  return deepFreeze(snapshot);
 }
 
 function canonicalize(value) {
@@ -220,14 +250,14 @@ function validateQaStep(value, path) {
   oneOf(value.kind, ["NAVIGATE", "INTERACT", "OBSERVE", "CHECKPOINT"], `${path}.kind`, "QaIrDocument");
   if (value.kind === "NAVIGATE") {
     allowedKeys(value, ["id", "kind", "milestoneClass", "target"], path, "QaIrDocument");
-    oneOf(value.milestoneClass, MILESTONE_CLASSES, `${path}.milestoneClass`, "QaIrDocument");
+    exact(value.milestoneClass, "REQUIRED_SEMANTIC_MILESTONE", `${path}.milestoneClass`, "QaIrDocument");
     object(value.target, `${path}.target`, "QaIrDocument");
     allowedKeys(value.target, ["type", "value"], `${path}.target`, "QaIrDocument");
     oneOf(value.target.type, ["PATH", "URL"], `${path}.target.type`, "QaIrDocument");
     string(value.target.value, `${path}.target.value`, "QaIrDocument");
   } else if (value.kind === "INTERACT") {
     allowedKeys(value, ["id", "kind", "milestoneClass", "action", "target", "value"], path, "QaIrDocument");
-    oneOf(value.milestoneClass, MILESTONE_CLASSES, `${path}.milestoneClass`, "QaIrDocument");
+    exact(value.milestoneClass, "REQUIRED_EXACT_ACTION", `${path}.milestoneClass`, "QaIrDocument");
     oneOf(value.action, ["CLICK", "TYPE", "UPLOAD", "SELECT", "PRESS"], `${path}.action`, "QaIrDocument");
     validateSemanticTarget(value.target, `${path}.target`);
   } else if (value.kind === "OBSERVE") {
@@ -318,13 +348,160 @@ function validateExecutionPlan(value, path) {
   value.nodes.forEach((node, index) => {
     const nodePath = `${path}.nodes[${index}]`;
     object(node, nodePath, "ExecutionPlan");
+    allowedKeys(node, ["nodeId", "suiteId", "scenarioId", "stepId", "kind", "milestoneClass", "action", "evidence", "policy"], nodePath, "ExecutionPlan");
     string(node.nodeId, `${nodePath}.nodeId`, "ExecutionPlan");
-    if (node.kind === "NAVIGATE" || node.kind === "INTERACT") oneOf(node.milestoneClass, MILESTONE_CLASSES, `${nodePath}.milestoneClass`, "ExecutionPlan");
+    string(node.suiteId, `${nodePath}.suiteId`, "ExecutionPlan");
+    string(node.scenarioId, `${nodePath}.scenarioId`, "ExecutionPlan");
+    string(node.stepId, `${nodePath}.stepId`, "ExecutionPlan");
+    oneOf(node.kind, ["NAVIGATE", "INTERACT", "OBSERVE", "CHECKPOINT"], `${nodePath}.kind`, "ExecutionPlan");
+    if (node.kind === "NAVIGATE") exact(node.milestoneClass, "REQUIRED_SEMANTIC_MILESTONE", `${nodePath}.milestoneClass`, "ExecutionPlan");
+    if (node.kind === "INTERACT") exact(node.milestoneClass, "REQUIRED_EXACT_ACTION", `${nodePath}.milestoneClass`, "ExecutionPlan");
+    if (node.kind !== "NAVIGATE" && node.kind !== "INTERACT" && node.milestoneClass !== undefined) fail("ExecutionPlan", `${nodePath}.milestoneClass`, "is not allowed for this node kind");
+    string(node.action, `${nodePath}.action`, "ExecutionPlan");
+    uniqueStringArray(node.evidence, `${nodePath}.evidence`, "ExecutionPlan");
+    object(node.policy, `${nodePath}.policy`, "ExecutionPlan");
+    validateCapabilityPolicy(node.policy, `${nodePath}.policy`, "ExecutionPlan");
   });
   array(value.edges, `${path}.edges`, "ExecutionPlan");
-  value.edges.forEach((edge, index) => { object(edge, `${path}.edges[${index}]`, "ExecutionPlan"); string(edge.from, `${path}.edges[${index}].from`, "ExecutionPlan"); string(edge.to, `${path}.edges[${index}].to`, "ExecutionPlan"); });
+  value.edges.forEach((edge, index) => {
+    const edgePath = `${path}.edges[${index}]`;
+    object(edge, edgePath, "ExecutionPlan");
+    allowedKeys(edge, ["from", "to"], edgePath, "ExecutionPlan");
+    string(edge.from, `${edgePath}.from`, "ExecutionPlan");
+    string(edge.to, `${edgePath}.to`, "ExecutionPlan");
+  });
   object(value.retryPolicy, `${path}.retryPolicy`, "ExecutionPlan");
+  allowedKeys(value.retryPolicy, ["maxAttempts"], `${path}.retryPolicy`, "ExecutionPlan");
+  boundedInteger(value.retryPolicy.maxAttempts, 1, 100, `${path}.retryPolicy.maxAttempts`, "ExecutionPlan");
   object(value.timeoutPolicy, `${path}.timeoutPolicy`, "ExecutionPlan");
+  allowedKeys(value.timeoutPolicy, ["perNodeMs", "runMs"], `${path}.timeoutPolicy`, "ExecutionPlan");
+  boundedInteger(value.timeoutPolicy.perNodeMs, 1, Number.MAX_SAFE_INTEGER, `${path}.timeoutPolicy.perNodeMs`, "ExecutionPlan");
+  boundedInteger(value.timeoutPolicy.runMs, value.timeoutPolicy.perNodeMs, Number.MAX_SAFE_INTEGER, `${path}.timeoutPolicy.runMs`, "ExecutionPlan");
+}
+
+function validateExecutionAgentInput(value, path) {
+  const contract = "ExecutionAgentInput";
+  object(value, path, contract);
+  allowedKeys(value, ["schemaVersion", "runId", "scenarioId", "goal", "milestones", "currentMilestoneId", "currentPage", "recentObservations", "capabilityLease", "remainingBudget"], path, contract);
+  exact(value.schemaVersion, EXECUTION_AGENT_INPUT_VERSION, `${path}.schemaVersion`, contract);
+  boundedString(value.runId, 256, `${path}.runId`, contract);
+  boundedString(value.scenarioId, 256, `${path}.scenarioId`, contract);
+  object(value.goal, `${path}.goal`, contract);
+  allowedKeys(value.goal, ["id", "description"], `${path}.goal`, contract);
+  boundedString(value.goal.id, 256, `${path}.goal.id`, contract);
+  boundedString(value.goal.description, 4_096, `${path}.goal.description`, contract);
+  array(value.milestones, `${path}.milestones`, contract);
+  if (value.milestones.length === 0 || value.milestones.length > 64) fail(contract, `${path}.milestones`, "must contain between 1 and 64 milestones");
+  value.milestones.forEach((milestone, index) => {
+    const milestonePath = `${path}.milestones[${index}]`;
+    object(milestone, milestonePath, contract);
+    allowedKeys(milestone, ["id", "class", "status", "description", "requiredAction"], milestonePath, contract);
+    boundedString(milestone.id, 256, `${milestonePath}.id`, contract);
+    oneOf(milestone.class, MILESTONE_CLASSES, `${milestonePath}.class`, contract);
+    oneOf(milestone.status, ["PENDING", "COMPLETED", "BLOCKED"], `${milestonePath}.status`, contract);
+    boundedString(milestone.description, 4_096, `${milestonePath}.description`, contract);
+    if (milestone.class === "REQUIRED_EXACT_ACTION") oneOf(milestone.requiredAction, ADAPTIVE_ACTIONS, `${milestonePath}.requiredAction`, contract);
+    else if (milestone.requiredAction !== undefined) fail(contract, `${milestonePath}.requiredAction`, "is only allowed for REQUIRED_EXACT_ACTION");
+  });
+  const milestoneIds = value.milestones.map((milestone) => milestone.id);
+  if (new Set(milestoneIds).size !== milestoneIds.length) fail(contract, `${path}.milestones`, "milestone ids must be unique");
+  boundedString(value.currentMilestoneId, 256, `${path}.currentMilestoneId`, contract);
+  const currentMilestone = value.milestones.find((milestone) => milestone.id === value.currentMilestoneId);
+  if (!currentMilestone || currentMilestone.status !== "PENDING") fail(contract, `${path}.currentMilestoneId`, "must reference a pending milestone");
+  validateAdaptivePage(value.currentPage, `${path}.currentPage`, contract);
+  array(value.recentObservations, `${path}.recentObservations`, contract);
+  if (value.recentObservations.length > 8) fail(contract, `${path}.recentObservations`, "must contain at most 8 observations");
+  value.recentObservations.forEach((observation, index) => validateAdaptiveObservation(observation, `${path}.recentObservations[${index}]`, contract));
+  const observationIds = value.recentObservations.map((observation) => observation.observationId);
+  if (new Set(observationIds).size !== observationIds.length) fail(contract, `${path}.recentObservations`, "observation ids must be unique");
+  object(value.capabilityLease, `${path}.capabilityLease`, contract);
+  allowedKeys(value.capabilityLease, ["leaseId", "actions", "allowedOrigins"], `${path}.capabilityLease`, contract);
+  boundedString(value.capabilityLease.leaseId, 256, `${path}.capabilityLease.leaseId`, contract);
+  uniqueStringArray(value.capabilityLease.actions, `${path}.capabilityLease.actions`, contract);
+  if (value.capabilityLease.actions.length === 0 || value.capabilityLease.actions.length > ADAPTIVE_ACTIONS.length) fail(contract, `${path}.capabilityLease.actions`, "must contain bounded actions");
+  value.capabilityLease.actions.forEach((action, index) => oneOf(action, ADAPTIVE_ACTIONS, `${path}.capabilityLease.actions[${index}]`, contract));
+  uniqueStringArray(value.capabilityLease.allowedOrigins, `${path}.capabilityLease.allowedOrigins`, contract);
+  if (value.capabilityLease.allowedOrigins.length === 0 || value.capabilityLease.allowedOrigins.length > 8) fail(contract, `${path}.capabilityLease.allowedOrigins`, "must contain between 1 and 8 origins");
+  value.capabilityLease.allowedOrigins.forEach((origin, index) => httpOrigin(origin, `${path}.capabilityLease.allowedOrigins[${index}]`, contract));
+  if (!value.capabilityLease.allowedOrigins.includes(new URL(value.currentPage.url).origin)) fail(contract, `${path}.currentPage.url`, "origin is outside the capability lease");
+  validateAdaptiveBudget(value.remainingBudget, `${path}.remainingBudget`, contract);
+}
+
+function validateExecutionActionProposal(value, path) {
+  const contract = "ExecutionActionProposal";
+  object(value, path, contract);
+  allowedKeys(value, ["schemaVersion", "proposalId", "runId", "scenarioId", "milestoneId", "leaseId", "action", "parameters"], path, contract);
+  exact(value.schemaVersion, EXECUTION_ACTION_PROPOSAL_VERSION, `${path}.schemaVersion`, contract);
+  for (const key of ["proposalId", "runId", "scenarioId", "milestoneId", "leaseId"]) boundedString(value[key], 256, `${path}.${key}`, contract);
+  oneOf(value.action, ADAPTIVE_ACTIONS, `${path}.action`, contract);
+  validateAdaptiveActionParameters(value.action, value.parameters, `${path}.parameters`, contract);
+}
+
+function validateExecutionActionResult(value, path, context = {}) {
+  const contract = "ExecutionActionResult";
+  object(value, path, contract);
+  allowedKeys(value, ["schemaVersion", "resultId", "proposalId", "accepted", "policyReason", "evidenceRefs", "page", "remainingBudget"], path, contract);
+  exact(value.schemaVersion, EXECUTION_ACTION_RESULT_VERSION, `${path}.schemaVersion`, contract);
+  boundedString(value.resultId, 256, `${path}.resultId`, contract);
+  boundedString(value.proposalId, 256, `${path}.proposalId`, contract);
+  bool(value.accepted, `${path}.accepted`, contract);
+  oneOf(value.policyReason, ["ACCEPTED", "STALE_OBSERVATION", "UNKNOWN_ELEMENT", "CAPABILITY_DENIED", "ORIGIN_DENIED", "BUDGET_EXHAUSTED", "INVALID_ACTION", "POLICY_DENIED", "EXECUTION_FAILED"], `${path}.policyReason`, contract);
+  if (value.accepted !== (value.policyReason === "ACCEPTED")) fail(contract, `${path}.policyReason`, "must agree with accepted");
+  uniqueStringArray(value.evidenceRefs, `${path}.evidenceRefs`, contract);
+  if (value.evidenceRefs.length > 64) fail(contract, `${path}.evidenceRefs`, "must contain at most 64 references");
+  value.evidenceRefs.forEach((ref, index) => boundedString(ref, 256, `${path}.evidenceRefs[${index}]`, contract));
+  if (value.accepted && value.evidenceRefs.length === 0) fail(contract, `${path}.evidenceRefs`, "accepted actions require evidence");
+  validateAdaptivePage(value.page, `${path}.page`, contract);
+  validateAdaptiveBudget(value.remainingBudget, `${path}.remainingBudget`, contract);
+  if (context.proposal !== undefined) {
+    validateExecutionActionProposal(context.proposal, "$.proposal");
+    exact(value.proposalId, context.proposal.proposalId, `${path}.proposalId`, contract);
+  }
+  if (context.input !== undefined) {
+    validateExecutionAgentInput(context.input, "$.input");
+    const before = context.input.remainingBudget;
+    if (before.actions < 1 || value.remainingBudget.actions !== before.actions - 1) fail(contract, `${path}.remainingBudget.actions`, "must consume exactly one action");
+    if (before.turns < 1 || value.remainingBudget.turns !== before.turns - 1) fail(contract, `${path}.remainingBudget.turns`, "must consume exactly one turn");
+    if (value.remainingBudget.timeMs > before.timeMs) fail(contract, `${path}.remainingBudget.timeMs`, "must not increase");
+    if (value.remainingBudget.tokens > before.tokens) fail(contract, `${path}.remainingBudget.tokens`, "must not increase");
+    if (!context.input.capabilityLease.allowedOrigins.includes(new URL(value.page.url).origin)) fail(contract, `${path}.page.url`, "origin is outside the capability lease");
+    if (!value.accepted && (value.page.pageId !== context.input.currentPage.pageId || value.page.domGeneration !== context.input.currentPage.domGeneration || value.page.url !== context.input.currentPage.url)) fail(contract, `${path}.page`, "rejected actions must not change page state");
+    if (value.accepted && value.page.pageId === context.input.currentPage.pageId && value.page.domGeneration < context.input.currentPage.domGeneration) fail(contract, `${path}.page.domGeneration`, "must not regress on the same page");
+    if (context.proposal !== undefined) {
+      exact(context.proposal.runId, context.input.runId, "$.proposal.runId", contract);
+      exact(context.proposal.scenarioId, context.input.scenarioId, "$.proposal.scenarioId", contract);
+      exact(context.proposal.milestoneId, context.input.currentMilestoneId, "$.proposal.milestoneId", contract);
+      exact(context.proposal.leaseId, context.input.capabilityLease.leaseId, "$.proposal.leaseId", contract);
+      if (!context.input.capabilityLease.actions.includes(context.proposal.action)) fail(contract, "$.proposal.action", "is outside the capability lease");
+      if (context.proposal.action === "navigate" && !context.input.capabilityLease.allowedOrigins.includes(new URL(context.proposal.parameters.url).origin)) fail(contract, "$.proposal.parameters.url", "origin is outside the capability lease");
+    }
+  }
+}
+
+function validateExecutionAgentOutcome(value, path, context = {}) {
+  const contract = "ExecutionAgentOutcome";
+  object(value, path, contract);
+  const completed = value.type === "COMPLETED";
+  allowedKeys(value, completed ? ["schemaVersion", "runId", "scenarioId", "type", "completedMilestoneIds"] : ["schemaVersion", "runId", "scenarioId", "type", "completedMilestoneIds", "reason"], path, contract);
+  exact(value.schemaVersion, EXECUTION_AGENT_OUTCOME_VERSION, `${path}.schemaVersion`, contract);
+  boundedString(value.runId, 256, `${path}.runId`, contract);
+  boundedString(value.scenarioId, 256, `${path}.scenarioId`, contract);
+  oneOf(value.type, ["COMPLETED", "BLOCKED", "AMBIGUOUS", "ERROR"], `${path}.type`, contract);
+  uniqueStringArray(value.completedMilestoneIds, `${path}.completedMilestoneIds`, contract);
+  if (value.completedMilestoneIds.length > 64) fail(contract, `${path}.completedMilestoneIds`, "must contain at most 64 milestones");
+  if (!completed) boundedString(value.reason, 4_096, `${path}.reason`, contract);
+  if (context.input !== undefined) {
+    validateExecutionAgentInput(context.input, "$.input");
+    exact(value.runId, context.input.runId, `${path}.runId`, contract);
+    exact(value.scenarioId, context.input.scenarioId, `${path}.scenarioId`, contract);
+    const known = new Set(context.input.milestones.map((milestone) => milestone.id));
+    if (value.completedMilestoneIds.some((id) => !known.has(id))) fail(contract, `${path}.completedMilestoneIds`, "contains an unknown milestone");
+    if (completed) {
+      const completedIds = new Set(value.completedMilestoneIds);
+      const missing = context.input.milestones.find((milestone) => milestone.class !== "OPTIONAL_HINT" && !completedIds.has(milestone.id));
+      if (missing) fail(contract, `${path}.completedMilestoneIds`, "must include every required milestone");
+    }
+  }
 }
 
 function validateRuntimeOutcome(value, path) {
@@ -823,6 +1000,105 @@ function validateSourceRange(value, path, contract) {
   if (value.end.line < value.start.line || (value.end.line === value.start.line && value.end.column < value.start.column)) fail(contract, path, "end must not precede start");
 }
 
+function validateAdaptivePage(value, path, contract) {
+  object(value, path, contract);
+  allowedKeys(value, ["pageId", "domGeneration", "url"], path, contract);
+  boundedString(value.pageId, 256, `${path}.pageId`, contract);
+  boundedInteger(value.domGeneration, 1, Number.MAX_SAFE_INTEGER, `${path}.domGeneration`, contract);
+  httpUrl(value.url, `${path}.url`, contract);
+}
+
+function validateAdaptiveObservation(value, path, contract) {
+  object(value, path, contract);
+  allowedKeys(value, ["observationId", "pageId", "domGeneration", "elements"], path, contract);
+  boundedString(value.observationId, 256, `${path}.observationId`, contract);
+  boundedString(value.pageId, 256, `${path}.pageId`, contract);
+  boundedInteger(value.domGeneration, 1, Number.MAX_SAFE_INTEGER, `${path}.domGeneration`, contract);
+  array(value.elements, `${path}.elements`, contract);
+  if (value.elements.length > 256) fail(contract, `${path}.elements`, "must contain at most 256 elements");
+  value.elements.forEach((element, index) => {
+    const elementPath = `${path}.elements[${index}]`;
+    object(element, elementPath, contract);
+    allowedKeys(element, ["elementId", "milestoneIds", "allowedActions"], elementPath, contract);
+    boundedString(element.elementId, 256, `${elementPath}.elementId`, contract);
+    uniqueStringArray(element.milestoneIds, `${elementPath}.milestoneIds`, contract);
+    if (element.milestoneIds.length > 64) fail(contract, `${elementPath}.milestoneIds`, "must contain at most 64 milestones");
+    element.milestoneIds.forEach((id, milestoneIndex) => boundedString(id, 256, `${elementPath}.milestoneIds[${milestoneIndex}]`, contract));
+    uniqueStringArray(element.allowedActions, `${elementPath}.allowedActions`, contract);
+    element.allowedActions.forEach((action, actionIndex) => oneOf(action, ["click_observed_element", "hover_observed_element", "wait_for_element_state"], `${elementPath}.allowedActions[${actionIndex}]`, contract));
+  });
+  const elementIds = value.elements.map((element) => element.elementId);
+  if (new Set(elementIds).size !== elementIds.length) fail(contract, `${path}.elements`, "element ids must be unique");
+}
+
+function validateAdaptiveBudget(value, path, contract) {
+  object(value, path, contract);
+  allowedKeys(value, ["actions", "turns", "timeMs", "tokens"], path, contract);
+  boundedInteger(value.actions, 0, 256, `${path}.actions`, contract);
+  boundedInteger(value.turns, 0, 256, `${path}.turns`, contract);
+  boundedInteger(value.timeMs, 0, 600_000, `${path}.timeMs`, contract);
+  boundedInteger(value.tokens, 0, 1_000_000, `${path}.tokens`, contract);
+}
+
+function validateAdaptiveActionParameters(action, value, path, contract) {
+  object(value, path, contract);
+  if (["observe_dom", "observe_aria", "get_current_url", "go_back", "reload_page"].includes(action)) {
+    allowedKeys(value, [], path, contract);
+    return;
+  }
+  if (action === "navigate") {
+    allowedKeys(value, ["url"], path, contract);
+    httpUrl(value.url, `${path}.url`, contract);
+    return;
+  }
+  if (action === "click_observed_element" || action === "hover_observed_element") {
+    validateObservedElementParameters(value, path, contract);
+    return;
+  }
+  if (action === "press_key") {
+    allowedKeys(value, ["key"], path, contract);
+    exact(value.key, "Escape", `${path}.key`, contract);
+    return;
+  }
+  if (action === "scroll_view") {
+    allowedKeys(value, ["deltaX", "deltaY"], path, contract);
+    boundedInteger(value.deltaX, -4_096, 4_096, `${path}.deltaX`, contract);
+    boundedInteger(value.deltaY, -4_096, 4_096, `${path}.deltaY`, contract);
+    if (value.deltaX === 0 && value.deltaY === 0) fail(contract, path, "scroll delta must be non-zero");
+    return;
+  }
+  if (action === "wait_for_element_state") {
+    allowedKeys(value, ["observationId", "elementId", "state", "timeoutMs"], path, contract);
+    boundedString(value.observationId, 256, `${path}.observationId`, contract);
+    boundedString(value.elementId, 256, `${path}.elementId`, contract);
+    oneOf(value.state, ["present", "absent", "visible", "hidden"], `${path}.state`, contract);
+    boundedInteger(value.timeoutMs, 1, 10_000, `${path}.timeoutMs`, contract);
+  }
+}
+
+function validateObservedElementParameters(value, path, contract) {
+  allowedKeys(value, ["observationId", "elementId"], path, contract);
+  boundedString(value.observationId, 256, `${path}.observationId`, contract);
+  boundedString(value.elementId, 256, `${path}.elementId`, contract);
+}
+
+function httpUrl(value, path, contract) {
+  boundedString(value, 4_096, path, contract);
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    fail(contract, path, "must be an absolute HTTP(S) URL");
+  }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) fail(contract, path, "must be an absolute HTTP(S) URL without credentials, query, or fragment");
+  return url;
+}
+
+function httpOrigin(value, path, contract) {
+  const url = httpUrl(value, path, contract);
+  if (value !== url.origin) fail(contract, path, "must be an origin without path, query, or fragment");
+}
+
 function checkpointContentHash(checkpoint) {
   return canonicalHash({
     checkpointId: checkpoint.checkpointId,
@@ -851,14 +1127,15 @@ function scenarioExpectationIds(qaIr, bundle) {
 
 function diagnostics(value, path, contract) { array(value, path, contract); value.forEach((item, index) => validateDiagnostic(item, `${path}[${index}]`)); }
 function recordArray(value, path, contract) { array(value, path, contract); value.forEach((item, index) => object(item, `${path}[${index}]`, contract)); }
-function allowedKeys(value, allowed, path, contract) { rejectKeys(value, Object.keys(value).filter((key) => !allowed.includes(key)), path, contract); }
-function rejectKeys(value, keys, path, contract) { for (const key of keys) if (Object.hasOwn(value, key)) fail(contract, `${path}.${key}`, "is not allowed"); }
+function allowedKeys(value, allowed, path, contract) { rejectKeys(value, Reflect.ownKeys(value).filter((key) => typeof key !== "string" || !allowed.includes(key)), path, contract); }
+function rejectKeys(value, keys, path, contract) { for (const key of keys) if (Object.hasOwn(value, key)) fail(contract, `${path}.${String(key)}`, "is not allowed"); }
 function object(value, path, contract) { if (!isRecord(value)) fail(contract, path, "must be an object"); }
 function array(value, path, contract) { if (!Array.isArray(value)) fail(contract, path, "must be an array"); }
 function stringArray(value, path, contract) { array(value, path, contract); value.forEach((item, index) => string(item, `${path}[${index}]`, contract)); }
 function uniqueStringArray(value, path, contract) { stringArray(value, path, contract); if (new Set(value).size !== value.length) fail(contract, path, "must contain unique strings"); }
 function string(value, path, contract) { if (typeof value !== "string" || value.length === 0) fail(contract, path, "must be a non-empty string"); }
 function boundedString(value, maxLength, path, contract) { string(value, path, contract); if (value.length > maxLength) fail(contract, path, `must contain at most ${maxLength} characters`); }
+function boundedInteger(value, min, max, path, contract) { number(value, path, contract); if (!Number.isInteger(value) || value < min || value > max) fail(contract, path, `must be an integer between ${min} and ${max}`); }
 function repositoryPath(value, path, contract) { boundedString(value, 4_096, path, contract); if (/^(?:[a-z]:[\\/]|[\\/])|(?:^|[\\/])\.\.(?:[\\/]|$)|[\0\r\n]/i.test(value)) fail(contract, path, "must be a safe repository-relative path"); }
 function number(value, path, contract) { if (typeof value !== "number" || Number.isNaN(value)) fail(contract, path, "must be a number"); }
 function probability(value, path, contract) { number(value, path, contract); if (!Number.isFinite(value) || value < 0 || value > 1) fail(contract, path, "must be between 0 and 1"); }
@@ -867,4 +1144,5 @@ function present(value, path, contract) { if (value === undefined) fail(contract
 function exact(value, expected, path, contract) { if (value !== expected) fail(contract, path, `must equal ${JSON.stringify(expected)}`); }
 function oneOf(value, allowed, path, contract) { if (!allowed.includes(value)) fail(contract, path, `must be one of: ${allowed.join(", ")}`); }
 function isRecord(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
+function deepFreeze(value) { if (value && typeof value === "object") { Object.values(value).forEach(deepFreeze); Object.freeze(value); } return value; }
 function fail(contract, path, message) { throw new ContractViolationError(contract, message, path); }

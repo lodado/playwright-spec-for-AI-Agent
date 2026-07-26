@@ -8,7 +8,7 @@ import {
 import { extractTestBlocks, parseAnnotations, parseDashboardSpecFile, parseReadOnlyExpectations } from "../../scripts/dashboard-spec-parser.mjs";
 
 const ADAPTER_NAME = "adapter-playwright";
-const ADAPTER_VERSION = "0.1.0";
+const ADAPTER_VERSION = "0.2.0";
 
 const POLICY_BY_LIVE_RUN = {
   "executable-readonly": allowedPolicy({ click: "NONE", type: "NONE" }),
