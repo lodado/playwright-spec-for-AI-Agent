@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="Playwright Driver exposing only visible controls and browser evidence">
-</p>
-
 <div align="center">
 
 # playwright-driver
@@ -12,38 +8,73 @@
 ![Playwright peer](https://img.shields.io/badge/peer-Playwright_%3E%3D1.48-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)
 ![Private workspace](https://img.shields.io/badge/workspace-private-0f766e?style=for-the-badge)
 
-[Driver contract](#driver-contract) · [Evidence](#evidence) · [Safety](#safety) · [Use](#use) · [Test](#test)
+<br />
+
+![Playwright](https://img.shields.io/badge/%23Playwright-2EAD33?style=flat-square)
+![Browser Evidence](https://img.shields.io/badge/%23BrowserEvidence-2563eb?style=flat-square)
+![Semantic Snapshot](https://img.shields.io/badge/%23SemanticSnapshot-7c3aed?style=flat-square)
+![Safe Automation](https://img.shields.io/badge/%23SafeAutomation-b91c1c?style=flat-square)
+
+<br />
+
+[Quick start](#quick-start) · [Driver contract](#driver-contract) · [Outputs](#outputs) · [Safety](#safety) · [Test](#test)
 
 </div>
 
 ---
 
-## Story card
+> [!NOTE]
+> This driver exposes only perceived browser observations and observation-local actions to Persona Runtime. It keeps selectors and raw Playwright control inside the driver boundary.
 
-| Field | Value |
-| --- | --- |
-| Audience | Runtime integrators who need real browser observations without exposing selectors to persona policy. |
-| Value | Capture visible semantic, visual, console, network, download, trace, and video evidence from isolated BrowserContexts. |
-| Proof | Vitest coverage checks isolated contexts, hidden/occluded control blocking, origin policy, mutation/upload guards, redaction, disabled evidence policy, and unsafe URL rejection. |
-| First action | Create a driver, start a session with an allowed HTTP origin, observe, execute observation-local actions, then close. |
-| Visual theme | Browser viewport with visible CTA and blocked selector boundary. |
+`playwright-driver` creates isolated Playwright browser contexts, captures visible semantic and visual evidence, executes allowed observation-local actions, and blocks unsafe navigation or destructive interactions.
 
-## What it owns
+```text
+trusted start URL → isolated BrowserContext → observe visible UI → execute allowed action → evidence refs → close
+```
 
-- Direct Playwright `BrowserContext` lifecycle per session.
-- Semantic snapshots of visible headings, landmarks, text, and interactive elements.
-- Observation-local element IDs; selectors stay inside the driver.
-- Screenshot, trace, video, console, network, download, popup, and dialog evidence.
-- Origin, navigation, mutation, upload, destructive-action, and storage-state guards.
-- Secret redaction in page title, URL, semantic text, runtime issues, and evidence policy downgrades.
+### Browser evidence example
 
-## What it does not own
+> **One runtime session** → direct Playwright context → semantic snapshot + screenshot/trace/video evidence.
 
-- Session orchestration or budgets.
-- Persona decision-making.
-- Oracle evaluation.
-- Report rendering.
-- Arbitrary JavaScript or shell actions.
+<table>
+<tr>
+  <td align="center"><strong>① start</strong><br/><code>allowed origin</code></td>
+  <td align="center">→</td>
+  <td align="center"><strong>② observe</strong><br/><code>visible elements only</code></td>
+  <td align="center">→</td>
+  <td align="center"><strong>③ execute</strong><br/><code>observation-local action</code></td>
+</tr>
+</table>
+
+---
+
+## Table of Contents
+
+- [Why this exists](#why-this-exists)
+- [What it does](#what-it-does)
+- [Driver contract](#driver-contract)
+- [Quick start](#quick-start)
+- [Outputs](#outputs)
+- [Safety](#safety)
+- [Test](#test)
+- [Limits](#limits)
+
+## Why this exists
+
+Persona Runtime needs real browser evidence, but persona policy should not receive raw selectors, arbitrary JavaScript, or broad browser control. The driver is the narrow Playwright boundary: it turns the live page into perceived observations and accepts only actions that came from that observation.
+
+## What it does
+
+`playwright-driver` owns:
+
+- direct Playwright `BrowserContext` lifecycle per session
+- semantic snapshots of visible headings, landmarks, text, and interactive elements
+- observation-local element IDs while selectors stay private inside the driver
+- screenshot, trace, video, console, network, download, popup, and dialog evidence
+- origin, navigation, mutation, upload, destructive-action, and storage-state guards
+- secret redaction in page title, URL, semantic text, runtime issues, and evidence policy downgrades
+
+It does not own session orchestration, persona decisions, oracle evaluation, report rendering, or arbitrary shell/browser actions.
 
 ## Driver contract
 
@@ -57,7 +88,28 @@
 | `close(handle)` | Stops tracing/video, closes context/browser, and returns close evidence. |
 | `closeAll()` | Closes all live sessions owned by the driver. |
 
-## Evidence
+## Quick start
+
+Import the driver and pass it into `@persona-runtime/runtime-core` or the `persona-runtime` CLI path:
+
+```js
+import { createPlaywrightDriver } from "playwright-driver";
+
+const driver = createPlaywrightDriver({ browserName: "chromium" });
+
+console.log(typeof driver.start);
+console.log(typeof driver.observe);
+console.log(typeof driver.execute);
+console.log(typeof driver.close);
+```
+
+For an end-to-end browser run with evidence sealing and evaluation gates, use the CLI:
+
+```bash
+pnpm persona-runtime run examples/hidden-cta/study.yaml --output=.qa/hidden-cta
+```
+
+## Outputs
 
 Evidence entries can include:
 
@@ -70,7 +122,7 @@ network_failure
 download
 ```
 
-If `valueRefs` contain secrets, screenshot, trace, and video evidence are disabled for that session.
+`observe()` returns a semantic observation with page metadata, visible text, landmarks, headings, interactive elements, runtime issues, and evidence references. `close()` returns close evidence and releases browser resources.
 
 ## Safety
 
@@ -82,21 +134,19 @@ If `valueRefs` contain secrets, screenshot, trace, and video evidence are disabl
 - Forged or stale element IDs are blocked.
 - Destructive confirmation/payment-like controls are blocked when `stopBeforeConfirmation` is enabled.
 - `storageStatePath` must resolve within the workspace.
-
-## Use
-
-```js
-import { createPlaywrightDriver } from "playwright-driver";
-
-const driver = createPlaywrightDriver({ browserName: "chromium" });
-console.log(typeof driver.start, typeof driver.observe, typeof driver.execute, typeof driver.close);
-```
-
-For an end-to-end browser run, use this package through `@persona-runtime/runtime-core` or the `persona-runtime` CLI so evidence sealing and evaluation gates remain enforced.
+- If `valueRefs` contain secrets, screenshot, trace, and video evidence are disabled for that session.
 
 ## Test
 
 ```bash
 pnpm --filter playwright-driver test
 pnpm --filter playwright-driver typecheck
+pnpm --filter playwright-driver build
 ```
+
+## Limits
+
+- This package is a driver, not a full runtime. Use runtime-core or CLI for sealing, evaluation, and reports.
+- It does not expose raw selectors to persona policy.
+- It rejects unsafe URLs and cross-origin behavior unless explicitly allowed by policy.
+- It cannot prove business success by itself; it only captures and executes browser-facing evidence.

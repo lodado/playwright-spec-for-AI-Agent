@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="Persona Policy seeded behavior curves and runtime state signals">
-</p>
-
 <div align="center">
 
 # @persona-runtime/persona-policy
@@ -12,37 +8,73 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6?style=for-the-badge&logo=typescript&logoColor=white)
 ![Private workspace](https://img.shields.io/badge/workspace-private-0f766e?style=for-the-badge)
 
-[Policy model](#policy-model) · [API](#api) · [Use](#use) · [Safety](#safety) · [Test](#test)
+<br />
+
+![Persona Policy](https://img.shields.io/badge/%23PersonaPolicy-f97316?style=flat-square)
+![Seeded Sampling](https://img.shields.io/badge/%23SeededSampling-2563eb?style=flat-square)
+![Abandonment](https://img.shields.io/badge/%23Abandonment-b91c1c?style=flat-square)
+![Attention Model](https://img.shields.io/badge/%23AttentionModel-047857?style=flat-square)
+
+<br />
+
+[Quick start](#quick-start) · [Policy model](#policy-model) · [API](#api) · [Safety](#safety) · [Test](#test)
 
 </div>
 
 ---
 
-## Story card
+> [!NOTE]
+> Persona policies are behavior parameters, not demographic truth. They create reproducible variation for synthetic browser sessions and must not be reported as real user preference or conversion prediction.
 
-| Field | Value |
-| --- | --- |
-| Audience | Behavioral runtime authors who need reproducible policy variation without pretending demographics are destiny. |
-| Value | Encode retry, backtrack, abandonment, signup resistance, reading depth, and attention as sampled policy values. |
-| Proof | Vitest coverage checks seeded reproducibility, probability validation, hidden/occluded filtering, state reduction, and abandonment. |
-| First action | Derive a session seed, sample a preset, and serialize the sampled policy with the session. |
-| Visual theme | Seeded behavior curve: orange state trajectory over progress, frustration, and trust. |
+`@persona-runtime/persona-policy` samples retry, backtrack, abandonment, signup resistance, reading depth, attention, and recovery behavior from a seed, then updates runtime persona state from observed session signals.
 
-## What it owns
+```text
+study seed + task + persona + variant → sampled behavior policy → perceived elements → action bias / abandonment
+```
 
-- Behavior policy distributions and preset definitions.
-- Deterministic random sampling from a session seed.
-- Runtime persona state reduction.
-- Perceived element filtering for attention policy.
-- Abandonment decisions as normal behavioral outcomes.
+### Policy flow example
 
-## What it does not own
+> **One session identity** → deterministic sampled policy → attention-filtered controls → abandonment can be a valid terminal outcome.
 
-- Browser execution.
-- Model prompting or structured output validation.
-- StudySpec validation.
-- Findings, reports, or calibration claims.
-- Demographic prediction.
+<table>
+<tr>
+  <td align="center"><strong>① derive</strong><br/><code>session seed</code></td>
+  <td align="center">→</td>
+  <td align="center"><strong>② sample</strong><br/><code>policy values</code></td>
+  <td align="center">→</td>
+  <td align="center"><strong>③ reduce</strong><br/><code>progress / trust / frustration</code></td>
+</tr>
+</table>
+
+---
+
+## Table of Contents
+
+- [Why this exists](#why-this-exists)
+- [What it does](#what-it-does)
+- [Policy model](#policy-model)
+- [API](#api)
+- [Quick start](#quick-start)
+- [Outputs](#outputs)
+- [Safety](#safety)
+- [Test](#test)
+- [Limits](#limits)
+
+## Why this exists
+
+Persona Runtime needs repeatable behavioral variation without pretending that prose personas are real people. This package turns persona presets and seeds into concrete policy values that runtime code can serialize, replay, and audit.
+
+## What it does
+
+`@persona-runtime/persona-policy` owns:
+
+- behavior policy distributions and preset definitions
+- deterministic random sampling from a session seed
+- runtime persona state reduction
+- perceived element filtering for attention policy
+- abandonment decisions as normal behavioral outcomes
+
+It does not launch browsers, validate StudySpecs, call models, create findings, render reports, or make demographic predictions.
 
 ## Policy model
 
@@ -72,9 +104,15 @@ Each preset is a `BehaviorPolicyDefinition` with distributions for retry, backtr
 | `filterPerceivedElements(elements, attention, seed)` | Keeps only behaviorally perceived candidates. |
 | `evaluateAbandonment(input)` | Returns whether the session should abandon and why. |
 
-## Use
+## Quick start
 
-```ts
+Build the TypeScript package, then sample a deterministic policy:
+
+```bash
+pnpm --filter @persona-runtime/persona-policy build
+```
+
+```js
 import {
   PRESETS,
   deriveSessionSeed,
@@ -84,8 +122,18 @@ import {
 const seed = deriveSessionSeed(101, "upload-task", "impatient_new_user");
 const sampled = sampleBehaviorPolicy(PRESETS.impatient_new_user, seed);
 
-console.log(sampled.seed, sampled.values.abandonmentPropensity);
+console.log(sampled.seed);
+console.log(sampled.values.abandonmentPropensity >= 0);
 ```
+
+## Outputs
+
+| Output/type | Shape |
+| --- | --- |
+| `SampledBehaviorPolicy` | `{ seed, values }`, where `values` is keyed by `BehaviorPolicyDefinition` fields. |
+| `PersonaRuntimeState` | `perceivedProgress`, `frustration`, `trust`, `perceivedValue`, `confidence`, `noProgressCount`, `recoveryAttempts`, `backtrackCount`, `knownFacts`, and `uncertainties`. |
+| Filtered elements | Visible, unoccluded observed elements after viewport, secondary-navigation, score, and max-candidate filtering. |
+| `evaluateAbandonment(...)` result | `{ shouldAbandon, reasonCode?, deterministicSignals, sampledProbability? }`. |
 
 ## Safety
 
@@ -100,4 +148,12 @@ console.log(sampled.seed, sampled.values.abandonmentPropensity);
 ```bash
 pnpm --filter @persona-runtime/persona-policy test
 pnpm --filter @persona-runtime/persona-policy typecheck
+pnpm --filter @persona-runtime/persona-policy build
 ```
+
+## Limits
+
+- Presets are synthetic policy curves, not validated market segments.
+- The package does not decide the final browser action by itself; runtime policy code applies these sampled values to observations.
+- The package does not evaluate product success or generate findings.
+- Human validation is required before user-impact claims.

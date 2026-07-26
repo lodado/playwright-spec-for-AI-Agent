@@ -1,47 +1,93 @@
-<p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="Persona Runtime Contracts: versioned schemas before runtime judgment">
-</p>
-
 <div align="center">
 
 # @persona-runtime/contracts
 
-**Versioned JSON contracts for Persona Runtime boundaries.**
+**Versioned JSON contracts for every Persona Runtime boundary.**
 
 ![Node >=20](https://img.shields.io/badge/node-%3E%3D20-339933?style=for-the-badge&logo=node.js&logoColor=white)
 ![ESM](https://img.shields.io/badge/module-ESM-4b5563?style=for-the-badge)
 ![Private workspace](https://img.shields.io/badge/workspace-private-0f766e?style=for-the-badge)
 
-[API](#api) · [Contracts](#contracts) · [Use](#use) · [Safety](#safety) · [Test](#test)
+<br />
+
+![StudySpec](https://img.shields.io/badge/%23StudySpec-2563eb?style=flat-square)
+![Sealed Evidence](https://img.shields.io/badge/%23SealedEvidence-047857?style=flat-square)
+![Contract Validation](https://img.shields.io/badge/%23ContractValidation-7c3aed?style=flat-square)
+![Canonical Hash](https://img.shields.io/badge/%23CanonicalHash-b45309?style=flat-square)
+
+<br />
+
+[Quick start](#quick-start) · [API](#api) · [Contracts](#contracts) · [Safety](#safety) · [Test](#test)
 
 </div>
 
 ---
 
-## Story card
+> [!NOTE]
+> This package is the shared contract layer. Runtime, evaluator, reporter, and adapter packages should validate data here before trusting it as session state, evidence, findings, validity, or report input.
 
-| Field | Value |
-| --- | --- |
-| Audience | Runtime, evaluator, reporter, and adapter package authors. |
-| Value | Validate every cross-module object before it becomes runtime state or report output. |
-| Proof | `node --test test/*.test.mjs` covers StudySpec validation, stable IDs, typed-action secrecy, sealed manifests, and finding evidence refs. |
-| First action | Import a validator and reject invalid contract data at the package boundary. |
-| Visual theme | Sealed evidence ledger: dark technical grid, green schema checkpoints. |
+`@persona-runtime/contracts` owns the stable JSON shapes and deterministic IDs that let the runtime seal browser evidence before any behavioral judgment leaves the system.
 
-## What it owns
+```text
+StudySpec → SessionRecord → Observation/Event → sealed EvidenceManifest → Evaluation/Finding/Validity
+```
 
-- Schema version constants for StudySpec, SessionRecord, Observation, InteractionEvent, EvidenceManifest 0.2, evaluations, findings, validity, and variant comparison.
-- Runtime validation with `ContractValidationError` and path-aware messages.
-- Canonical JSON hashing and stable ID helpers.
-- Secret redaction for StudySpec hashing.
-- A small migration registry, currently used for `evidence-manifest/0.1` → `evidence-manifest/0.2`.
+### Boundary example
 
-## What it does not own
+> **Untrusted object** → path-aware validation → frozen contract object → canonical hash or stable ID.
 
-- Playwright, browser sessions, or model providers.
-- YAML loading or CLI argument parsing.
-- Business-specific oracles beyond contract shape validation.
-- Report rendering.
+```js
+import {
+  STUDY_SPEC_VERSION,
+  canonicalHash,
+  createSessionId,
+} from "@persona-runtime/contracts";
+
+const sessionId = createSessionId({
+  runId: "run-1",
+  taskId: "checkout",
+  personaId: "careful_business_buyer",
+  seed: 101,
+});
+
+console.log(STUDY_SPEC_VERSION);
+console.log(sessionId.startsWith("session_"));
+console.log(canonicalHash({ b: 2, a: 1 }));
+```
+
+---
+
+## Table of Contents
+
+- [Why this exists](#why-this-exists)
+- [What it does](#what-it-does)
+- [API](#api)
+- [Contracts](#contracts)
+- [Quick start](#quick-start)
+- [Outputs](#outputs)
+- [Safety](#safety)
+- [Test](#test)
+- [Limits](#limits)
+
+## Why this exists
+
+Persona Runtime crosses several trust boundaries: YAML or JSON study input, browser observations, action events, evidence manifests, deterministic evaluations, findings, validity warnings, and reporters.
+
+Those boundaries need one shared rule: validate the data before another package treats it as true. This package keeps that rule in one place instead of duplicating schema checks across runtime packages.
+
+## What it does
+
+`@persona-runtime/contracts` provides:
+
+- schema version constants for StudySpec, session records, observations, interaction events, evidence manifests, evaluations, findings, validity, and variant comparison
+- path-aware `ContractValidationError` failures
+- deep-frozen validated objects
+- canonical JSON serialization and SHA-256 hashes
+- stable IDs for sessions, events, and evidence
+- StudySpec secret redaction before hashing
+- a small migration registry for `evidence-manifest/0.1` → `evidence-manifest/0.2`
+
+It does not open browsers, parse YAML, evaluate oracles, render reports, or call model providers.
 
 ## API
 
@@ -60,7 +106,8 @@
 | `stableId(prefix, parts)` | Creates deterministic IDs from canonical parts. |
 | `createSessionId`, `createEventId`, `createEvidenceId` | Stable ID helpers for runtime objects. |
 | `migrateContract(value, to)` | Runs a registered migration. |
-| `validators` | Registry used by `validateContract(name, value)`. |
+| `validators` / `validateContract(name, value)` | Named validator registry. |
+| `ContractValidationError` / `ContractMigrationError` | Structured contract failures. |
 
 ## Contracts
 
@@ -79,26 +126,34 @@ simulation-validity/0.1
 variant-comparison-report/0.1
 ```
 
-Validated objects are deeply frozen. Treat validation as the handoff point: mutate by creating a new object, not by editing the validated one.
+Validated objects are deeply frozen. Treat validation as the handoff point: create a new object when data changes instead of mutating the validated value.
 
-## Use
+## Quick start
+
+Run the package tests from the workspace root:
+
+```bash
+pnpm --filter @persona-runtime/contracts test
+```
+
+Use a validator at the boundary where your package receives contract-shaped data:
 
 ```js
-import {
-  canonicalHash,
-  createSessionId,
-  STUDY_SPEC_VERSION,
-} from "@persona-runtime/contracts";
+import { validateObservation } from "@persona-runtime/contracts";
 
-const sessionId = createSessionId({
-  runId: "run-1",
-  taskId: "checkout",
-  personaId: "careful_business_buyer",
-  seed: 101,
-});
-
-console.log(STUDY_SPEC_VERSION, sessionId, canonicalHash({ b: 2, a: 1 }));
+const observation = validateObservation(rawObservation);
 ```
+
+## Outputs
+
+This package returns in-memory values only:
+
+| Output | Shape |
+| --- | --- |
+| Validated contracts | Deep-frozen JavaScript objects with `schemaVersion`. |
+| Stable IDs | `session_*`, `event_*`, and `evidence_*` strings. |
+| Canonical hashes | `sha256:<hex>` strings. |
+| Errors | `ContractValidationError` or `ContractMigrationError` with `.code` and `.path`. |
 
 ## Safety
 
@@ -113,4 +168,12 @@ console.log(STUDY_SPEC_VERSION, sessionId, canonicalHash({ b: 2, a: 1 }));
 ```bash
 pnpm --filter @persona-runtime/contracts test
 pnpm --filter @persona-runtime/contracts typecheck
+pnpm --filter @persona-runtime/contracts build
 ```
+
+## Limits
+
+- Contracts validate shape and invariants, not business-specific product correctness.
+- YAML loading and CLI argument parsing live outside this package.
+- The migration registry is intentionally small; only registered migrations run.
+- Validated objects are immutable, so callers must build replacement objects for updates.

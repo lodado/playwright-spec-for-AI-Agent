@@ -1,35 +1,34 @@
-<div align="center">
+
 
 # playwright-spec-for-AI-Agent
 
 **AI-assisted live staging QA for web apps that already have Playwright specs.**
 
-[![npm version](https://img.shields.io/npm/v/playwright-spec-for-ai-agent?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/playwright-spec-for-ai-agent)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D20-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
-[![Playwright](https://img.shields.io/badge/Playwright-%3E%3D1.48-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)](https://playwright.dev)
-[![GitHub stars](https://img.shields.io/github/stars/lodado/playwright-spec-for-AI-Agent?style=for-the-badge&logo=github)](https://github.com/lodado/playwright-spec-for-AI-Agent/stargazers)
-[![GitHub issues](https://img.shields.io/github/issues/lodado/playwright-spec-for-AI-Agent?style=for-the-badge&logo=github)](https://github.com/lodado/playwright-spec-for-AI-Agent/issues)
+[npm version](https://www.npmjs.com/package/playwright-spec-for-ai-agent)
+[License: MIT](https://opensource.org/licenses/MIT)
+[Node.js](https://nodejs.org)
+[Playwright](https://playwright.dev)
+[GitHub stars](https://github.com/lodado/playwright-spec-for-AI-Agent/stargazers)
+[GitHub issues](https://github.com/lodado/playwright-spec-for-AI-Agent/issues)
 
-<br />
+  
 
-[![Playwright](https://img.shields.io/badge/%23Playwright-2EAD33?style=flat-square)](https://github.com/topics/playwright)
-[![Test Automation](https://img.shields.io/badge/%23TestAutomation-0A66C2?style=flat-square)](https://github.com/topics/test-automation)
-[![Software Testing](https://img.shields.io/badge/%23SoftwareTesting-6E40C9?style=flat-square)](https://github.com/topics/software-testing)
-[![Quality Assurance](https://img.shields.io/badge/%23QualityAssurance-2EA44F?style=flat-square)](https://github.com/topics/quality-assurance)
-[![AI Agent](https://img.shields.io/badge/%23AIAgent-FF6F00?style=flat-square)](https://github.com/topics/ai-agent)
-[![AI Engineering](https://img.shields.io/badge/%23AIEngineering-E91E63?style=flat-square)](https://github.com/topics/ai-engineering)
 
-<br />
+[Playwright](https://github.com/topics/playwright)
+[Test Automation](https://github.com/topics/test-automation)
+[Software Testing](https://github.com/topics/software-testing)
+[Quality Assurance](https://github.com/topics/quality-assurance)
+[AI Agent](https://github.com/topics/ai-agent)
+[AI Engineering](https://github.com/topics/ai-engineering)
+
+  
+
 
 [Quick start](#quick-start) · [Configuration](#configuration) · [Annotations](#annotations) · [npm package](https://www.npmjs.com/package/playwright-spec-for-ai-agent) · [Report issue](https://github.com/lodado/playwright-spec-for-AI-Agent/issues)
 
-</div>
+
 
 ---
-
-> [!NOTE]
-> This README documents the backwards-compatible npm package. The repository also contains the new Persona Runtime workspace app for evidence-first behavioral release checks; start at the [workspace README](https://github.com/lodado/playwright-spec-for-AI-Agent#readme) when you want StudySpec, sealed evidence, persona policies, validity reports, or baseline/candidate comparison.
 
 This tool reads Playwright `*.spec.ts` files, extracts `@qa-scenario` intent, turns it into structured QA scenarios, and uses [Hermes Agent](https://github.com/NousResearch/hermes-agent) to validate the same intent against a staging page.
 
@@ -39,19 +38,19 @@ Hermes Agent is used here as the adapter layer for multiple agents. The CLI keep
 spec → abstract-ai → judge → review → slack (optional)
 ```
 
+
+
 ### End-to-end example
 
 > **One annotated Playwright spec** → structured live plan → Hermes browses staging and returns a verdict.
 
-<table>
-<tr>
-  <td align="center"><strong>① spec</strong><br/><code>*.spec.ts</code></td>
-  <td align="center">→</td>
-  <td align="center"><strong>② abstract-ai</strong><br/><code>{page}-qa-spec-live.md</code></td>
-  <td align="center">→</td>
-  <td align="center"><strong>③ judge</strong><br/><code>{page}-hermes-judgment.md</code></td>
-</tr>
-</table>
+
+|                        |     |                                            |     |                                         |
+| ---------------------- | --- | ------------------------------------------ | --- | --------------------------------------- |
+| **① spec** `*.spec.ts` | →   | **② abstract-ai** `{page}-qa-spec-live.md` | →   | **③ judge** `{page}-hermes-judgment.md` |
+
+
+
 
 #### ① Playwright spec — intent, fixture, live policy
 
@@ -80,6 +79,8 @@ test.describe("Dashboard - Active subscription", () => {
 });
 ```
 
+
+
 #### ② Abstracted live plan — `{page}-qa-spec-live.md`
 
 `abstract-ai` rewrites the spec into **staging-ready QA scenarios** — short user stories Hermes can follow without replaying brittle Playwright selectors or mock literals.
@@ -93,14 +94,14 @@ An account with an **active paid subscription** is logged in. Pick checks that m
 
 ### ACTIVE — shows the user plan name in the header
 
-Given the user has an active subscription and is on `/dashboard`
-When I inspect the page header without mutating anything
+Given the user has an active subscription and is on `/dashboard`  
+When I inspect the page header without mutating anything  
 Then the current plan name is visible to the user
 
 ### ACTIVE — shows health score on dashboard
 
-Given the health widget is backed by mocked API data in CI (`98 pts`, label `Excellent`)
-When I view the health-score area in read-only mode
+Given the health widget is backed by mocked API data in CI (`98 pts`, label `Excellent`)  
+When I view the health-score area in read-only mode  
 Then a numeric score with its unit and a readable status label are shown — exact mock values are not required; if the widget is loading, empty, or shows only qualitative copy without a score, treat as ambiguous
 ```
 
@@ -145,6 +146,8 @@ The first check is a straightforward readonly pass. The second stays out of `fai
 
 ---
 
+
+
 ## Table of Contents
 
 - [Why this exists](#why-this-exists)
@@ -157,6 +160,8 @@ The first check is a straightforward readonly pass. The second stays out of `fai
 - [Output files](#output-files)
 - [Prerequisites](#prerequisites)
 - [Limits](#limits)
+
+
 
 ## Why this exists
 
@@ -186,11 +191,14 @@ The CLI:
 5. Produces `pass`, `fail`, `manual_review`, or `skip`.
 6. Optionally posts fail/manual-review results to Slack.
 
+
+
 ## Command flow
 
 ```text
 spec -> abstract-ai -> judge -> review -> slack (optional)
 ```
+
 
 | Command       | Purpose                                                 |
 | ------------- | ------------------------------------------------------- |
@@ -200,6 +208,9 @@ spec -> abstract-ai -> judge -> review -> slack (optional)
 | `review`      | Ask Hermes to review judgment quality without browsing. |
 | `slack`       | Send fail/manual-review verdicts to Slack.              |
 | `nightly`     | Run the full pipeline.                                  |
+
+
+
 
 ### QA Native runtime preview
 
@@ -250,6 +261,7 @@ Before publication, the runtime verifies the pinned commit and Code Context file
 
 ## Recommended workflow
 
+
 | Stage        | Check                                  | Purpose                                |
 | ------------ | -------------------------------------- | -------------------------------------- |
 | PR           | Mocked Playwright E2E                  | Stable UI regression checks.           |
@@ -257,11 +269,14 @@ Before publication, the runtime verifies the pinned commit and Code Context file
 | Nightly      | `playwright-spec-for-ai-agent nightly` | AI-assisted live staging judgment.     |
 | Release      | Selected live scenarios                | Human or AI-assisted smoke validation. |
 
+
 ```text
 Mocked E2E = stable UI-state verification
 API contract tests = real API schema guardrail
 playwright-spec-for-AI-Agent = live staging QA judgment
 ```
+
+
 
 ## Quick start
 
@@ -337,6 +352,8 @@ Run nightly with Slack:
 npx playwright-spec-for-ai-agent nightly --page=pricing --with-slack --non-interactive
 ```
 
+
+
 ## Configuration
 
 Copy the example config into your app repo:
@@ -376,6 +393,7 @@ export default {
 };
 ```
 
+
 | Field                                     | Purpose                                                           |
 | ----------------------------------------- | ----------------------------------------------------------------- |
 | `paths.specDir`                           | Where Playwright specs for `{page}` live.                         |
@@ -387,6 +405,7 @@ export default {
 | `pages.{page}.targetPath`                 | Path joined with `staging.baseUrl` when `pageUrl` is not set.     |
 | `pages.{page}.authRequired`               | Per-page override for public or no-login pages.                   |
 | `pages.{page}.expectedSubscriptionStatus` | Per-page override of staging account expectations.                |
+
 
 Legacy `targetPaths.{page}` still works; prefer `pages.{page}.targetPath` or `pageUrl` for new configs.
 
@@ -460,6 +479,8 @@ Or in CI:
 STAGING_QA_AUTH_REQUIRED=false npx playwright-spec-for-ai-agent judge --page=pricing --non-interactive
 ```
 
+
+
 ### Interactive `judge`
 
 When stdin is a TTY and `CI` is not set, `judge` prompts for credentials and target confirmation before browsing.
@@ -474,6 +495,7 @@ Add annotations directly inside Playwright spec files.
 
 Supported annotations:
 
+
 | Annotation                                            | Scope                | Purpose                                                                                                                                    |
 | ----------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `// @qa-page: billing`                                | File                 | Optional page id override.                                                                                                                 |
@@ -482,6 +504,7 @@ Supported annotations:
 | `// @qa-always-run: true`                             | File                 | Keep the scenario eligible even when default filtering would skip it.                                                                      |
 | `// @qa-fixture: avatar=tests/fixtures/qa-avatar.png` | `test`               | Name a fixture file used by this specific test. Add it above each test that needs the fixture.                                             |
 | `// @qa-live-policy: readonly`                        | `test` or `describe` | Tell live QA how safely this test can be judged. Add it above each test; use `describe` only when every child test shares the same policy. |
+
 
 File-level annotations should be placed at the top of the spec file, before imports:
 
@@ -496,6 +519,7 @@ import { expect, test } from "@playwright/test";
 
 Supported `@qa-live-policy` values:
 
+
 | Value                         | Meaning                                                                                                   |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------- |
 | `readonly`                    | Safe read-only verification.                                                                              |
@@ -505,6 +529,7 @@ Supported `@qa-live-policy` values:
 | `subscription-mutation`       | Subscription or billing mutation; block live execution and treat as unsafe for staging automation.        |
 | `auth-mock`                   | Auth is mocked in the Playwright test; block direct live execution.                                       |
 | `skip`                        | Explicitly skip live QA for this test.                                                                    |
+
 
 Minimal annotation:
 
@@ -584,6 +609,8 @@ Common output files:
 {page}-hermes-judgment.md
 {page}-hermes-raw-output.txt
 ```
+
+
 
 ## Prerequisites
 

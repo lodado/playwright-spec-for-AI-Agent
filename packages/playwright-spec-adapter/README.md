@@ -1,53 +1,35 @@
-# Playwright Spec Adapter
+<div align="center">
 
-<p align="center">
-  <strong>Turn existing Playwright intent into Persona Runtime studies.</strong><br>
-  Legacy QA annotations, live policies, fixtures, and expectations become versioned `qa-ir/0.1` and `study-spec/0.1` inputs.
-</p>
+# playwright-spec-adapter
 
-<p align="center">
-  <img alt="Node 20 or newer" src="https://img.shields.io/badge/node-%3E%3D20-111827?style=flat-square">
-  <img alt="ESM" src="https://img.shields.io/badge/modules-ESM-111827?style=flat-square">
-  <img alt="Package status" src="https://img.shields.io/badge/status-private_workspace-6b7280?style=flat-square">
-</p>
+**Turn existing Playwright QA intent into Persona Runtime StudySpecs.**
 
-## Where it fits
+![Node.js](https://img.shields.io/badge/node-%3E%3D20-339933?style=for-the-badge&logo=node.js&logoColor=white)
+![TypeScript](https://img.shields.io/badge/Playwright-specs-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)
+![Workspace](https://img.shields.io/badge/workspace-private-0f766e?style=for-the-badge)
+
+<br />
+
+![Playwright](https://img.shields.io/badge/%23Playwright-2EAD33?style=flat-square)
+![StudySpec](https://img.shields.io/badge/%23StudySpec-6366f1?style=flat-square)
+![QA Intent](https://img.shields.io/badge/%23QAIntent-b45309?style=flat-square)
+
+<br />
+
+[Quick start](#quick-start) · [API](#api) · [Policy mapping](#outputs) · [Safety](#safety) · [Legacy package](../playwright-spec-for-ai-agent/README.md)
+
+</div>
+
+---
+
+> [!NOTE]
+> This adapter preserves the legacy annotation parser and live-policy semantics. It converts Playwright intent into `qa-ir/0.1` and `study-spec/0.1`; it does not launch browsers or weaken unsafe policies.
 
 ```text
-Playwright spec files
-  └─ @qa-page / @qa-scenario / @qa-live-policy / @qa-fixture
-      └─ PlaywrightScenarioIR (qa-ir/0.1)
-          └─ StudySpec (study-spec/0.1)
+*.spec.ts annotations → PlaywrightScenarioIR → StudySpec
 ```
 
-This package preserves the current parser behavior while making it usable as an input adapter for the new Behavioral Runtime.
-
-## Use it when
-
-- You already have Playwright tests with QA annotations.
-- You need a compatibility-preserving parser before adopting the Persona Runtime.
-- You want blocked live policies to become reviewable StudySpec tasks instead of unsafe browser actions.
-
-## Public surface
-
-| Export | Purpose |
-|---|---|
-| `parsePlaywrightSpecs({ specDir, page })` | Reads a spec directory and returns `qa-ir/0.1`. |
-| `compilePlaywrightIRToStudy(ir, options)` | Returns only the compiled `StudySpec`. |
-| `compilePlaywrightIRToStudyResult(ir, options)` | Returns `{ studySpec, warnings }`. |
-| `parseDashboardSpecFile(fileName, source)` | Legacy single-file parser. |
-| `literalExpectedForLive`, `adaptExpectationForLive` | Existing expectation abstraction helpers. |
-| `filterSpecForLiveJson`, `collectLiveSkippedEntries` | Existing live-run filtering helpers. |
-
-Subpath exports are also available inside the workspace:
-
-```js
-import { parseSpecDirectory } from "playwright-spec-adapter/legacy";
-import { literalExpectedForLive } from "playwright-spec-adapter/expectation";
-import { filterSpecForLiveJson } from "playwright-spec-adapter/policy";
-```
-
-## Minimal example
+### Input → output example
 
 ```js
 import { compilePlaywrightIRToStudyResult } from "playwright-spec-adapter";
@@ -55,49 +37,123 @@ import { compilePlaywrightIRToStudyResult } from "playwright-spec-adapter";
 const ir = {
   schemaVersion: "qa-ir/0.1",
   sourceDirectory: "tests",
-  scenarios: [{
-    scenarioId: "PRICING",
-    sourceFile: "pricing.spec.ts",
-    page: "/pricing",
-    tests: [{
-      checkId: "price",
-      title: "shows price",
-      liveRunPolicy: "executable-readonly",
-      expectations: [{ type: "containText", expected: { kind: "literal", value: "$10" } }],
-    }],
-  }],
+  scenarios: [
+    {
+      scenarioId: "PRICING",
+      sourceFile: "pricing.spec.ts",
+      page: "/pricing",
+      tests: [
+        {
+          checkId: "price",
+          title: "shows price",
+          liveRunPolicy: "executable-readonly",
+          expectations: [
+            { type: "containText", expected: { kind: "literal", value: "$10" } },
+          ],
+        },
+      ],
+    },
+  ],
 };
 
 const { studySpec, warnings } = compilePlaywrightIRToStudyResult(ir, {
   baseUrl: "https://staging.example.com",
 });
 
-console.log(studySpec.schemaVersion); // study-spec/0.1
-console.log(warnings.length); // 0
+console.log(studySpec.schemaVersion);
+console.log(warnings.length);
 ```
 
-## Policy mapping
+```text
+study-spec/0.1
+0
+```
 
-| Legacy policy | StudySpec behavior |
-|---|---|
-| `readonly` | Read/navigation only. |
-| `safe-interaction` | Allows click, typing, upload, and state mutation. |
-| `safe-interaction-no-confirm` | Keeps confirmation boundaries blocked. |
-| `subscription-mutation`, `auth-mock`, `skip` | Emits review warnings and disables unsafe actions. |
+---
 
-Blocked policies are not weakened during import. They become tasks with conservative safety policy and human validation metadata.
+## Table of Contents
 
-## Boundaries
+- [Why this exists](#why-this-exists)
+- [What it does](#what-it-does)
+- [API](#api)
+- [Quick start](#quick-start)
+- [Outputs](#outputs)
+- [Safety](#safety)
+- [Test](#test)
+- [Limits](#limits)
 
-- The canonical parser is still `legacy-regex`; TypeScript AST parsing is not implemented here.
-- Imported oracles are deterministic only when expectations can be mapped from the Playwright source.
-- The adapter does not launch a browser, call a model, publish reports, or mutate GitHub.
+## Why this exists
+
+Teams already encode useful QA intent in Playwright specs. The adapter lets Persona Runtime reuse that intent without running brittle mocked selectors directly against staging.
+
+## What it does
+
+The package:
+
+1. Reads Playwright spec files with legacy QA annotations.
+2. Produces `qa-ir/0.1` scenario objects.
+3. Adapts literal expectations into live-safe intent.
+4. Maps live policies into StudySpec safety constraints.
+5. Emits warnings for blocked or unsafe flows.
+6. Compiles the result into a versioned StudySpec.
+
+## API
+
+| Export | Purpose |
+| --- | --- |
+| `parsePlaywrightSpecs({ specDir, page })` | Reads a spec directory and returns `qa-ir/0.1`. |
+| `compilePlaywrightIRToStudy(ir, options)` | Returns only the compiled StudySpec. |
+| `compilePlaywrightIRToStudyResult(ir, options)` | Returns `{ studySpec, warnings }`. |
+| `parseDashboardSpecFile(fileName, source)` | Legacy single-file parser. |
+| `literalExpectedForLive`, `adaptExpectationForLive` | Existing expectation abstraction helpers. |
+| `filterSpecForLiveJson`, `collectLiveSkippedEntries` | Existing live-run filtering helpers. |
+
+Subpath exports:
+
+```js
+import { parseSpecDirectory } from "playwright-spec-adapter/legacy";
+import { literalExpectedForLive } from "playwright-spec-adapter/expectation";
+import { filterSpecForLiveJson } from "playwright-spec-adapter/policy";
+```
+
+## Quick start
+
+```js
+import { parsePlaywrightSpecs, compilePlaywrightIRToStudy } from "playwright-spec-adapter";
+
+const ir = await parsePlaywrightSpecs({ specDir: "tests/e2e", page: "pricing" });
+const study = compilePlaywrightIRToStudy(ir, { baseUrl: "https://staging.example.com" });
+
+console.log(study.schemaVersion);
+```
+
+## Outputs
+
+| Input | Output |
+| --- | --- |
+| `// @qa-page` | Study task target metadata. |
+| `// @qa-scenario` | Scenario/task identity and intent. |
+| `// @qa-live-policy: readonly` | Read/navigation-only safety policy. |
+| `// @qa-live-policy: safe-interaction-no-confirm` | Interaction allowed before destructive confirmation. |
+| `subscription-mutation`, `auth-mock`, `skip` | Review warnings plus conservative safety metadata. |
+| Playwright `expect(...)` literals | Live-safe or deterministic oracle hints when mappable. |
+
+## Safety
+
+- Blocked policies are not downgraded into executable browser actions.
+- The adapter does not open a browser, call a model, publish reports, or mutate GitHub.
 - Generated StudySpecs should be reviewed before use against live or staging systems.
 
-## Workspace commands
+## Test
 
 ```bash
 pnpm --filter playwright-spec-adapter test
 pnpm --filter playwright-spec-adapter typecheck
 pnpm --filter playwright-spec-adapter build
 ```
+
+## Limits
+
+- The canonical parser is still `legacy-regex`; TypeScript AST parsing is not implemented here.
+- Imported oracles are deterministic only when expectations can be mapped from source.
+- Fixture semantics are preserved as intent; the adapter does not upload files or execute tests.
