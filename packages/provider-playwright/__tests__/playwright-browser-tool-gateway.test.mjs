@@ -4,6 +4,7 @@ import {
   EXECUTION_AGENT_INPUT_VERSION,
   validateContract,
 } from "../../contracts/index.mjs";
+import { judgeEvidence } from "../../judge/index.mjs";
 import * as provider from "../index.mjs";
 
 const { openPlaywrightBrowserToolGateway, runAdaptiveWithPlaywright } = provider;
@@ -284,6 +285,29 @@ describe("Playwright browser tool gateway", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("closes browser execution before the independent Judge returns a verdict", async () => {
+    const fixture = fakeBrowser();
+    const input = executionAgentInput();
+    input.milestones = [{ id: "settings-visible", class: "REQUIRED_SEMANTIC_MILESTONE", status: "PENDING", description: "Settings is visible.", target: { testId: "settings" } }];
+    input.currentMilestoneId = "settings-visible";
+
+    const execution = await runAdaptiveWithPlaywright({
+      input,
+      browserType: fixture.browserType,
+      proposeAction: async (agentInput) => ({ proposal: proposal(agentInput, "observe_dom"), tokensUsed: 1 }),
+    });
+
+    expect(fixture.browser.close).toHaveBeenCalledTimes(1);
+    const judgment = await judgeEvidence({
+      qaIr: urlQaIr(),
+      bundle: execution.bundles.at(-1),
+      manifest: execution.manifest,
+      readBlob: execution.readBlob,
+    });
+    expect(judgment.verdict).toBe("PASS");
+    expect(judgment.judge.provider).toBe("deterministic");
   });
 
   it("returns current URL evidence without taking screenshots", async () => {
@@ -915,3 +939,26 @@ describe("Playwright browser tool gateway", () => {
     await gateway.close();
   });
 });
+
+function urlQaIr() {
+  return {
+    schemaVersion: "qa-ir/0.2",
+    id: "qa-ir-gateway-judge",
+    source: { adapter: "adapter-playwright", adapterVersion: "0.2.0", uri: "gateway.spec.ts" },
+    suites: [{
+      id: "suite-gateway",
+      title: "Gateway",
+      tags: [],
+      scenarios: [{
+        id: "scenario-gateway",
+        title: "Gateway URL",
+        preconditions: [],
+        steps: [{ id: "checkpoint", kind: "CHECKPOINT", checkpointId: "loaded" }],
+        expectations: [{ id: "url", kind: "URL", expected: { kind: "literal", value: "/dashboard" } }],
+        policy: { navigation: "ALLOWED", readDom: true, readNetwork: false, click: "NONE", type: "NONE", upload: false, submit: false, destructiveMutation: false, confirmation: "DENY", secrets: "RUNTIME_INJECTED" },
+        provenance: [],
+      }],
+      provenance: [],
+    }],
+  };
+}
