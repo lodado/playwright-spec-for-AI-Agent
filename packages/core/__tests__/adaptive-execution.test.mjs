@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_ACTION_RESULT_VERSION, EXECUTION_AGENT_INPUT_VERSION } from "../../contracts/index.mjs";
-import { advanceAdaptiveMilestone, createAdaptiveActionAuthorizer } from "../index.mjs";
+import { advanceAdaptiveMilestone, createAdaptiveActionAuthorizer, createAdaptiveExecutionInput } from "../index.mjs";
 
 function executionAgentInput() {
   return {
@@ -47,6 +47,38 @@ function acceptedResult(input, proposal) {
 }
 
 describe("adaptive execution authorization", () => {
+  it("compiles deterministic adaptive milestones and leases from QA IR", () => {
+    const qaIr = adaptiveQaIr();
+    const input = createAdaptiveExecutionInput({ qaIr, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-compiled" });
+
+    expect(input).toMatchObject({
+      scenarioId: "scenario-settings",
+      currentPage: { url: "https://example.test/dashboard" },
+      currentMilestoneId: "click-settings",
+      milestones: [
+        { id: "click-settings", class: "REQUIRED_EXACT_ACTION", requiredAction: "click_observed_element", target: { testId: "settings" } },
+        { id: "dialog-visible", class: "REQUIRED_SEMANTIC_MILESTONE", target: { role: "dialog", accessibleName: { kind: "literal", value: "Settings" } } },
+      ],
+    });
+    expect(input.capabilityLease.actions).toEqual(expect.arrayContaining(["observe_dom", "observe_aria", "click_observed_element", "scroll_view", "wait_for_element_state"]));
+    expect(createAdaptiveExecutionInput({ qaIr, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-compiled" })).toEqual(input);
+  });
+
+  it("rejects cross-origin startup and scenarios without executable adaptive milestones", () => {
+    const crossOrigin = adaptiveQaIr();
+    crossOrigin.suites[0].scenarios[0].steps[0].target = { type: "URL", value: "https://attacker.test/collect" };
+    expect(() => createAdaptiveExecutionInput({ qaIr: crossOrigin, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-cross-origin" })).toThrow(/base origin/);
+
+    const readonly = adaptiveQaIr();
+    readonly.suites[0].scenarios[0].steps = readonly.suites[0].scenarios[0].steps.filter((step) => step.kind !== "INTERACT");
+    readonly.suites[0].scenarios[0].expectations[0].kind = "NOT_VISIBLE";
+    expect(() => createAdaptiveExecutionInput({ qaIr: readonly, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-readonly" })).toThrow(/no adaptive milestones/);
+
+    const blocked = adaptiveQaIr();
+    blocked.suites[0].scenarios[0].policy.click = "NONE";
+    expect(() => createAdaptiveExecutionInput({ qaIr: blocked, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-blocked" })).toThrow(/blocked by scenario policy/);
+  });
+
   it("authorizes one exact observed-element action from the current DOM generation", () => {
     const result = createAdaptiveActionAuthorizer({ input: executionAgentInput(), now: () => 1_000 }).authorize({ proposal: clickProposal(), tokensUsed: 100 });
     expect(result.proposal).toEqual(clickProposal());
@@ -165,3 +197,32 @@ describe("adaptive execution authorization", () => {
     expect(transition.outcome).not.toHaveProperty("verdict");
   });
 });
+
+function adaptiveQaIr() {
+  return {
+    schemaVersion: "qa-ir/0.2",
+    id: "qa-ir-settings",
+    source: { adapter: "adapter-playwright", adapterVersion: "0.2.0", uri: "settings.spec.ts" },
+    suites: [{
+      id: "suite-settings",
+      title: "Settings",
+      tags: ["playwright"],
+      scenarios: [{
+        id: "scenario-settings",
+        title: "Open settings dialog",
+        preconditions: [],
+        steps: [
+          { id: "navigate-dashboard", kind: "NAVIGATE", milestoneClass: "REQUIRED_SEMANTIC_MILESTONE", target: { type: "PATH", value: "/dashboard" } },
+          { id: "click-settings", kind: "INTERACT", milestoneClass: "REQUIRED_EXACT_ACTION", action: "CLICK", target: { testId: "settings" } },
+          { id: "observe", kind: "OBSERVE", requests: [{ type: "ELEMENT_OBSERVATION" }] },
+          { id: "checkpoint", kind: "CHECKPOINT", checkpointId: "checkpoint-settings" },
+        ],
+        expectations: [{ id: "dialog-visible", kind: "VISIBLE", target: { role: "dialog", accessibleName: { kind: "literal", value: "Settings" } }, provenance: [] }],
+        policy: { navigation: "ALLOWED", readDom: true, readNetwork: false, click: "SAFE_ONLY", type: "NONE", upload: false, submit: false, destructiveMutation: false, confirmation: "ALLOW_SAFE", secrets: "RUNTIME_INJECTED" },
+        provenance: [],
+      }],
+      provenance: [],
+    }],
+    extensions: {},
+  };
+}

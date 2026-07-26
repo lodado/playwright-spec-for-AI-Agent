@@ -1,5 +1,6 @@
 import {
   CONTRACT_VIOLATION,
+  EXECUTION_AGENT_INPUT_VERSION,
   EXECUTION_AGENT_OUTCOME_VERSION,
   EXECUTION_PLAN_VERSION,
   PROVIDER_CAPABILITIES_VERSION,
@@ -12,6 +13,7 @@ import {
 
 export const DEFAULT_RETRY_POLICY = Object.freeze({ maxAttempts: 1 });
 export const DEFAULT_TIMEOUT_POLICY = Object.freeze({ perNodeMs: 30000, runMs: 120000 });
+export const DEFAULT_ADAPTIVE_BUDGET = Object.freeze({ actions: 32, turns: 32, timeMs: 120_000, tokens: 100_000 });
 
 const INTERNAL_ERROR = Symbol("core.internalError");
 const REQUIRED_ACTIONS = Object.freeze({
@@ -134,6 +136,65 @@ export function createAdaptiveActionAuthorizer({ input, now = Date.now } = {}) {
   }
 
   return Object.freeze({ authorize, remainingBudget });
+}
+
+export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId, budget = DEFAULT_ADAPTIVE_BUDGET } = {}) {
+  const qaIrSnapshot = snapshotContract("QaIrDocument", qaIr);
+  if (typeof runId !== "string" || runId.length === 0) throw contractError("execute", "runId must be a non-empty string");
+  const scenario = qaIrSnapshot.suites.flatMap((suite) => suite.scenarios).find((item) => item.id === scenarioId);
+  if (!scenario) throw contractError("execute", "scenarioId does not exist in QA IR");
+  const navigationStep = scenario.steps.find((step) => step.kind === "NAVIGATE");
+  const interactionSteps = scenario.steps.filter((step) => step.kind === "INTERACT");
+  if (navigationStep && scenario.policy.navigation !== "ALLOWED") throw policyError("execute", "adaptive startup navigation is blocked by scenario policy");
+  if (interactionSteps.length > 0 && !["SAFE_ONLY", "ALL"].includes(scenario.policy.click)) throw policyError("execute", "adaptive interaction is blocked by scenario policy");
+  const startUrl = adaptiveStartUrl(baseUrl, navigationStep);
+  const milestones = [
+    ...interactionSteps.map((step) => {
+      if (step.action !== "CLICK") throw contractError("execute", `${step.action} is not supported by adaptive execution`);
+      return { id: step.id, class: step.milestoneClass, status: "PENDING", description: `Perform required ${step.action.toLowerCase()} action.`, requiredAction: "click_observed_element", target: structuredClone(step.target) };
+    }),
+    ...scenario.expectations.filter(adaptiveSemanticExpectation).map((expectation) => ({
+      id: expectation.id,
+      class: "REQUIRED_SEMANTIC_MILESTONE",
+      status: "PENDING",
+      description: `Observe required ${expectation.kind.toLowerCase()} target.`,
+      target: structuredClone(expectation.target),
+    })),
+  ];
+  if (milestones.length === 0) throw contractError("execute", "scenario has no adaptive milestones");
+  const actions = ["observe_dom", "observe_aria", "get_current_url", "scroll_view", "wait_for_element_state"];
+  if (scenario.policy.navigation === "ALLOWED") actions.push("navigate", "go_back", "reload_page");
+  if (["SAFE_ONLY", "ALL"].includes(scenario.policy.click)) actions.push("click_observed_element", "press_key", "hover_observed_element");
+  return snapshotContract("ExecutionAgentInput", {
+    schemaVersion: EXECUTION_AGENT_INPUT_VERSION,
+    runId,
+    scenarioId: scenario.id,
+    goal: { id: `goal-${canonicalHash({ qaIrId: qaIrSnapshot.id, scenarioId: scenario.id }).slice("sha256:".length, "sha256:".length + 16)}`, description: scenario.title },
+    milestones,
+    currentMilestoneId: milestones[0].id,
+    currentPage: { pageId: `page-${canonicalHash({ runId, scenarioId: scenario.id, startUrl }).slice("sha256:".length, "sha256:".length + 12)}`, domGeneration: 1, url: startUrl },
+    recentObservations: [],
+    capabilityLease: { leaseId: `lease-${canonicalHash({ runId, scenarioId: scenario.id, actions, origin: new URL(startUrl).origin }).slice("sha256:".length, "sha256:".length + 16)}`, actions, allowedOrigins: [new URL(startUrl).origin] },
+    remainingBudget: { ...budget },
+  });
+}
+
+function adaptiveStartUrl(baseUrl, navigationStep) {
+  let base;
+  try {
+    base = new URL(baseUrl);
+  } catch {
+    throw contractError("execute", "baseUrl must be an absolute HTTP(S) URL");
+  }
+  if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) throw contractError("execute", "baseUrl must be an absolute HTTP(S) URL without credentials, query, or fragment");
+  const target = navigationStep === undefined ? base : new URL(navigationStep.target.value, base);
+  if (target.origin !== base.origin || target.username || target.password || target.search || target.hash) throw contractError("execute", "adaptive start URL must stay on the base origin without credentials, query, or fragment");
+  return target.href;
+}
+
+function adaptiveSemanticExpectation(expectation) {
+  if (!["VISIBLE", "PRESENT", "ROLE", "NAME", "CONTAINS_TEXT"].includes(expectation.kind) || expectation.target === undefined) return false;
+  return [expectation.target.accessibleName, expectation.target.text].every((match) => match === undefined || match.kind === "literal");
 }
 
 export function advanceAdaptiveMilestone({ input, proposal, result, observation } = {}) {
