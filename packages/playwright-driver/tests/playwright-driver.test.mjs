@@ -209,13 +209,17 @@ describe("playwright behavioral driver", () => {
       environment: {
         baseUrl: app.url,
         allowedOrigins: [app.url],
-        startPath: `/malformed/%E0%A4%A/${encodeURIComponent(secret)}`,
+        startPath: `/malformed/%E0%A4%A/${mixedCaseEncodedSecret}/${fullyEncodedSecret}`,
         viewport: { width: 390, height: 844 },
       },
       valueRefs: { token: secret },
     });
-    const malformedRecorded = JSON.stringify(await driver.observe(malformedHandle));
-    expect(malformedRecorded.toLowerCase()).not.toContain(encodeURIComponent(secret).toLowerCase());
+    const malformedObservation = await driver.observe(malformedHandle);
+    const malformedAction = await driver.execute(malformedHandle, { type: "wait", durationMs: 0, reasonCode: "inspect_malformed" });
+    const malformedRecorded = JSON.stringify({ observation: malformedObservation, action: malformedAction });
+    expect(malformedRecorded).not.toContain(secret);
+    expect(malformedRecorded.toLowerCase()).not.toContain(mixedCaseEncodedSecret.toLowerCase());
+    expect(malformedRecorded.toLowerCase()).not.toContain(fullyEncodedSecret.toLowerCase());
     expect(malformedRecorded).toContain("[REDACTED]");
 
     await driver.close(malformedHandle);

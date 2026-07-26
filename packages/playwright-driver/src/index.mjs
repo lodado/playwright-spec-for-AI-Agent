@@ -706,7 +706,8 @@ function safeUrl(value, secretValues = []) {
       if (redactedPathname !== pathname) url.pathname = redactedPathname;
       return redactRawSecrets(url.toString(), secretValues);
     } catch {
-      return redactSecrets(url.toString(), secretValues);
+      if (secretValues.length > 0) url.pathname = "/[REDACTED]";
+      return url.toString();
     }
   } catch {
     return "invalid-url";
