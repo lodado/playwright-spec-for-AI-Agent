@@ -158,6 +158,36 @@ describe("playwright behavioral driver", () => {
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
   });
 
+  it("redacts plain and URL-encoded fixture secrets reflected in URL paths", async () => {
+    if (!browserAvailable) return;
+    const secret = "path/secret";
+    const encodedSecret = encodeURIComponent(secret);
+    const app = await serve(`<h1>Reflected path</h1>`);
+    const driver = createPlaywrightDriver({ browserType: chromium });
+    const dir = await tempDir();
+    const handle = await driver.start({
+      ...input("path-secret", app.url, dir, {}),
+      environment: {
+        baseUrl: app.url,
+        allowedOrigins: [app.url],
+        startPath: `/reflected/${secret}/${encodedSecret}`,
+        viewport: { width: 390, height: 844 },
+      },
+      valueRefs: { token: secret },
+    });
+
+    const observation = await driver.observe(handle);
+    const action = await driver.execute(handle, { type: "wait", durationMs: 0, reasonCode: "inspect" });
+    const recorded = JSON.stringify({ observation, action });
+    expect(recorded).not.toContain(secret);
+    expect(recorded.toLowerCase()).not.toContain(encodedSecret.toLowerCase());
+    expect(recorded).toContain("[REDACTED]");
+
+    await driver.close(handle);
+    await app.close();
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  });
+
   it("honors disabled screenshot and trace evidence while retaining successful network metadata", async () => {
     if (!browserAvailable) return;
     const app = await serve(`<h1>Hello</h1>`);

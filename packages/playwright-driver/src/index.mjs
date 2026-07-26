@@ -125,8 +125,8 @@ async function startSession({ input, browserType, launchOptions, now }) {
         violation = { code: "ACTION_NOT_ALLOWED", message: "State-mutating request is blocked by policy" };
       }
       if (violation) {
-        policyViolation = { ...violation, url: safeUrl(url), method };
-      runtimeIssues.push(makeIssue("network", violation.code, violation.message, { url: safeUrl(url), method }));
+        policyViolation = { ...violation, url: safeUrl(url, secretValues), method };
+      runtimeIssues.push(makeIssue("network", violation.code, violation.message, { url: safeUrl(url, secretValues), method }));
         await route.abort("blockedbyclient");
         return;
       }
@@ -136,8 +136,8 @@ async function startSession({ input, browserType, launchOptions, now }) {
       await context.routeWebSocket("**/*", (socket) => {
         const socketUrl = socket.url?.() ?? "unknown";
       if (!safetyPolicy.allowStateMutation || socketUrl === "unknown" || !isAllowedOrigin(socketUrl, allowedOrigins)) {
-        policyViolation = { code: "ORIGIN_BLOCKED", message: "WebSocket blocked by safety policy", url: safeUrl(socketUrl) };
-        runtimeIssues.push(makeIssue("network", "ORIGIN_BLOCKED", policyViolation.message, { url: safeUrl(socketUrl) }));
+        policyViolation = { code: "ORIGIN_BLOCKED", message: "WebSocket blocked by safety policy", url: safeUrl(socketUrl, secretValues) };
+        runtimeIssues.push(makeIssue("network", "ORIGIN_BLOCKED", policyViolation.message, { url: safeUrl(socketUrl, secretValues) }));
         socket.close();
       }
       });
@@ -148,18 +148,18 @@ async function startSession({ input, browserType, launchOptions, now }) {
     if (["error", "warning", "warn"].includes(message.type())) runtimeIssues.push(makeIssue("console", message.type(), truncate(message.text(), 2_000)));
     });
   page.on("pageerror", (error) => runtimeIssues.push(makeIssue("pageerror", "PAGE_ERROR", truncate(error.message, 2_000))));
-  page.on("requestfailed", (request) => runtimeIssues.push(makeIssue("network", "REQUEST_FAILED", request.failure()?.errorText ?? "request failed", { url: safeUrl(request.url()), method: request.method() })));
+  page.on("requestfailed", (request) => runtimeIssues.push(makeIssue("network", "REQUEST_FAILED", request.failure()?.errorText ?? "request failed", { url: safeUrl(request.url(), secretValues), method: request.method() })));
     page.on("response", (response) => {
-      const metadata = { url: safeUrl(response.url()), method: response.request().method(), status: response.status() };
+      const metadata = { url: safeUrl(response.url(), secretValues), method: response.request().method(), status: response.status() };
       responseContentTypes.set(response.url(), response.headers()["content-type"]);
     runtimeIssues.push(makeIssue("network", response.status() >= 400 ? "HTTP_STATUS" : "HTTP_RESPONSE", `HTTP ${response.status()}`, metadata));
     });
     page.on("download", async (download) => {
       const filename = await download.suggestedFilename();
-    runtimeIssues.push(makeIssue("download", "DOWNLOAD", filename, { url: safeUrl(download.url()), filename, mimeType: responseContentTypes.get(download.url()) }));
+    runtimeIssues.push(makeIssue("download", "DOWNLOAD", filename, { url: safeUrl(download.url(), secretValues), filename, mimeType: responseContentTypes.get(download.url()) }));
     });
     page.on("popup", (popup) => {
-    runtimeIssues.push(makeIssue("popup", "POPUP", "Unexpected popup opened", { url: safeUrl(popup.url()) }));
+    runtimeIssues.push(makeIssue("popup", "POPUP", "Unexpected popup opened", { url: safeUrl(popup.url(), secretValues) }));
       void popup.close().catch(() => undefined);
     });
     page.on("dialog", async (dialog) => {
@@ -238,7 +238,7 @@ async function observeSession(session, now) {
     sequence: session.observationSequence,
     timestamp: now(),
     page: {
-      url: safeUrl(session.page.url()),
+      url: safeUrl(session.page.url(), session.secretValues),
       title: redactSecrets(await session.page.title(), session.secretValues),
       viewport: session.page.viewportSize() ?? { width: 0, height: 0 },
     },
@@ -263,7 +263,7 @@ async function observeSession(session, now) {
 async function executeAction(session, action, now) {
   if (!session.lastObservation) throw new Error("observe must be called before execute");
   const observationId = session.lastObservation.id;
-  const urlBefore = safeUrl(session.page.url());
+  const urlBefore = safeUrl(session.page.url(), session.secretValues);
   let actionTarget;
   try {
     actionTarget = await assertActionAllowed(session, action);
@@ -301,7 +301,7 @@ async function executeAction(session, action, now) {
       observationId,
       action: structuredClone(action),
       urlBefore,
-      urlAfter: safeUrl(session.page.url()),
+      urlAfter: safeUrl(session.page.url(), session.secretValues),
       timestamp: now(),
       evidenceIds: screenshotEvidence ? [screenshotEvidence.id] : [],
       evidence: screenshotEvidence ? [screenshotEvidence] : [],
@@ -315,7 +315,7 @@ async function executeAction(session, action, now) {
       observationId,
       action: structuredClone(action),
       urlBefore,
-      urlAfter: safeUrl(session.page.url()),
+      urlAfter: safeUrl(session.page.url(), session.secretValues),
       timestamp: now(),
       evidenceIds: failureEvidence.map(item => item.id),
       evidence: failureEvidence,
@@ -683,14 +683,14 @@ function hasCredentials(url) {
   }
 }
 
-function safeUrl(value) {
+function safeUrl(value, secretValues = []) {
   try {
     const url = new URL(value);
     url.username = "";
     url.password = "";
     url.search = "";
     url.hash = "";
-    return url.toString();
+    return redactSecrets(url.toString(), secretValues);
   } catch {
     return "invalid-url";
   }
@@ -714,7 +714,10 @@ function issue(kind, code, message, metadata, now, secretValues = []) {
 }
 
 function redactSecrets(value, secretValues) {
-  return secretValues.reduce((redacted, secret) => redacted.split(secret).join("[REDACTED]"), String(value));
+  return secretValues.reduce((redacted, secret) => {
+    const encoded = encodeURIComponent(secret);
+    return [secret, encoded, encoded.toLowerCase()].reduce((text, candidate) => text.split(candidate).join("[REDACTED]"), redacted);
+  }, String(value));
 }
 
 function redactDeep(value, secretValues) {
