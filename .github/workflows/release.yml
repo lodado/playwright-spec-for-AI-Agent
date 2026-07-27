@@ -37,6 +37,8 @@ jobs:
 
       - run: pnpm test
 
+      - run: pnpm package:smoke
+
       - uses: changesets/action@v1
         with:
           version: pnpm version-packages

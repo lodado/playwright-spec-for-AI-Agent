@@ -38,6 +38,22 @@ test("marks reversed order disagreement unstable", () => {
   assert.equal(report.delta.confidence.orderConsistency, 0);
 });
 
+test("reports candidate_better with candidate-minus-baseline delta direction", () => {
+  const report = compareVariants({
+    baselineSessions: [session("b1", "p1", "abandoned"), session("b2", "p2", "failure")],
+    candidateSessions: [session("c1", "p1", "success"), session("c2", "p2", "success")],
+    baselineFingerprints: [fp("b1", 8, 0.2), fp("b2", 9, 0.3)],
+    candidateFingerprints: [fp("c1", 4, 0), fp("c2", 5, 0)],
+    orderResults: ["candidate_better", "candidate_better"],
+  });
+
+  assert.equal(report.status, "candidate_better");
+  assert.equal(report.winner, "candidate");
+  assert.ok(report.delta.completionDelta > 0);
+  assert.ok(report.delta.medianActionDelta < 0);
+  assert.equal(report.delta.confidence.orderConsistency, 1);
+});
+
 test("maps variant-local findings to canonical report ids by fingerprint", () => {
   const report = compareVariants({
     baselineSessions: [session("b1", "p1", "success")],
