@@ -2,23 +2,51 @@
 
 # Personaut
 
-**Explore a web product as seeded personas and turn browser behavior into sealed evidence.**
+**Let bounded AI personas explore a web product—and turn every decision into reviewable evidence.**
 
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
 [![Playwright](https://img.shields.io/badge/Playwright-1.60-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)](https://playwright.dev)
 [![npm](https://img.shields.io/npm/v/@lodado/personaut?style=for-the-badge&logo=npm)](https://www.npmjs.com/package/@lodado/personaut)
 
-[Quick start](#5-minute-quick-start) · [Use your site](#use-personaut-with-your-site) · [Commands](#commands) · [Troubleshooting](#troubleshooting) · [Workspace](../../README.md)
+[Mental model](#the-30-second-mental-model) · [Quick start](#5-minute-quick-start) · [Policy modes](#choose-a-policy-mode) · [Use your site](#use-personaut-with-your-site) · [Safety](#safety-and-limits) · [Workspace](../../README.md)
 
 </div>
 
-Personaut opens isolated Playwright sessions, lets deterministic or opt-in bounded Hermes persona policies choose actions, seals the resulting evidence, and evaluates success after the browser closes.
+Personaut is an evidence-first browser exploration tool built on Playwright. Give it a task and a seeded persona; it observes only the visible page, chooses bounded actions, and records what happened for review.
+
+> **AI chooses. Code constrains. Evidence decides.**
+
+## The 30-second mental model
+
+| 🧠 AI chooses | 🛡️ Code constrains | 🔎 Evidence decides |
+| --- | --- | --- |
+| A deterministic policy or Hermes chooses the next visible action using persona hints. | StudySpec, runtime, and the Playwright driver independently reject unsafe actions. | Live oracles decide when to stop; post-close evaluation verifies sealed evidence. |
 
 ```text
-StudySpec → persona × task × seed sessions → sealed evidence → JSON + HTML report
+task + persona hint
+        ↓
+observe → choose → validate → act → observe again
+        ↓
+close browser → seal evidence → evaluate oracles → report
 ```
 
-Use Personaut when you want to learn whether different user behaviors can complete a task, where they stall, or whether a candidate release behaves differently from a baseline. Keep normal Playwright tests for deterministic regression coverage.
+This separation is the core philosophy:
+
+1. **A persona is a hint, not a script.** Hermes may decide differently from a hard-coded ranking.
+2. **A model never receives browser authority.** It proposes one small action; normal code validates and executes it.
+3. **A model never declares success.** URL, text, element, or event oracles make that decision from sealed evidence.
+4. **Failures keep their provenance.** Provider and driver failures remain infrastructure errors instead of becoming fake UX findings.
+
+> [!IMPORTANT]
+> Personaut produces synthetic exploratory evidence. It does **not** replace deterministic Playwright tests, analytics, accessibility audits, or human user research—and it does not predict conversion.
+
+### When should I use it?
+
+| Good fit | Use something else |
+| --- | --- |
+| Explore where different seeded behaviors stall | Prove one exact regression never returns → Playwright test |
+| Compare relative behavior across baseline and candidate | Measure real-user conversion → product analytics |
+| Collect reproducible, evidence-linked friction signals | Make demographic claims → calibrated human research |
 
 ## 5-minute quick start
 
@@ -76,7 +104,7 @@ Open the report and inspect the machine-readable summary:
 
 The starter result is marked `exploration_only`. Personaut does not claim that synthetic sessions represent real-user conversion.
 
-## How a study works
+## How a StudySpec works
 
 A StudySpec answers five questions:
 
@@ -89,6 +117,8 @@ A StudySpec answers five questions:
 | `personas` + `runtime.seeds` | Which behaviors run, and how many sessions are created? |
 
 Personaut evaluates `personas × tasks × seeds`. Two personas, two tasks, and three seeds create twelve isolated sessions.
+
+The action policy and the success oracle are intentionally separate. Changing how a persona explores must not change what counts as success.
 
 ## Use Personaut with your site
 
@@ -144,9 +174,18 @@ Run `personaut validate` after every StudySpec edit.
 
 Seeds make policy sampling repeatable. Reusing the same StudySpec and seeds makes baseline/candidate comparison meaningful.
 
-## Opt-in Hermes actions
+## Choose a policy mode
 
-Hermes can choose the next action from visible semantic page state while sampled persona values remain hints rather than code-owned rankings. Install and configure `hermes-agent`, then use this local-only v0.1 configuration:
+| Mode | Who chooses the next action? | Best for |
+| --- | --- | --- |
+| Deterministic, default | Repository code uses seeded persona rules. | Repeatable baseline exploration with no model dependency. |
+| Hermes, opt-in | Hermes chooses from a strict action schema using persona hints. | Exploring paths that should not be pre-ranked by application code. |
+
+Unknown action-model names keep the deterministic path for compatibility. Only the exact value `hermes` activates Hermes.
+
+### Opt-in Hermes actions
+
+Install and configure `hermes-agent`, then use this local-only v0.1 configuration:
 
 ```yaml
 runtime:
@@ -163,9 +202,31 @@ evidence:
   semanticSnapshot: every_action
 ```
 
-Hermes receives the task goal, path-only route, visible text and interactive semantics, recent canonical event summaries, persona hints, allowed actions, and fixture **names**. It does not receive fixture values, oracles, selectors, raw DOM, screenshots, network/console internals, auth, or storage state. Valid actions are limited to `click`, `type(valueRef)`, `scroll`, `back`, `wait`, `finish`, and `abandon`, further restricted by the task safety policy.
+#### What does Hermes see?
+
+| Hermes receives | Hermes never receives |
+| --- | --- |
+| Task goal and bounded context | Whole StudySpec or oracle definitions |
+| Path-only route and visible semantic text | URL query/hash/user info or raw DOM |
+| Visible element IDs, roles, names, and state | Selectors, fingerprints, test IDs, hidden elements |
+| Recent three canonical event summaries | Full event history, console, or network internals |
+| Persona hints and remaining budget | Screenshot, trace, video, auth, or storage state |
+| Fixture **names** such as `email` | Fixture **values** such as an actual email or password |
+
+Hermes may return only `click`, `type(valueRef)`, `scroll`, `back`, `wait`, `finish`, or `abandon`. The task safety policy can narrow that list further.
+
+```text
+Hermes: { type: "type", elementId: "el_1", valueRef: "email" }
+                                      │
+                                      └─ the driver resolves the real value in memory
+```
+
+The fixture value never needs to enter the model prompt, event stream, session JSON, manifest, or error message.
 
 Invalid output gets one format-repair attempt. Timeout and provider failures are not retried, and none of these failures fall back to the deterministic policy. Sealed manifests contain digest-only model attempt provenance, never raw prompts or model output.
+
+> [!NOTE]
+> No fallback is deliberate. A silent switch to deterministic behavior would make it impossible to tell whether Hermes or repository code chose the action.
 
 ## Commands
 
@@ -218,6 +279,8 @@ Comparison uses paired policy sampling and reports relative synthetic difference
 
 Evidence files are verified against the sealed manifest before an outcome is reported as successful.
 
+For Hermes runs, `model_attempt` evidence stores only provider/model identity, prompt version, attempt number, input/output digests, latency, and outcome code. Digests are audit identifiers—not copies of model content and not proof that a model decision was correct.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -232,12 +295,14 @@ Evidence files are verified against the sealed manifest before an outcome is rep
 
 ## Safety and limits
 
+- AI output is treated as untrusted input and must pass the action contract before execution.
 - Browser contexts are isolated per session.
 - Hidden or occluded controls are not offered to persona policy as perceived choices.
 - Study safety policy gates navigation, clicking, typing, uploads, mutations, external origins, and confirmation stopping.
 - Browser capability closes before browserless evaluation begins.
 - Study files are trusted operator input; keep secrets in operator-controlled configuration or environment variables.
 - Hermes v0.1 is restricted to loopback test environments because its CLI query is passed through process arguments; external beta and production use are intentionally blocked.
+- Invalid model output gets one repair attempt; timeout and provider failures get none and never fall back silently.
 - Synthetic findings support release decisions but do not replace deterministic tests, analytics, or human research.
 
 For the full schema and trust-boundary details, see the [StudySpec contracts reference](https://github.com/lodado/playwright-spec-for-AI-Agent/blob/main/packages/contracts/README.md).
