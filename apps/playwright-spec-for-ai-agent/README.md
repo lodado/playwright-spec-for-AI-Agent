@@ -9,7 +9,7 @@
 [![Playwright](https://img.shields.io/badge/Playwright-%3E%3D1.48-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)](https://playwright.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-[Quick start](#10-minute-quick-start) · [Live judgment](#continue-to-live-judgment) · [Annotations](#annotations) · [Troubleshooting](#troubleshooting) · [QA Native](#qa-native) · [Workspace](../../README.md)
+[Quick start](#10-minute-quick-start) · [Live judgment](#continue-to-live-judgment) · [Annotations](#annotations) · [Troubleshooting](#troubleshooting) · [QA Native](#qa-native) · [Code-backed Issues](#publish-a-code-backed-github-issue) · [Workspace](../../README.md)
 
 </div>
 
@@ -262,6 +262,68 @@ npx qa-native execute \
   --run-dir=.qa/runs/pricing-1
 npx qa-native judge --run-dir=.qa/runs/pricing-1
 ```
+
+### Publish a code-backed GitHub Issue
+
+After `judge` produces one `FAIL` or `MANUAL_REVIEW` result, `report` can connect the browser evidence to tracked source at an exact Git commit. Commit the code you want to inspect first; uncommitted working-tree changes are not searched.
+
+```bash
+npx qa-native report \
+  --run-dir=.qa/runs/pricing-1 \
+  --repository-root=. \
+  --revision=HEAD
+```
+
+The report pins `HEAD` to a commit, searches bounded source files for relevant test IDs, visible text, routes, and endpoints, then writes the diagnosis, suspected file ranges, and repair recommendation under:
+
+```text
+.qa/runs/pricing-1/reports/report-<hash>/
+├── diagnosis-<hash>.json
+├── code-context-<hash>.json
+├── repair-recommendation-<hash>.json
+└── report-<hash>.md
+```
+
+Review the Markdown report before publishing. Then authenticate GitHub CLI and set a stable publication key. Generate the key once and keep the same value in CI secrets so recurring failures can be matched safely.
+
+```bash
+gh auth login
+gh auth status
+
+export QA_NATIVE_PUBLICATION_KEY="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64'))")"
+
+npx qa-native publish-issue \
+  --run-dir=.qa/runs/pricing-1 \
+  --repository-root=. \
+  --repository=owner/repository \
+  --revision=HEAD
+```
+
+The authenticated GitHub identity needs permission to read repository contents, search Issues and Draft PRs, create Issues, and add comments. The following labels must already exist in the target repository: `qa-runtime`, `auto-generated`, `origin:<diagnosed-origin>`, `severity:<diagnosed-severity>`, and `scenario:<scenario-id>`.
+
+Before creating remote state, `publish-issue` verifies that the pinned commit exists in the target repository and that the suspected files still match their recorded SHA-256 hashes. The Issue includes expected and observed behavior, evidence references, suspected files and line ranges, uncertainty, and a replay command; it does not publish source snippets or credentials.
+
+Publication is idempotent:
+
+| Existing open fingerprint match | Result |
+| --- | --- |
+| None | Create one Issue. |
+| One match from a new run | Add an authenticated occurrence comment. |
+| One match from the same run | No-op. |
+| Multiple matches | Stop as ambiguous without selecting a target. |
+
+If a run contains multiple completed judgment sets or multiple failures, select exactly one result with a path relative to the run directory:
+
+```bash
+npx qa-native publish-issue \
+  --run-dir=.qa/runs/pricing-1 \
+  --repository-root=. \
+  --repository=owner/repository \
+  --revision=HEAD \
+  --judgment=judgments/judge-<hash>/judge-result-<hash>.json
+```
+
+Only `FAIL` and `MANUAL_REVIEW` results are publishable. `PASS` results and ambiguous multi-failure inputs are rejected. Publication records remain private under `.qa/runs/<run-id>/publications/`; `publish-issue` cannot create branches, patches, pull requests, or merges.
 
 Read the [QA Native guide](https://github.com/lodado/playwright-spec-for-AI-Agent/blob/main/apps/playwright-spec-for-ai-agent/docs/qa-native.md) before enabling patch verification or GitHub publication.
 
