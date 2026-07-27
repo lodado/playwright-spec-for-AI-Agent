@@ -11,7 +11,7 @@ import {
   SEMANTIC_JUDGE_DECISION_VERSION,
 } from "../../contracts/index.mjs";
 import { createInMemoryEvidenceStore } from "../../evidence/index.mjs";
-import { buildHermesExecutionQuery, buildHermesJudgeQuery, buildHermesPatchQuery, createHermesExecutionProposer, createHermesPatchProposer, judgeWithHermes } from "../index.mjs";
+import { buildHermesExecutionQuery, buildHermesJudgeQuery, buildHermesPatchQuery, buildHermesRemediationReviewQuery, createHermesExecutionProposer, createHermesPatchProposer, createHermesRemediationReviewer, judgeWithHermes } from "../index.mjs";
 
 const policy = {
   navigation: "ALLOWED",
@@ -200,6 +200,22 @@ describe("Hermes judge provider", () => {
     expect(query).toContain("cannot browse, call tools");
     expect(query).not.toContain("SESSION-SECRET");
     expect(buildHermesPatchQuery(input, { secrets: ["SESSION-SECRET"] })).toContain(input.codeContext.revision);
+  });
+
+  it("invokes an independent text-only remediation reviewer without mutation capabilities", async () => {
+    const input = { appliedDiff: "- secret SESSION-SECRET\n+ safe", referenceHashes: { diff: `sha256:${"a".repeat(64)}` } };
+    const output = { decision: "MANUAL_REVIEW", confidence: 0.5, risks: ["Review"], unsupportedClaims: [], rationale: "Bounded review", referenceHashes: input.referenceHashes };
+    const transport = vi.fn(async () => output);
+    const reviewer = createHermesRemediationReviewer({ transport, secrets: ["SESSION-SECRET"], model: "review-model", invocationId: "review-invocation" });
+
+    expect(await reviewer(input)).toEqual(output);
+    expect(reviewer.identity).toEqual({ provider: "hermes", model: "review-model", invocationId: "review-invocation" });
+    const [query, turns, options] = transport.mock.calls[0];
+    expect(turns).toBe(1);
+    expect(options).toMatchObject({ mode: "text-only", requiredKeys: expect.arrayContaining(["decision", "referenceHashes"]) });
+    expect(query).not.toContain("SESSION-SECRET");
+    expect(query).toContain("cannot browse, call tools, edit files");
+    expect(buildHermesRemediationReviewQuery(input, { secrets: ["SESSION-SECRET"] })).toContain("independent remediation reviewer");
   });
 
   it("bypasses Hermes transport for fully deterministic evidence", async () => {

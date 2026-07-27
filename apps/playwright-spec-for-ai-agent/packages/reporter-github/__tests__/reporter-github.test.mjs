@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { compilePlaywrightSpec } from "../../adapter-playwright/index.mjs";
-import { CODE_CONTEXT_VERSION, JUDGE_RESULT_VERSION, PROVIDER_CAPABILITIES_VERSION, canonicalHash, validateContract } from "../../contracts/index.mjs";
+import { CODE_CONTEXT_VERSION, EVIDENCE_COMPARISON_VERSION, EXPECTATION_INTEGRITY_RESULT_VERSION, INDEPENDENT_REMEDIATION_REVIEW_VERSION, JUDGE_RESULT_VERSION, PATCH_APPLICATION_RESULT_VERSION, PATCH_PROPOSAL_VERSION, PROVIDER_CAPABILITIES_VERSION, VERIFICATION_RESULT_VERSION, canonicalHash, validateContract } from "../../contracts/index.mjs";
 import { createInMemoryEvidenceStore } from "../../evidence/index.mjs";
-import { diagnoseFailure } from "../../remediation/index.mjs";
-import { createFailureFingerprint, publishGitHubFailureIssue, renderGitHubFailureIssue, renderGitHubOccurrenceRecord } from "../index.mjs";
+import { decidePublication, diagnoseFailure, recommendRepair } from "../../remediation/index.mjs";
+import { createFailureFingerprint, publishGitHubFailureIssue, publishGitHubVerifiedDraft, renderGitHubFailureIssue, renderGitHubOccurrenceRecord } from "../index.mjs";
 
 function fixture({ runId = "run-1", targetUrl = "https://user:secret@example.test/dashboard?token=secret", origin = "PRODUCT_CODE" } = {}) {
   const qaIr = compilePlaywrightSpec({ source: `// @qa-scenario: DASHBOARD_READONLY\ntest.describe("dashboard", () => {\n  // @qa-live-policy: readonly\n  test("shows dashboard", async ({ page }) => {\n    await expect(page.getByText("Welcome Dashboard")).toBeVisible();\n  });\n});`, sourcePath: "dashboard.spec.ts" }).qaIr;
@@ -43,6 +43,26 @@ function fixture({ runId = "run-1", targetUrl = "https://user:secret@example.tes
 }
 
 describe("GitHub failure Issue reporter", () => {
+  it("publishes only a confirmed Draft PR for a fully verified remediation decision", async () => {
+    const input = fixture();
+    const chain = draftChain(input);
+    const github = publicationHarness();
+    const publishDraft = vi.fn(async ({ repository, body }) => {
+      const publication = { publication: "DRAFT_PR", number: 42, url: `https://github.com/${repository}/pull/42`, body };
+      github.publications.push(publication);
+      return { number: publication.number, url: publication.url };
+    });
+    const result = await publishGitHubVerifiedDraft({ repository: "owner/example", ...input, ...chain, worktreePath: "/private/worktree", publishDraft, ...github.dependencies });
+
+    expect(validateContract("GitHubPublicationResult", result)).toMatchObject({ publication: "DRAFT_PR", action: "CREATED", target: { number: 42 } });
+    const request = publishDraft.mock.calls[0][0];
+    expect(request.action).toBe("CREATE_DRAFT_PR");
+    expect(request.expectedDiffHash).toBe(chain.application.diff.contentHash);
+    expect(request.body).toContain("## Verified QA remediation");
+    expect(request.body).toContain("never merges automatically");
+    expect(request.body).not.toMatch(/SESSION-SECRET|user:secret|token=secret/);
+  });
+
   it("publishes one bounded evidence-backed Issue without leaking secrets or unsafe URLs", async () => {
     const input = fixture();
     const github = publicationHarness();
@@ -207,6 +227,23 @@ function occurrenceComment(input, publicationFingerprint, number = 42, id = 1) {
     body: renderGitHubOccurrenceRecord({ repository: input.codeContext.repositoryId, publicationFingerprint, source, occurredAt: input.evidenceBundle.capturedAt, stateAuthenticationKey: input.stateAuthenticationKey }),
     createdAt: input.evidenceBundle.capturedAt,
   };
+}
+
+function draftChain(input) {
+  const recommendation = recommendRepair(input);
+  const proposal = { schemaVersion: PATCH_PROPOSAL_VERSION, proposalId: "patch-proposal-1111111111111111", diagnosisId: input.diagnosis.diagnosisId, codeContextBundleId: input.codeContext.bundleId, repairRecommendationId: recommendation.recommendationId, baseRevision: input.codeContext.revision, intent: "Fix dashboard copy", expectedEffect: "The original expectation matches", risks: ["Human review required"], files: [{ path: input.codeContext.snippets[0].path, action: "MODIFY", originalContentHash: input.codeContext.snippets[0].contentHash }], operations: [{ type: "REPLACE_RANGE", path: input.codeContext.snippets[0].path, startLine: 1, endLine: 1, replacement: "export function Dashboard() { return 'Welcome Dashboard'; }" }], verificationPlan: recommendation.verificationPlan };
+  const application = { schemaVersion: PATCH_APPLICATION_RESULT_VERSION, applicationId: "application-fixture", proposalId: proposal.proposalId, baseRevision: proposal.baseRevision, status: "APPLIED", worktree: { worktreeId: "worktree-fixture", path: ".qa/worktrees/worktree-fixture", branch: "qa/fix-fixture", revision: proposal.baseRevision }, appliedFiles: [{ path: proposal.files[0].path, action: "MODIFY", beforeHash: proposal.files[0].originalContentHash, afterHash: `sha256:${"c".repeat(64)}` }], diff: { fileCount: 1, changedLines: 2, contentHash: `sha256:${"d".repeat(64)}` } };
+  const checks = ["format", "lint", "typecheck", "unit", "playwright"].map((name) => ({ name, required: true, status: "PASS", exitCode: 0, durationMs: 1, resourceOutcome: "WITHIN_LIMITS" }));
+  const verification = { schemaVersion: VERIFICATION_RESULT_VERSION, verificationId: "verification-fixture", proposalId: proposal.proposalId, applicationId: application.applicationId, worktreeRevision: proposal.baseRevision, diffHash: application.diff.contentHash, status: "PASS", checks };
+  const qaIrHash = canonicalHash(input.qaIr);
+  const comparison = { schemaVersion: EVIDENCE_COMPARISON_VERSION, comparisonId: "comparison-fixture", proposalId: proposal.proposalId, applicationId: application.applicationId, verificationId: verification.verificationId, before: { runId: input.evidenceBundle.runId, evidenceBundleId: input.evidenceBundle.bundleId, judgeResultId: input.judgeResult.resultId, qaIrHash, authenticated: true }, after: { runId: "after-run", evidenceBundleId: "after-evidence", judgeResultId: "after-judge", qaIrHash, authenticated: true }, fixedExpectationIds: [input.judgeResult.expectationResults[0].expectationId], newlyFailedExpectationIds: [], unchangedFailureIds: [], requiredMilestoneIds: [], preservedMilestoneIds: [], policyChanges: [], routeChanges: [], conclusion: "IMPROVED", inconclusiveReasons: [] };
+  const ruleNames = ["SKIP_OR_ONLY", "ASSERTION_REMOVAL", "MILESTONE_STRENGTH", "EXPECTATION_STRENGTH", "TIMEOUT_RETRY_INFLATION", "CONDITIONAL_BYPASS", "SWALLOWED_ERROR", "FORCED_RESULT", "QA_POLICY_WEAKENING", "GATE_LOWERING", "QA_IR_CHANGE"];
+  const integrity = { schemaVersion: EXPECTATION_INTEGRITY_RESULT_VERSION, integrityId: "integrity-fixture", proposalId: proposal.proposalId, applicationId: application.applicationId, comparisonId: comparison.comparisonId, weakened: false, manualReview: false, removedExpectationIds: [], modifiedSemanticStrength: [], suspiciousRanges: [], beforeQaIrHash: qaIrHash, afterQaIrHash: qaIrHash, ruleResults: ruleNames.map((rule) => ({ rule, status: "PASS", matches: 0 })) };
+  const referenceHashes = { proposal: canonicalHash(proposal), application: canonicalHash(application), verification: canonicalHash(verification), comparison: canonicalHash(comparison), integrity: canonicalHash(integrity), diff: application.diff.contentHash };
+  const review = { schemaVersion: INDEPENDENT_REMEDIATION_REVIEW_VERSION, reviewId: "review-fixture", proposalId: proposal.proposalId, applicationId: application.applicationId, verificationId: verification.verificationId, comparisonId: comparison.comparisonId, integrityId: integrity.integrityId, generator: { provider: "generator", model: "generator", invocationId: "generate" }, reviewer: { provider: "reviewer", model: "reviewer", invocationId: "review" }, referenceHashes, decision: "APPROVE_DRAFT", confidence: 0.9, risks: [], unsupportedClaims: [], rationale: "Verified" };
+  const publicationFingerprint = createFailureFingerprint(input);
+  const decision = decidePublication({ repository: "owner/example", publicationFingerprint, diagnosis: input.diagnosis, codeContext: input.codeContext, recommendation, proposal, application, verification, comparison, integrity, review });
+  return { recommendation, proposal, application, verification, comparison, integrity, review, decision };
 }
 
 function publicationHarness(initialPublications = [], initialComments = [], { invalidCreate = false } = {}) {

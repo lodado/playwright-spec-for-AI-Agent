@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const workspace = fileURLToPath(new URL("../", import.meta.url));
 const temporary = mkdtempSync(join(tmpdir(), "playwright-spec-pack-"));
@@ -42,6 +42,11 @@ try {
   for (const bin of ["playwright-spec-for-ai-agent.mjs", "qa-native.mjs"]) {
     const output = run(process.execPath, [join(installed, "bin", bin), "--help"], consumer);
     if (!output.includes("Usage:")) throw new Error(`${bin} did not print help`);
+  }
+
+  const remediation = await import(pathToFileURL(join(installed, "packages", "cli", "qa-native-remediate.mjs")));
+  if (typeof remediation.remediateQaNative !== "function" || typeof remediation.verifyPatchQaNative !== "function") {
+    throw new Error("qa-native remediation entry point is missing");
   }
 
   const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));

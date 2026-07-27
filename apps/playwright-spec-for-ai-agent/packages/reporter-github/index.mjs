@@ -1,5 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { GITHUB_PUBLICATION_RESULT_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
 import { redactSensitiveText, verifyEvidenceBundleIdentity } from "../evidence/index.mjs";
 import { diagnoseFailure, recommendRepair } from "../remediation/index.mjs";
@@ -91,6 +92,42 @@ export function createGitHubCliIssueTransport({ spawn = spawnSync } = {}) {
   });
 }
 
+export function createGitHubCliDraftTransport({ spawn = spawnSync } = {}) {
+  if (typeof spawn !== "function") throw new TypeError("GitHub CLI spawn must be a function");
+  return Object.freeze({
+    async publishDraft({ action, repository, decision, worktreePath, files, expectedDiffHash, title, body, labels, target }) {
+      const root = realpathSync(worktreePath);
+      const targetRepository = repositorySlug(repository);
+      if (!decision?.eligibleDraft || !["CREATE_DRAFT_PR", "UPDATE_DRAFT_PR"].includes(action) || !/^qa\/fix-[a-z0-9-]+$/.test(decision.branch) || !Array.isArray(files) || files.length === 0 || files.length > 10 || !/^sha256:[0-9a-f]{64}$/.test(expectedDiffHash)) throw new Error("GitHub Draft PR input is invalid");
+      if (files.some((path) => typeof path !== "string" || !/^[^\0\r\n\\]+$/.test(path) || path.split("/").some((part) => !part || part === "." || part === ".."))) throw new Error("GitHub Draft PR files are invalid");
+      const head = runGit(spawn, root, ["rev-parse", "HEAD"]).toString("utf8").trim();
+      if (head === decision.baseRevision) {
+        assertDraftDiff(spawn, root, ["HEAD"], files, expectedDiffHash);
+        runGit(spawn, root, ["add", "--", ...files]);
+        const staged = runGit(spawn, root, ["diff", "--cached", "--name-only", "--"]).toString("utf8").trim().split("\n").filter(Boolean).sort();
+        const expected = [...files].sort();
+        if (staged.length !== expected.length || staged.some((path, index) => path !== expected[index])) throw new Error("GitHub Draft PR staged diff is invalid");
+        runGit(spawn, root, ["-c", "user.name=qa-native[bot]", "-c", "user.email=qa-native@users.noreply.github.com", "commit", "-m", `fix(qa): apply ${decision.source.proposalId}`]);
+      }
+      assertDraftDiff(spawn, root, [`${decision.baseRevision}..HEAD`], files, expectedDiffHash);
+      if (runGit(spawn, root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]).byteLength > 0) throw new Error("GitHub Draft PR worktree is not clean");
+      const branch = action === "UPDATE_DRAFT_PR" ? readDraftHead(spawn, targetRepository, target) : decision.branch;
+      const pushArgs = ["push", ...(action === "UPDATE_DRAFT_PR" ? ["--force-with-lease"] : []), "origin", `HEAD:refs/heads/${branch}`];
+      runGit(spawn, root, pushArgs);
+      if (action === "UPDATE_DRAFT_PR") {
+        runGh(spawn, ["pr", "edit", String(target.number), "--repo", targetRepository, "--title", title, "--body-file", "-", ...labels.flatMap((label) => ["--add-label", label])], Buffer.from(body));
+        return { number: target.number, url: target.url };
+      }
+      const base = runGh(spawn, ["repo", "view", targetRepository, "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"]).toString("utf8").trim();
+      if (!/^[A-Za-z0-9._/-]{1,255}$/.test(base)) throw new Error("GitHub default branch is invalid");
+      const url = runGh(spawn, ["pr", "create", "--draft", "--repo", targetRepository, "--base", base, "--head", branch, "--title", title, "--body-file", "-", ...labels.flatMap((label) => ["--label", label])], Buffer.from(body)).toString("utf8").trim();
+      const match = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/([1-9][0-9]*)$/i.exec(url);
+      if (!match) throw new Error("GitHub CLI returned an invalid Draft PR URL");
+      return { number: Number(match[1]), url };
+    },
+  });
+}
+
 export async function publishGitHubFailureIssue({
   repository,
   qaIr,
@@ -157,6 +194,49 @@ export async function publishGitHubFailureIssue({
   return publicationResult({ repository: targetRepository, publication: "ISSUE", action: "CREATED", target, occurrence: occurrenceFromRecords(records), source, publicationFingerprint });
 }
 
+export async function publishGitHubVerifiedDraft({ repository, qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, recommendation, proposal, application, verification, comparison, integrity, review, decision, worktreePath, secrets = [], stateAuthenticationKey, findOpenPublications, readPublication, listOccurrenceRecords, createOccurrenceRecord, publishDraft } = {}) {
+  if ([findOpenPublications, readPublication, listOccurrenceRecords, createOccurrenceRecord, publishDraft].some((value) => typeof value !== "function")) throw new TypeError("GitHub Draft PR transport is incomplete");
+  assertStateAuthenticationKey(stateAuthenticationKey);
+  const input = jsonSnapshot({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, recommendation, proposal, application, verification, comparison, integrity, review, decision });
+  validateInputs(input, secrets, repository);
+  validateContract("PatchProposal", input.proposal, { diagnosis: input.diagnosis, codeContext: input.codeContext, recommendation: input.recommendation });
+  validateContract("PatchApplicationResult", input.application, { proposal: input.proposal });
+  validateContract("VerificationResult", input.verification, { proposal: input.proposal, application: input.application });
+  validateContract("EvidenceComparison", input.comparison, { proposal: input.proposal, application: input.application, verification: input.verification });
+  validateContract("ExpectationIntegrityResult", input.integrity, { proposal: input.proposal, application: input.application, verification: input.verification, comparison: input.comparison });
+  validateContract("IndependentRemediationReview", input.review, { proposal: input.proposal, application: input.application, verification: input.verification, comparison: input.comparison, integrity: input.integrity });
+  validateContract("PublicationDecision", input.decision);
+  const targetRepository = repositorySlug(repository);
+  if (!input.decision.eligibleDraft || !["CREATE_DRAFT_PR", "UPDATE_DRAFT_PR"].includes(input.decision.action) || input.decision.repository.toLowerCase() !== targetRepository.toLowerCase()) throw new Error("GitHub Draft PR decision is not eligible");
+  if (input.verification.status !== "PASS" || input.comparison.conclusion !== "IMPROVED" || input.comparison.newlyFailedExpectationIds.length > 0 || input.integrity.weakened || input.integrity.manualReview || input.review.decision !== "APPROVE_DRAFT") throw new Error("GitHub Draft PR deterministic gates failed");
+  for (const [sourceKey, value] of [["proposalId", input.proposal.proposalId], ["applicationId", input.application.applicationId], ["verificationId", input.verification.verificationId], ["comparisonId", input.comparison.comparisonId], ["integrityId", input.integrity.integrityId], ["reviewId", input.review.reviewId]]) if (input.decision.source[sourceKey] !== value) throw new Error("GitHub Draft PR decision artifact binding is invalid");
+  const publicationFingerprint = input.decision.publicationFingerprint;
+  const source = publicationSource(input);
+  const sourceId = publicationSourceId(source);
+  const matches = publicationMatches(await findOpenPublications({ repository: targetRepository, fingerprint: publicationFingerprint }), targetRepository, publicationFingerprint, stateAuthenticationKey);
+  if (matches.length > 1) return ambiguousPublicationResult({ repository: targetRepository, source, publicationFingerprint, matches });
+  const match = matches[0];
+  if ((input.decision.action === "CREATE_DRAFT_PR" && match) || (input.decision.action === "UPDATE_DRAFT_PR" && (!match || match.publication !== "DRAFT_PR" || match.number !== input.decision.target.number))) throw new Error("GitHub Draft PR decision is stale");
+  const records = match ? occurrenceRecords(await listOccurrenceRecords({ repository: targetRepository, ...match }), targetRepository, publicationFingerprint, stateAuthenticationKey) : [];
+  if (records.some((record) => record.sourceId === sourceId)) return publicationResult({ repository: targetRepository, publication: "DRAFT_PR", action: "NOOP", target: match, occurrence: occurrenceFromRecords(records), source, publicationFingerprint });
+  const occurredAt = occurrenceTimestamp(input.evidenceBundle.capturedAt);
+  const nextSources = [...records.map((record) => record.sourceId), sourceId];
+  const nextTimes = [...records.map((record) => record.occurredAt), occurredAt].sort();
+  const occurrence = { count: nextSources.length, firstSeen: nextTimes[0], lastSeen: nextTimes.at(-1) };
+  const body = renderGitHubRemediationDraft({ ...input, repository: targetRepository, publicationFingerprint, occurrence, seenSourceIds: nextSources, source, stateAuthenticationKey, secrets });
+  const title = safePlainText(`[QA fix] ${input.diagnosis.symptom}`, secrets).slice(0, 240);
+  const labels = validateLabels(["qa-generated", "needs-human-review", `origin:${input.diagnosis.origin.toLowerCase().replaceAll("_", "-")}`], secrets);
+  const published = await publishDraft({ action: input.decision.action, repository: targetRepository, decision: input.decision, worktreePath, files: input.application.appliedFiles.map((file) => file.path), expectedDiffHash: input.application.diff.contentHash, title, body, labels, ...(match ? { target: match } : {}) });
+  const target = publicationTarget({ repository: targetRepository, publication: "DRAFT_PR", number: published?.number, url: published?.url });
+  const confirmed = publicationMatch({ repository: targetRepository, ...(await readPublication({ repository: targetRepository, ...target })) });
+  if (confirmed.publication !== "DRAFT_PR" || confirmed.number !== target.number || !hasFingerprintMarker(confirmed.body, publicationFingerprint)) throw new Error("GitHub Draft PR publication could not be confirmed");
+  parsePublicationState(confirmed.body, targetRepository, publicationFingerprint, stateAuthenticationKey);
+  await createOccurrenceRecord({ repository: targetRepository, ...target, body: renderGitHubOccurrenceRecord({ repository: targetRepository, publicationFingerprint, source, occurredAt, stateAuthenticationKey, secrets }) });
+  const confirmedRecords = occurrenceRecords(await listOccurrenceRecords({ repository: targetRepository, ...target }), targetRepository, publicationFingerprint, stateAuthenticationKey);
+  if (!confirmedRecords.some((record) => record.sourceId === sourceId)) throw new Error("GitHub Draft PR occurrence could not be confirmed");
+  return publicationResult({ repository: targetRepository, publication: "DRAFT_PR", action: match ? "UPDATED" : "CREATED", target, occurrence: occurrenceFromRecords(confirmedRecords), source, publicationFingerprint });
+}
+
 export function createFailureFingerprint({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, secrets = [] } = {}) {
   const input = jsonSnapshot({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext });
   validateInputs(input, secrets);
@@ -172,6 +252,62 @@ export function createFailureFingerprint({ qaIr, judgeResult, evidenceBundle, di
     route: fingerprintRoute(input.evidenceBundle.environment.targetUrl),
     componentHint: [...input.codeContext.candidates].sort((left, right) => right.relevanceScore - left.relevanceScore || (left.path < right.path ? -1 : left.path > right.path ? 1 : 0))[0]?.path ?? "UNLOCATED",
   });
+}
+
+export function renderGitHubRemediationDraft({ repository, qaIr, evidenceBundle, diagnosis, proposal, application, verification, comparison, integrity, review, decision, publicationFingerprint, occurrence, seenSourceIds, source, stateAuthenticationKey, secrets = [] }) {
+  assertStateAuthenticationKey(stateAuthenticationKey);
+  const scenario = qaIr?.suites?.flatMap((suite) => suite.scenarios).find((item) => item.id === evidenceBundle?.scenarioId);
+  if (!scenario || decision?.publicationFingerprint !== publicationFingerprint || !validOccurrence(occurrence) || !validSeenSourceIds(seenSourceIds) || seenSourceIds.length !== occurrence.count) throw new Error("GitHub Draft PR rendering input is invalid");
+  const checks = verification.checks.map((check) => `- ${safePlainText(check.name, secrets)}: **${check.status}**`);
+  const risks = [...new Set([...proposal.risks, ...review.risks])];
+  const body = [
+    "<!-- qa-runtime:start -->",
+    "## Verified QA remediation",
+    "",
+    `**${safePlainText(scenario.title, secrets)}**`,
+    "",
+    `- Origin: **${diagnosis.origin}**`,
+    `- Base revision: ${code(application.baseRevision, secrets)}`,
+    `- Patch Proposal: ${code(proposal.proposalId, secrets)}`,
+    `- Verification: ${code(verification.verificationId, secrets)} — **${verification.status}**`,
+    `- Evidence Comparison: ${code(comparison.comparisonId, secrets)} — **${comparison.conclusion}**`,
+    `- Expectation Integrity: ${code(integrity.integrityId, secrets)} — **${integrity.weakened ? "WEAKENED" : integrity.manualReview ? "MANUAL_REVIEW" : "PASS"}**`,
+    `- Independent Review: ${code(review.reviewId, secrets)} — **${review.decision}**`,
+    "",
+    "### Failure",
+    safePlainText(diagnosis.symptom, secrets),
+    "",
+    "### Change intent",
+    safePlainText(proposal.intent, secrets),
+    "",
+    "### Applied files",
+    ...application.appliedFiles.map((file) => `- ${code(file.path, secrets)} (${file.action})`),
+    "",
+    "### Deterministic checks",
+    ...checks,
+    "",
+    "### Before / after evidence",
+    `- Before: ${code(comparison.before.evidenceBundleId, secrets)} / ${code(comparison.before.judgeResultId, secrets)}`,
+    `- After: ${code(comparison.after.evidenceBundleId, secrets)} / ${code(comparison.after.judgeResultId, secrets)}`,
+    `- Fixed expectations: ${comparison.fixedExpectationIds.map((id) => code(id, secrets)).join(", ") || "none"}`,
+    `- Newly failed expectations: ${comparison.newlyFailedExpectationIds.map((id) => code(id, secrets)).join(", ") || "none"}`,
+    "",
+    "### Risks",
+    ...(risks.length > 0 ? risks.map((risk) => `- ${safePlainText(risk, secrets)}`) : ["- none reported"]),
+    "",
+    "### Reproduce",
+    `1. Inspect private run ${code(evidenceBundle.runId, secrets)}.`,
+    "2. Re-run the trusted repository verification configuration.",
+    "3. Re-run the original live QA scenario and compare authenticated evidence.",
+    "",
+    "This pull request is a draft and requires human review. qa-native never merges automatically.",
+    "",
+    `<!-- qa-fingerprint: ${publicationFingerprint} -->`,
+    publicationStateMarker({ repository, publicationFingerprint, occurrence, seenSourceIds, source, stateAuthenticationKey }),
+    "<!-- qa-runtime:end -->",
+  ].join("\n");
+  if (body.length > 65_536) throw new Error("GitHub Draft PR body exceeds size limit");
+  return body;
 }
 
 export function renderGitHubFailureIssue({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, recommendation, secrets = [], stateAuthenticationKey, publicationFingerprint = createFailureFingerprint({ qaIr, judgeResult, evidenceBundle, diagnosis, codeContext, secrets }), occurrence = { count: 1, firstSeen: evidenceBundle?.capturedAt, lastSeen: evidenceBundle?.capturedAt }, seenSourceIds } = {}) {
@@ -484,8 +620,12 @@ function safeText(value, secrets) { return safePlainText(value, secrets).replace
 function verifyStableId(prefix, idKey, value) { const { [idKey]: id, ...body } = value; const expected = `${prefix}-${canonicalHash(body).slice("sha256:".length, "sha256:".length + 16)}`; if (id !== expected) throw new Error(`${prefix} artifact identity is invalid`); }
 function jsonSnapshot(value) { const serialized = JSON.stringify(value); if (serialized === undefined) throw new Error("GitHub publication input must be JSON-serializable"); return JSON.parse(serialized); }
 function runGh(spawn, args, input) { const result = spawn("gh", args, { encoding: "buffer", maxBuffer: MAX_GITHUB_RESPONSE_BYTES, env: githubEnvironment(), ...(input === undefined ? {} : { input }) }); if (!result || result.status !== 0 || !(result.stdout instanceof Uint8Array) || result.stdout.byteLength > MAX_GITHUB_RESPONSE_BYTES) throw new Error("GitHub CLI request failed"); return Buffer.from(result.stdout); }
+function runGit(spawn, root, args) { const result = spawn("git", ["-C", root, ...args], { encoding: "buffer", maxBuffer: MAX_GITHUB_RESPONSE_BYTES, env: gitPublicationEnvironment() }); if (!result || result.status !== 0 || !(result.stdout instanceof Uint8Array) || result.stdout.byteLength > MAX_GITHUB_RESPONSE_BYTES) throw new Error("GitHub Draft PR git operation failed"); return Buffer.from(result.stdout); }
+function assertDraftDiff(spawn, root, range, files, expectedHash) { const args = ["diff", "--no-ext-diff", "--no-renames", ...range, "--"]; const diff = runGit(spawn, root, args); const names = runGit(spawn, root, ["diff", "--name-only", "--no-renames", ...range, "--"]).toString("utf8").trim().split("\n").filter(Boolean).sort(); const expected = [...files].sort(); if (`sha256:${createHash("sha256").update(diff).digest("hex")}` !== expectedHash || names.length !== expected.length || names.some((path, index) => path !== expected[index])) throw new Error("GitHub Draft PR diff does not match the verified application"); }
+function readDraftHead(spawn, repository, target) { if (!target || target.publication !== "DRAFT_PR" || !Number.isSafeInteger(target.number)) throw new Error("GitHub Draft PR target is invalid"); const branch = runGh(spawn, ["pr", "view", String(target.number), "--repo", repository, "--json", "headRefName", "--jq", ".headRefName"]).toString("utf8").trim(); if (!/^qa\/fix-[a-z0-9-]+$/.test(branch)) throw new Error("GitHub Draft PR head branch is not managed"); return branch; }
 function runGhJson(spawn, args, input) { try { return JSON.parse(runGh(spawn, args, input).toString("utf8")); } catch { throw new Error("GitHub CLI returned invalid JSON"); } }
 function githubEnvironment() { return Object.fromEntries([...GITHUB_ENV_KEYS.map((key) => [key, process.env[key]]).filter(([, value]) => typeof value === "string"), ["GH_PROMPT_DISABLED", "1"], ["GH_NO_UPDATE_NOTIFIER", "1"]]); }
+function gitPublicationEnvironment() { return Object.fromEntries([... ["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE"].map((key) => [key, process.env[key]]).filter(([, value]) => typeof value === "string"), ["GIT_TERMINAL_PROMPT", "0"], ["GIT_AUTHOR_NAME", "qa-native[bot]"], ["GIT_AUTHOR_EMAIL", "qa-native@users.noreply.github.com"], ["GIT_COMMITTER_NAME", "qa-native[bot]"], ["GIT_COMMITTER_EMAIL", "qa-native@users.noreply.github.com"]]); }
 function hasFingerprintMarker(body, fingerprint) { return body.split("\n").some((line) => line.trim() === `<!-- qa-fingerprint: ${fingerprint} -->`); }
 function publicationMatch({ repository, publication, number, url, body }) {
   if (!["ISSUE", "DRAFT_PR"].includes(publication) || !Number.isSafeInteger(number) || number < 1 || typeof url !== "string" || typeof body !== "string" || body.length === 0 || body.length > 65_536) throw new Error("GitHub publication data is invalid");

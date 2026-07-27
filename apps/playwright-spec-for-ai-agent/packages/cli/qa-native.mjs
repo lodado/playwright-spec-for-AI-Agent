@@ -8,8 +8,10 @@ const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 const MAX_PRIVATE_JSON_BYTES = 4 * 1024 * 1024;
 const REPORT_OPTIONS = new Set(["run-dir", "repository-root", "revision", "judgment"]);
-const REPORT_COMMANDS = new Set(["diagnose", "suggest-fix", "report", "propose-patch"]);
+const REPORT_COMMANDS = new Set(["diagnose", "suggest-fix", "report", "propose-patch", "verify-patch"]);
 const PUBLISH_ISSUE_OPTIONS = new Set([...REPORT_OPTIONS, "repository"]);
+const REMEDIATION_OPTIONS = new Set([...PUBLISH_ISSUE_OPTIONS, "publish"]);
+const PUBLICATION_COMMANDS = new Set(["publish-issue", "publish", "remediate"]);
 const COMMAND_OPTIONS = Object.freeze({
   execute: new Set(["spec", "base-url", "run-dir", "provider", "mode"]),
   judge: new Set(["run-dir"]),
@@ -18,7 +20,10 @@ const COMMAND_OPTIONS = Object.freeze({
   "suggest-fix": REPORT_OPTIONS,
   report: REPORT_OPTIONS,
   "propose-patch": REPORT_OPTIONS,
+  "verify-patch": REPORT_OPTIONS,
   "publish-issue": PUBLISH_ISSUE_OPTIONS,
+  publish: REMEDIATION_OPTIONS,
+  remediate: REMEDIATION_OPTIONS,
 });
 const COMMAND_USAGE = Object.freeze({
   execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> [--provider=playwright --mode=strict | --provider=hermes --mode=adaptive]",
@@ -28,7 +33,10 @@ const COMMAND_USAGE = Object.freeze({
   "suggest-fix": "qa-native suggest-fix --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
   report: "qa-native report --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
   "propose-patch": "qa-native propose-patch --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
+  "verify-patch": "qa-native verify-patch --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
   "publish-issue": "qa-native publish-issue --run-dir=.qa/runs/<id> --repository-root=. --repository=<owner/repository> [--revision=<commit>] [--judgment=<result.json>]",
+  publish: "qa-native publish --run-dir=.qa/runs/<id> --repository-root=. --repository=<owner/repository> --publish=auto [--revision=<commit>] [--judgment=<result.json>]",
+  remediate: "qa-native remediate --run-dir=.qa/runs/<id> --repository-root=. --repository=<owner/repository> --publish=auto [--revision=<commit>] [--judgment=<result.json>]",
 });
 
 export function decodeIntegrityKey(value) {
@@ -152,7 +160,7 @@ export async function runQaNative(argv, {
     if (typeof handler !== "function") throw new CliError("command is not available");
     if (platform === "win32") throw new CliError("command is not supported on this platform");
     integrityKey = decodeIntegrityKey(env[INTEGRITY_KEY_ENV]);
-    if (request.command === "publish-issue") publicationKey = decodePublicationKey(env[PUBLICATION_KEY_ENV]);
+    if (PUBLICATION_COMMANDS.has(request.command)) publicationKey = decodePublicationKey(env[PUBLICATION_KEY_ENV]);
     delete process.env[INTEGRITY_KEY_ENV];
     delete process.env[PUBLICATION_KEY_ENV];
     const normalized = normalizeRequest(request, cwd);
@@ -180,7 +188,7 @@ ${available.map((command) => `  ${COMMAND_USAGE[command]}`).join("\n") || "  No 
 
 Environment:
   QA_NATIVE_INTEGRITY_KEY  Canonical base64 encoding of at least 32 random bytes
-  QA_NATIVE_PUBLICATION_KEY  Stable canonical base64 key for publish-issue HMAC state
+  QA_NATIVE_PUBLICATION_KEY  Stable canonical base64 key for GitHub publication HMAC state
 `;
 }
 
@@ -200,6 +208,7 @@ function parseRequest(argv) {
         revision: { type: "string" },
         judgment: { type: "string" },
         repository: { type: "string" },
+        publish: { type: "string" },
         provider: { type: "string" },
         mode: { type: "string" },
       },
@@ -212,7 +221,7 @@ function parseRequest(argv) {
   const command = parsed.positionals[0];
   const supplied = Object.keys(parsed.values).filter((key) => key !== "help");
   if (supplied.some((key) => !COMMAND_OPTIONS[command].has(key))) throw new CliError("invalid command arguments");
-  const required = command === "execute" ? ["spec", "base-url", "run-dir"] : command === "publish-issue" ? ["run-dir", "repository-root", "repository"] : REPORT_COMMANDS.has(command) ? ["run-dir", "repository-root"] : ["run-dir"];
+  const required = command === "execute" ? ["spec", "base-url", "run-dir"] : PUBLICATION_COMMANDS.has(command) ? ["run-dir", "repository-root", "repository"] : REPORT_COMMANDS.has(command) ? ["run-dir", "repository-root"] : ["run-dir"];
   if (required.some((key) => typeof parsed.values[key] !== "string" || parsed.values[key].length === 0)) throw new CliError("required command argument is missing");
   return { command, options: Object.freeze({ ...parsed.values }) };
 }
@@ -236,7 +245,7 @@ function normalizeRequest(request, cwd) {
   }
 
   assertPrivateDirectory(runDirectory);
-  if (!REPORT_COMMANDS.has(request.command) && request.command !== "publish-issue") return Object.freeze({ command: request.command, cwd, runDirectory });
+  if (!REPORT_COMMANDS.has(request.command) && !PUBLICATION_COMMANDS.has(request.command)) return Object.freeze({ command: request.command, cwd, runDirectory });
   const repositoryRoot = resolveRepositoryRoot(request.options["repository-root"], cwd);
   const judgmentPath = request.options.judgment === undefined ? undefined : resolveRegularInput(request.options.judgment, { root: runDirectory, label: "judgment" });
   return Object.freeze({
@@ -244,10 +253,16 @@ function normalizeRequest(request, cwd) {
     cwd,
     runDirectory,
     repositoryRoot,
-    ...(request.command === "publish-issue" ? { repository: safeRepositorySlug(request.options.repository) } : {}),
+    ...(PUBLICATION_COMMANDS.has(request.command) ? { repository: safeRepositorySlug(request.options.repository) } : {}),
+    ...(["publish", "remediate"].includes(request.command) ? { publish: safePublishMode(request.options.publish ?? "auto") } : {}),
     revision: safeRevision(request.options.revision ?? "HEAD"),
     ...(judgmentPath === undefined ? {} : { judgmentPath }),
   });
+}
+
+function safePublishMode(value) {
+  if (value !== "auto") throw new CliError("publish mode must be auto");
+  return value;
 }
 
 function safeBaseUrl(value) {
