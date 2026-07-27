@@ -88,7 +88,7 @@ const STARTER_STUDY = {
     concurrency: 1,
     modelRoles: { action: "deterministic-policy", evaluator: "deterministic-oracle" },
   },
-  evidence: { screenshot: "every_action", trace: true, video: "off", semanticSnapshot: "every_action" },
+  evidence: { screenshot: "on_failure", trace: true, video: "off", semanticSnapshot: "every_action" },
   evaluation: { minimumRecurrenceForFinding: 1, validityReport: true },
 };
 

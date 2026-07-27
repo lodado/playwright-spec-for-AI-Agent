@@ -401,6 +401,10 @@ export function createFileSessionStore({ rootDir, sessionId } = {}) {
 
 export function deriveInteractionEvent({ sessionId, index, observation, action, result, now = new Date() } = {}) {
   const eventId = stableEventId(sessionId, index);
+  const urlBefore = observation.page?.url ?? "about:blank";
+  const urlAfter = result.urlAfter ?? urlBefore;
+  const progressChanged = result.status === "success"
+    && (typeof result.progressChanged === "boolean" ? result.progressChanged : urlAfter !== urlBefore);
   const event = {
     schemaVersion: INTERACTION_EVENT_SCHEMA_VERSION,
     id: eventId,
@@ -414,17 +418,17 @@ export function deriveInteractionEvent({ sessionId, index, observation, action, 
       ...(result.code ? { code: result.code } : {}),
       ...(result.message ? { message: result.message } : {}),
     },
-    urlBefore: observation.page?.url ?? "about:blank",
-    urlAfter: result.urlAfter ?? observation.page?.url ?? "about:blank",
+    urlBefore,
+    urlAfter,
     evidenceIds: Array.isArray(result.evidenceIds) && result.evidenceIds.length > 0
       ? [...result.evidenceIds]
       : [`evidence-${eventId}`],
     derivedSignals: {
-      progressChanged: Boolean(result.progressChanged),
+      progressChanged,
       backtrack: action.type === "back" || result.backtrack === true,
       repeatedPage: result.repeatedPage === true,
       failedInteraction: false,
-      noProgress: result.progressChanged !== true,
+      noProgress: !progressChanged,
     },
   };
   return validateInteractionEvent(event);
@@ -653,7 +657,7 @@ function normalizeActionResult(result) {
     ...(typeof result.urlAfter === "string" ? { urlAfter: result.urlAfter } : {}),
     ...(Array.isArray(result.evidenceIds) ? { evidenceIds: [...result.evidenceIds] } : {}),
     ...(Array.isArray(result.evidence) ? { evidence: [...result.evidence] } : {}),
-    ...(result.progressChanged === true ? { progressChanged: true } : {}),
+    ...(typeof result.progressChanged === "boolean" ? { progressChanged: result.progressChanged } : {}),
     ...(result.backtrack === true ? { backtrack: true } : {}),
     ...(result.repeatedPage === true ? { repeatedPage: true } : {}),
   });

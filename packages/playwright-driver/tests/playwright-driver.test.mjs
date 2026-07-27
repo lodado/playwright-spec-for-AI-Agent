@@ -262,6 +262,69 @@ describe("playwright behavioral driver", () => {
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
   });
 
+  it("settles visible images only for on-failure screenshots", async () => {
+    if (!browserAvailable) return;
+    const dir = await tempDir();
+    const driver = createPlaywrightDriver({ browserType: chromium });
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    cleanup.push(() => driver.closeAll());
+
+    const failureApp = await servePendingImage();
+    cleanup.push(() => failureApp.close());
+    const failureHandle = await driver.start({
+      ...input("settled-failure", failureApp.url, path.join(dir, "failure"), { allowClick: true }),
+      stabilization: { domQuietMs: 100, maxWaitMs: 1_000 },
+      evidencePolicy: { screenshot: "on_failure", trace: false, video: "off", semanticSnapshot: "every_action" },
+    });
+    await driver.observe(failureHandle);
+    await schedulePendingImage(failureHandle);
+    const failureResultPromise = driver.execute(failureHandle, { type: "click", elementId: "missing", reasonCode: "missing" });
+    await failureApp.imageRequested;
+    expect(await resolvesWithin(failureResultPromise, 100)).toBe(false);
+    failureApp.releaseImage();
+    const failureResult = await failureResultPromise;
+    expect(failureResult).toMatchObject({ status: "blocked", code: "ELEMENT_NOT_FOUND" });
+    expect(failureResult.evidence).toContainEqual(expect.objectContaining({ type: "screenshot" }));
+    await driver.close(failureHandle);
+    await failureApp.close();
+
+    const everyActionApp = await servePendingImage();
+    cleanup.push(() => everyActionApp.close());
+    const everyActionHandle = await driver.start({
+      ...input("unsettled-every-action", everyActionApp.url, path.join(dir, "every-action"), { allowClick: true }),
+      stabilization: { domQuietMs: 100, maxWaitMs: 1_000 },
+      evidencePolicy: { screenshot: "every_action", trace: false, video: "off", semanticSnapshot: "every_action" },
+    });
+    await driver.observe(everyActionHandle);
+    await schedulePendingImage(everyActionHandle);
+    const everyActionResultPromise = driver.execute(everyActionHandle, { type: "click", elementId: "missing", reasonCode: "missing" });
+    await everyActionApp.imageRequested;
+    expect(await resolvesWithin(everyActionResultPromise, 100)).toBe(true);
+    everyActionApp.releaseImage();
+    await driver.close(everyActionHandle);
+    await everyActionApp.close();
+
+    const patchedTimerApp = await servePendingImage();
+    cleanup.push(() => patchedTimerApp.close());
+    const patchedTimerHandle = await driver.start({
+      ...input("patched-page-timer", patchedTimerApp.url, path.join(dir, "patched-timer"), { allowClick: true }),
+      stabilization: { domQuietMs: 25, maxWaitMs: 100 },
+      evidencePolicy: { screenshot: "on_failure", trace: false, video: "off", semanticSnapshot: "every_action" },
+    });
+    await driver.observe(patchedTimerHandle);
+    await patchedTimerHandle.__playwrightDriverSession.page.locator("img").evaluate((image) => {
+      image.src = "/pending.png";
+      window.setTimeout = () => 0;
+    });
+    await patchedTimerApp.imageRequested;
+    const patchedTimerResultPromise = driver.execute(patchedTimerHandle, { type: "click", elementId: "missing", reasonCode: "missing" });
+    expect(await resolvesWithin(patchedTimerResultPromise, 500)).toBe(true);
+    patchedTimerApp.releaseImage();
+    expect(await patchedTimerResultPromise).toMatchObject({ status: "blocked", code: "ELEMENT_NOT_FOUND" });
+    await driver.close(patchedTimerHandle);
+    await patchedTimerApp.close();
+  });
+
   it("rejects non-HTTP URLs and storage state outside the workspace", async () => {
     const driver = createPlaywrightDriver({ browserType: chromium });
     const dir = await tempDir();
@@ -304,6 +367,56 @@ async function serve(html) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
   return { url: `http://127.0.0.1:${port}/`, close: () => new Promise((resolve) => server.close(resolve)) };
+}
+
+async function servePendingImage() {
+  let imageResponse;
+  let markImageRequested;
+  let closed = false;
+  const imageRequested = new Promise((resolve) => { markImageRequested = resolve; });
+  const server = createServer((request, response) => {
+    if (request.url === "/pending.png") {
+      imageResponse = response;
+      markImageRequested();
+      return;
+    }
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end(`<img src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" width="32" height="32" alt="Pending"><button>Continue</button>`);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  return {
+    url: `http://127.0.0.1:${port}/`,
+    imageRequested,
+    releaseImage() {
+      if (!imageResponse) return;
+      imageResponse.writeHead(200, { "content-type": "image/png" });
+      imageResponse.end(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
+      imageResponse = undefined;
+    },
+    async close() {
+      if (closed) return;
+      closed = true;
+      if (imageResponse) {
+        imageResponse.destroy();
+        imageResponse = undefined;
+      }
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+async function schedulePendingImage(handle) {
+  await handle.__playwrightDriverSession.page.locator("img").evaluate((image) => {
+    setTimeout(() => { image.src = "/pending.png"; }, 50);
+  });
+}
+
+async function resolvesWithin(promise, timeoutMs) {
+  return Promise.race([
+    promise.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+  ]);
 }
 
 async function serveControlledSwap() {

@@ -223,7 +223,7 @@ async function observeSession(session, now) {
   if (session.evidencePolicy.screenshot === "every_action") {
     const screenshotEvidenceId = `${observationId}:screenshot:${++session.screenshotSequence}`;
     const screenshotPath = path.join(session.screenshotDir, `${session.observationSequence}.png`);
-    await session.page.screenshot({ path: screenshotPath, fullPage: false, mask: [session.page.locator("input,textarea,[contenteditable='true']")] });
+    await captureScreenshot(session, screenshotPath);
     screenshotEvidence = await fileEvidence(screenshotEvidenceId, "screenshot", screenshotPath, session.evidenceDir);
   }
   const runtimeEvidence = session.runtimeIssues.map(runtimeIssueEvidence);
@@ -302,7 +302,7 @@ async function executeAction(session, action, now) {
     if (session.evidencePolicy.screenshot === "every_action") {
       const screenshotEvidenceId = `${observationId}:action:${++session.screenshotSequence}`;
       const screenshotPath = path.join(session.screenshotDir, `after-${session.screenshotSequence}.png`);
-      await session.page.screenshot({ path: screenshotPath, fullPage: false, mask: [session.page.locator("input,textarea,[contenteditable='true']")] });
+      await captureScreenshot(session, screenshotPath);
       screenshotEvidence = await fileEvidence(screenshotEvidenceId, "screenshot", screenshotPath, session.evidenceDir);
     }
     return Object.freeze({
@@ -768,11 +768,53 @@ async function captureFailureScreenshot(session, observationId) {
   const id = `${observationId}:failure:${++session.screenshotSequence}`;
   const screenshotPath = path.join(session.screenshotDir, `failure-${session.screenshotSequence}.png`);
   try {
-    await session.page.screenshot({ path: screenshotPath, fullPage: false, mask: [session.page.locator("input,textarea,[contenteditable='true']")] });
+    await captureScreenshot(session, screenshotPath, { settleImages: session.evidencePolicy.screenshot === "on_failure" });
     return [await fileEvidence(id, "screenshot", screenshotPath, session.evidenceDir)];
   } catch {
     return [];
   }
+}
+
+async function captureScreenshot(session, screenshotPath, { settleImages = false } = {}) {
+  if (settleImages) await settleVisibleImages(session.page, session.stabilization);
+  await session.page.screenshot({ path: screenshotPath, fullPage: false, mask: [session.page.locator("input,textarea,[contenteditable='true']")] });
+}
+
+async function settleVisibleImages(page, policy) {
+  await page.waitForFunction(({ quietMs }) => new Promise((resolve) => {
+    let previous = "";
+    let stableSince = performance.now();
+    const sample = () => {
+      const images = [...document.images].filter((image) => {
+        const rect = image.getBoundingClientRect();
+        const style = getComputedStyle(image);
+        return rect.width > 0
+          && rect.height > 0
+          && rect.bottom > 0
+          && rect.right > 0
+          && rect.top < innerHeight
+          && rect.left < innerWidth
+          && style.display !== "none"
+          && style.visibility !== "hidden"
+          && Number(style.opacity) > 0.01;
+      });
+      const snapshot = JSON.stringify(images.map((image) => [
+        image.currentSrc,
+        image.getAttribute("src"),
+        image.getAttribute("srcset"),
+        image.complete,
+      ]));
+      const now = performance.now();
+      const complete = images.every((image) => image.complete);
+      if (snapshot !== previous || !complete) {
+        previous = snapshot;
+        stableSince = now;
+      }
+      if (complete && now - stableSince >= quietMs) return resolve(true);
+      setTimeout(sample, Math.min(50, Math.max(1, quietMs)));
+    };
+    sample();
+  }), { quietMs: policy.domQuietMs }, { timeout: policy.maxWaitMs }).catch(() => undefined);
 }
 
 async function fileEvidence(id, type, absolutePath, evidenceDir) {

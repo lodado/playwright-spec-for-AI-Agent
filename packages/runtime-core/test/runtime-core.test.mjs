@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   createFileSessionStore,
+  deriveInteractionEvent,
   evaluateSealedSession,
   markSessionReported,
   removeFileSessionStore,
@@ -323,6 +324,49 @@ test("preserves trusted driver failure codes and strips policy output extras bef
   assert.equal(result.session.model, "test-model");
 });
 
+test("derives progress from explicit tri-state signals or successful URL changes", () => {
+  const observation = { id: "observation-progress", page: { url: "http://127.0.0.1:4173/start" } };
+  const action = { type: "click", elementId: "el-1", reasonCode: "continue" };
+  const cases = [
+    [{ status: "success", progressChanged: true, urlAfter: observation.page.url }, true],
+    [{ status: "success", progressChanged: false, urlAfter: "http://127.0.0.1:4173/next" }, false],
+    [{ status: "success", urlAfter: "http://127.0.0.1:4173/next" }, true],
+    [{ status: "success", urlAfter: observation.page.url }, false],
+    [{ status: "failure", urlAfter: "http://127.0.0.1:4173/next" }, false],
+    [{ status: "blocked", code: "ELEMENT_NOT_FOUND", urlAfter: "http://127.0.0.1:4173/next" }, false],
+    [{ status: "no_change", urlAfter: "http://127.0.0.1:4173/next" }, false],
+  ];
+
+  for (const [result, expected] of cases) {
+    const event = deriveInteractionEvent({ sessionId: "session-progress", index: 0, observation, action, result });
+    assert.equal(event.derivedSignals.progressChanged, expected);
+    assert.equal(event.derivedSignals.noProgress, !expected);
+    assert.equal(event.derivedSignals.failedInteraction, false);
+    assert.equal(event.result.status, result.status);
+  }
+});
+
+test("preserves an explicit false progress signal through action result normalization", async () => {
+  const result = await runSession({
+    study,
+    task: study.tasks[0],
+    persona: study.personas[0],
+    seed: 101,
+    runId: "run-explicit-no-progress",
+    sessionId: "session-explicit-no-progress",
+    driver: fakeDriver({
+      successAfterObserve: 2,
+      executeResult: { status: "success", urlAfter: "http://127.0.0.1:4173/next", progressChanged: false },
+    }),
+    policy: { decide: () => ({ type: "click", elementId: "el-1", reasonCode: "continue" }) },
+    oracle: { evaluate: ({ observation }) => ({ definitiveSuccess: observation.sequence === 1 }) },
+    store: memoryStore(),
+  });
+
+  assert.equal(result.events[0].derivedSignals.progressChanged, false);
+  assert.equal(result.events[0].derivedSignals.noProgress, true);
+});
+
 test("seals validated model attempt metadata without raw model content", async () => {
   const result = await runSession({
     study,
@@ -483,7 +527,7 @@ test("aborted signal stops scheduling new sessions", async () => {
   );
 });
 
-function fakeDriver({ order = [], successAfterObserve = 1, asyncStart, asyncClose, closeError } = {}) {
+function fakeDriver({ order = [], successAfterObserve = 1, asyncStart, asyncClose, closeError, executeResult } = {}) {
   let observes = 0;
   return {
     async start() {
@@ -509,7 +553,7 @@ function fakeDriver({ order = [], successAfterObserve = 1, asyncStart, asyncClos
     },
     async execute() {
       order.push("execute");
-      return { status: "success", urlAfter: "http://127.0.0.1:4173/next", evidenceIds: ["ev-action"], progressChanged: true };
+      return executeResult ?? { status: "success", urlAfter: "http://127.0.0.1:4173/next", evidenceIds: ["ev-action"], progressChanged: true };
     },
     async close() {
       order.push("close");

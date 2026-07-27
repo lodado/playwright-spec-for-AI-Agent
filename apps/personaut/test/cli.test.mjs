@@ -37,6 +37,7 @@ test("init CLI writes a safe valid starter study without overwriting files", asy
   const initialized = await loadStudy(path);
   assert.equal(initialized.environment.baseUrl, "https://example.com");
   assert.equal(initialized.tasks[0].safetyPolicy.allowClick, false);
+  assert.equal(initialized.evidence.screenshot, "on_failure");
   assert.match(messages[0], /study\.yaml$/);
   await assert.rejects(runCli(["init", path], { log() {} }), /Study already exists/);
   await rm(root, { recursive: true, force: true });

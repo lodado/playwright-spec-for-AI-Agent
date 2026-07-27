@@ -65,7 +65,7 @@ Requirements: Node.js 20 or newer and a URL the machine can reach.
 pnpm exec personaut init study.yaml
 ```
 
-The generated study targets `https://example.com`, allows reading and navigation, disables clicks and mutations, and runs one `impatient_new_user` session. `init` refuses to overwrite an existing file.
+The generated study targets `https://example.com`, allows reading and navigation, disables clicks and mutations, and runs one `impatient_new_user` session. It captures screenshots only when a driver action fails or is blocked; `on_failure` does not add terminal screenshots for oracle failure, partial completion, abandonment, or success. `init` refuses to overwrite an existing file.
 
 ### 3. Validate before opening a browser
 
