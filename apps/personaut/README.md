@@ -2,262 +2,221 @@
 
 # Personaut
 
-**Run behavior-policy browser sessions from StudySpec files, then judge sealed evidence without a browser.**
+**Explore a web product as seeded personas and turn browser behavior into sealed evidence.**
 
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
 [![Playwright](https://img.shields.io/badge/Playwright-1.60-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)](https://playwright.dev)
 [![npm](https://img.shields.io/npm/v/@lodado/personaut?style=for-the-badge&logo=npm)](https://www.npmjs.com/package/@lodado/personaut)
-[![StudySpec](https://img.shields.io/badge/StudySpec-0.1-6E40C9?style=for-the-badge)](../../packages/contracts/README.md)
 
-<br />
-
-[![Behavioral Testing](https://img.shields.io/badge/%23BehavioralTesting-0A66C2?style=flat-square)](https://github.com/topics/software-testing)
-[![Evidence](https://img.shields.io/badge/%23Evidence-4b5563?style=flat-square)](../../packages/contracts/README.md)
-[![Quality Assurance](https://img.shields.io/badge/%23QualityAssurance-2EA44F?style=flat-square)](https://github.com/topics/quality-assurance)
-[![AI Agent](https://img.shields.io/badge/%23AIAgent-FF6F00?style=flat-square)](https://github.com/topics/ai-agent)
-
-<br />
-
-[Quick start](#quick-start) · [Commands](#commands) · [End-to-end example](#end-to-end-example) · [Outputs](#outputs) · [Safety](#safety) · [Workspace](../../README.md)
+[Quick start](#5-minute-quick-start) · [Use your site](#use-personaut-with-your-site) · [Commands](#commands) · [Troubleshooting](#troubleshooting) · [Workspace](../../README.md)
 
 </div>
 
----
-
-> [!NOTE]
-> `@lodado/personaut` is published separately from [`playwright-spec-for-ai-agent`](../../apps/playwright-spec-for-ai-agent/README.md), which keeps the original Hermes live staging QA commands.
-
-`personaut` runs real Playwright browser sessions, stores sealed evidence, closes the browser, then evaluates functional and behavioral outcomes from saved evidence.
+Personaut opens isolated Playwright sessions, lets deterministic persona policies choose bounded actions, seals the resulting evidence, and evaluates success after the browser closes.
 
 ```text
-StudySpec
-→ persona × task × seed browser sessions
-→ sealed session evidence
-→ deterministic functional evaluation
-→ validity + finding aggregation
-→ JSON + static HTML report
+StudySpec → persona × task × seed sessions → sealed evidence → JSON + HTML report
 ```
 
-## Table of Contents
+Use Personaut when you want to learn whether different user behaviors can complete a task, where they stall, or whether a candidate release behaves differently from a baseline. Keep normal Playwright tests for deterministic regression coverage.
 
-- [Why this exists](#why-this-exists)
-- [What it does](#what-it-does)
-- [Command flow](#command-flow)
-- [Quick start](#quick-start)
-- [Commands](#commands)
-- [End-to-end example](#end-to-end-example)
-- [Import Playwright specs](#import-playwright-specs)
-- [Compare variants](#compare-variants)
-- [Outputs](#outputs)
-- [Safety](#safety)
-- [Limits](#limits)
+## 5-minute quick start
 
-## Why this exists
-
-A deterministic Playwright test can prove a selector works under known fixture state. It does not show whether a first-time user misses a below-fold action, whether careful users loop, or whether a release creates repeated no-progress behavior.
-
-This CLI gives release teams an evidence-first behavioral check without replacing normal tests.
-
-## What it does
-
-The CLI:
-
-1. Reads a versioned StudySpec YAML file.
-2. Validates environment, persona, task, oracle, safety, and evidence shape.
-3. Runs each persona/task/seed in an isolated Playwright context.
-4. Saves screenshots, observations, events, traces, and artifacts.
-5. Seals the evidence manifest.
-6. Evaluates deterministic success oracles after browser execution.
-7. Writes validity, findings, optional variant comparison, and a static HTML report.
-
-Workflow, safety gates, budgets, and deterministic oracles live in code; persona policy only chooses bounded browser actions.
-
-## Command flow
-
-```text
-validate → run → reports
-             └─ compare baseline/candidate
-
-import-playwright → StudySpec → validate/run
-```
-
-| Command | Purpose |
-| --- | --- |
-| `validate` | Check a StudySpec without opening a browser. |
-| `run` | Execute persona browser sessions and write evidence-backed reports. |
-| `compare` | Run paired baseline/candidate targets and write relative comparison output. |
-| `import-playwright` | Compile existing Playwright spec intent into a StudySpec. |
-
-## Quick start
-
-Install the public CLI:
+### 1. Install Personaut and Chromium
 
 ```bash
 pnpm add -D @lodado/personaut
-pnpm exec personaut --help
+pnpm exec playwright install chromium
 ```
 
-To run the repository examples from the workspace root:
+Requirements: Node.js 20 or newer and a URL the machine can reach.
+
+### 2. Create a safe starter study
 
 ```bash
-corepack enable
-pnpm install --frozen-lockfile
+pnpm exec personaut init study.yaml
 ```
 
-Validate the included hidden-CTA study:
+The generated study targets `https://example.com`, allows reading and navigation, disables clicks and mutations, and runs one `impatient_new_user` session. `init` refuses to overwrite an existing file.
+
+### 3. Validate before opening a browser
 
 ```bash
-pnpm personaut validate examples/hidden-cta/study.yaml
+pnpm exec personaut validate study.yaml
 ```
 
-Run it against the fixture:
-
-```bash
-pnpm fixture:hidden-cta
-```
-
-In another terminal:
-
-```bash
-pnpm personaut run examples/hidden-cta/study.yaml --output=.qa/hidden-cta
-```
-
-Open:
+Expected output:
 
 ```text
-.qa/hidden-cta/reports/report.html
+Valid study-spec/0.1: example-page
 ```
+
+### 4. Run the study
+
+```bash
+pnpm exec personaut run study.yaml --output=.personaut/example
+```
+
+Expected output:
+
+```text
+Report: <project>/.personaut/example/reports/report.html
+```
+
+Open the report and inspect the machine-readable summary:
+
+```text
+.personaut/example/
+├── summary.json
+├── validity.json
+├── findings.json
+├── reports/report.html
+└── sessions/<session-id>/
+```
+
+The starter result is marked `exploration_only`. Personaut does not claim that synthetic sessions represent real-user conversion.
+
+## How a study works
+
+A StudySpec answers five questions:
+
+| Field | Question |
+| --- | --- |
+| `environment` | Which URL and origins may the browser visit? |
+| `tasks` | What goal should the persona attempt? |
+| `successOracles` | What deterministic evidence counts as success? |
+| `safetyPolicy` | Which browser actions are allowed? |
+| `personas` + `runtime.seeds` | Which behaviors run, and how many sessions are created? |
+
+Personaut evaluates `personas × tasks × seeds`. Two personas, two tasks, and three seeds create twelve isolated sessions.
+
+## Use Personaut with your site
+
+Start from the generated `study.yaml` and change these fields first:
+
+```yaml
+study:
+  id: pricing-check
+  name: Pricing page exploration
+
+product:
+  description: Public pricing experience
+
+environment:
+  baseUrl: https://staging.example.test
+  allowedOrigins:
+    - https://staging.example.test
+
+tasks:
+  - id: open-pricing
+    name: Open pricing
+    goal: Find and open the pricing page
+    successOracles:
+      - id: pricing-url
+        type: url
+        operation: contains
+        value: /pricing
+```
+
+Keep `allowedOrigins` exact. Personaut blocks navigation outside this list unless the study explicitly permits external origins.
+
+### Success oracles
+
+| Type | Example use |
+| --- | --- |
+| `url` | The session reached `/complete`. |
+| `visible_text` | The page visibly contains expected copy. |
+| `element` | A visible, enabled, disabled, hidden, or checked element exists. |
+| `event` | A named browser action occurred. |
+| `custom` | Mark imported intent for manual review; arbitrary study code is not executed. |
+
+Run `personaut validate` after every StudySpec edit.
+
+## Persona presets
+
+| Preset | Typical behavior |
+| --- | --- |
+| `impatient_new_user` | Explores little and abandons quickly. |
+| `careful_business_buyer` | Reads deeply and retries cautiously. |
+| `low_domain_knowledge_user` | Backtracks more and has weaker product expectations. |
+| `exploratory_power_user` | Explores broadly and retries often. |
+| `price_sensitive_user` | Reacts strongly to pricing and signup friction. |
+
+Seeds make policy sampling repeatable. Reusing the same StudySpec and seeds makes baseline/candidate comparison meaningful.
 
 ## Commands
 
 ```text
+personaut init [study.yaml]
 personaut validate <study.yaml>
 personaut run <study.yaml> [--output=.qa/run]
 personaut compare <study.yaml> --baseline=<url> --candidate=<url> [--output=.qa/run]
 personaut import-playwright --spec-dir=<dir> --base-url=<url> --output=<study.yaml>
 ```
 
-Workspace script examples:
+### Import Playwright specs
+
+Compile existing Playwright intent into a StudySpec:
 
 ```bash
-pnpm personaut validate examples/hidden-cta/study.yaml
+pnpm exec personaut import-playwright \
+  --spec-dir=tests/e2e \
+  --base-url=https://staging.example.test \
+  --output=study.yaml
+
+pnpm exec personaut validate study.yaml
 ```
+
+Review imported manual-review or blocked policies before running. Annotation details live in the [Playwright Spec Adapter reference](https://github.com/lodado/playwright-spec-for-AI-Agent/blob/main/packages/playwright-spec-adapter/README.md#playwright-annotations).
+
+### Compare two variants
 
 ```bash
-pnpm personaut run examples/hidden-cta/study.yaml --output=.qa/hidden-cta
+pnpm exec personaut compare study.yaml \
+  --baseline=https://baseline.example.test \
+  --candidate=https://candidate.example.test \
+  --output=.personaut/comparison
 ```
 
-```bash
-pnpm personaut compare examples/hidden-cta/study.yaml --baseline=http://127.0.0.1:4179 --candidate=http://127.0.0.1:4179 --output=.qa/hidden-cta-compare
-```
+Comparison uses paired policy sampling and reports relative synthetic differences. It does not predict real-user conversion.
 
-## End-to-end example
+## Read the output
 
-> **One StudySpec** → nine isolated browser sessions → sealed evidence → HTML and JSON reports.
+| File | Purpose |
+| --- | --- |
+| `summary.json` | Overall run status and recommended use. |
+| `validity.json` | Calibration, diversity, stability, and interpretation warnings. |
+| `findings.json` | Repeated evidence-linked friction and failure signals. |
+| `variant-comparison.json` | Baseline/candidate deltas from `compare`. |
+| `reports/report.html` | Human-readable report. |
+| `sessions/*/evidence-manifest.json` | Sealed artifact membership and hashes. |
+| `sessions/*/events.jsonl` | Browser action and result stream. |
+| `sessions/*/observations.jsonl` | Per-action semantic observations. |
 
-<table>
-<tr>
-  <td align="center"><strong>① validate</strong><br/><code>study.yaml</code></td>
-  <td align="center">→</td>
-  <td align="center"><strong>② run</strong><br/><code>sessions/&lt;id&gt;</code></td>
-  <td align="center">→</td>
-  <td align="center"><strong>③ evaluate</strong><br/><code>findings.json</code></td>
-  <td align="center">→</td>
-  <td align="center"><strong>④ report</strong><br/><code>report.html</code></td>
-</tr>
-</table>
+Evidence files are verified against the sealed manifest before an outcome is reported as successful.
 
-Input excerpt:
+## Troubleshooting
 
-```yaml
-tasks:
-  - id: open-report
-    goal: Open behavioral report
-    successOracles:
-      - type: url
-        operation: contains
-        value: /complete
-personas:
-  - preset: impatient_new_user
-  - preset: careful_business_buyer
-  - preset: low_domain_knowledge_user
-runtime:
-  seeds: [101, 202, 303]
-```
+| Symptom | Fix |
+| --- | --- |
+| `Executable doesn't exist` | Run `pnpm exec playwright install chromium`. |
+| StudySpec validation fails | Run `personaut validate`, then compare required fields with the generated starter. |
+| Navigation is blocked | Add the exact origin, including scheme and port, to `environment.allowedOrigins`. |
+| Sessions never click | Check `safetyPolicy.allowClick` and make the task goal match visible button/link wording. |
+| Everything becomes manual review | Prefer deterministic URL, text, or element success oracles. |
+| Report says `uncalibrated` or `exploration_only` | This is expected without a human reference dataset; do not present the result as real-user behavior. |
 
-Run:
-
-```bash
-pnpm personaut run examples/hidden-cta/study.yaml --output=.qa/hidden-cta
-```
-
-Output excerpt:
-
-```json
-{
-  "status": "complete",
-  "title": "Hidden below-fold CTA",
-  "humanValidation": "human_review_required"
-}
-```
-
-The validity report marks the run as uncalibrated unless a human reference dataset is provided.
-
-## Import Playwright specs
-
-Use the adapter when existing Playwright specs are the source of QA intent:
-
-```bash
-pnpm personaut import-playwright --spec-dir=path/to/specs --base-url=https://staging.example.com --output=.qa/imported-study.yaml
-```
-
-The adapter preserves legacy annotation/live-policy semantics, then writes a canonical StudySpec. See the shared [Playwright annotations](../../packages/playwright-spec-adapter/README.md#playwright-annotations) reference for placement, supported policies, fixtures, and safety mapping.
-
-## Compare variants
-
-```bash
-pnpm personaut compare examples/hidden-cta/study.yaml --baseline=http://127.0.0.1:4179 --candidate=http://127.0.0.1:4179 --output=.qa/hidden-cta-compare
-```
-
-Comparison uses paired policy sampling when available. The report shows relative differences only. It does not claim actual user conversion impact.
-
-## Outputs
-
-A run directory contains:
-
-```text
-<run-dir>/
-├── summary.json
-├── validity.json
-├── findings.json
-├── variant-comparison.json      # compare only
-├── reports/
-│   └── report.html
-└── sessions/
-    └── <session-id>/
-        ├── evidence-manifest.json
-        ├── events.jsonl
-        ├── observations.jsonl
-        ├── screenshots/           # when enabled
-        ├── downloads/
-        ├── videos/                # on failure/all, when enabled
-        └── trace.zip              # when enabled
-```
-
-The evaluator verifies manifest membership, hashes, and artifact bytes before reporting success.
-
-## Safety
+## Safety and limits
 
 - Browser contexts are isolated per session.
-- Hidden DOM controls are not exposed to persona policy as perceived options.
-- Browser capability closes before browserless evaluation.
-- Study safety policy gates read, navigation, click, typing, upload, mutation, external-origin behavior, and confirmation stopping.
-- Secret-bearing studies should keep secrets in operator-controlled config or environment variables.
-- Uncalibrated synthetic findings require human review before user-impact claims.
+- Hidden or occluded controls are not offered to persona policy as perceived choices.
+- Study safety policy gates navigation, clicking, typing, uploads, mutations, external origins, and confirmation stopping.
+- Browser capability closes before browserless evaluation begins.
+- Study files are trusted operator input; keep secrets in operator-controlled configuration or environment variables.
+- Synthetic findings support release decisions but do not replace deterministic tests, analytics, or human research.
 
-## Limits
+For the full schema and trust-boundary details, see the [StudySpec contracts reference](https://github.com/lodado/playwright-spec-for-AI-Agent/blob/main/packages/contracts/README.md).
 
-- The CLI and `playwright-spec-for-ai-agent` are versioned and published independently.
-- Study files are trusted operator inputs.
-- Variant comparison is relative and synthetic.
-- Reports support release decisions; they are not a replacement for deterministic tests or real-user analytics.
+## Workspace development
+
+When working in this monorepo, replace `pnpm exec personaut` with `pnpm personaut` and use [`examples/hidden-cta`](../../examples/hidden-cta/README.md) for the local browser fixture.

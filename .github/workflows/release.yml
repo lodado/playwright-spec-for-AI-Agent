@@ -29,6 +29,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - run: pnpm --filter playwright-driver exec playwright install --with-deps chromium
+
       - run: pnpm typecheck
 
       - run: pnpm lint

@@ -41,6 +41,7 @@ import {
 const HELP = `Personaut — persona-driven browser exploration
 
 Usage:
+  personaut init [study.yaml]
   personaut validate <study.yaml>
   personaut run <study.yaml> [--output=.qa/run]
   personaut compare <study.yaml> --baseline=<url> --candidate=<url> [--output=.qa/run]
@@ -48,6 +49,45 @@ Usage:
 `;
 const MAX_ORACLE_REGEX_PATTERN_LENGTH = 256;
 const MAX_ORACLE_REGEX_INPUT_LENGTH = 10_000;
+const STARTER_STUDY = {
+  schemaVersion: "study-spec/0.1",
+  study: { id: "example-page", name: "Example page exploration" },
+  product: { description: "Public example page" },
+  environment: {
+    baseUrl: "https://example.com",
+    allowedOrigins: ["https://example.com"],
+    viewport: { width: 390, height: 844 },
+  },
+  tasks: [{
+    id: "find-example-domain",
+    name: "Find the page heading",
+    goal: "Find the Example Domain heading",
+    successOracles: [{ id: "heading-visible", type: "visible_text", operation: "contains", value: "Example Domain" }],
+    safetyPolicy: {
+      allowRead: true,
+      allowNavigation: true,
+      allowClick: false,
+      allowTyping: false,
+      allowFileUpload: false,
+      allowStateMutation: false,
+      allowExternalOrigin: false,
+      forbiddenActions: [],
+      stopBeforeConfirmation: true,
+    },
+    maxActions: 3,
+    maxDurationMs: 15_000,
+    maxConsecutiveNoProgressActions: 2,
+    abandonmentAllowed: true,
+  }],
+  personas: [{ preset: "impatient_new_user" }],
+  runtime: {
+    seeds: [101],
+    concurrency: 1,
+    modelRoles: { action: "deterministic-policy", evaluator: "deterministic-oracle" },
+  },
+  evidence: { screenshot: "every_action", trace: true, video: "off", semanticSnapshot: "every_action" },
+  evaluation: { minimumRecurrenceForFinding: 1, validityReport: true },
+};
 
 export async function loadStudy(path) {
   const text = await readFile(path, "utf8");
@@ -163,6 +203,18 @@ export async function runCli(argv, io = console) {
   const [command, input, ...rest] = argv;
   if (!command || command === "help" || command === "--help" || command === "-h") {
     io.log(HELP);
+    return 0;
+  }
+  if (command === "init") {
+    const output = resolve(input ?? "personaut.study.yaml");
+    await mkdir(dirname(output), { recursive: true });
+    try {
+      await writeFile(output, stringifyYaml(validateStudySpec(structuredClone(STARTER_STUDY))), { encoding: "utf8", flag: "wx" });
+    } catch (error) {
+      if (error?.code === "EEXIST") throw new Error(`Study already exists: ${output}`);
+      throw error;
+    }
+    io.log(`Study: ${output}`);
     return 0;
   }
   if (command === "validate") {

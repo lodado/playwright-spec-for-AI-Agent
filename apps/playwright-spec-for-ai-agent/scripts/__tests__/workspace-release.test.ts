@@ -39,6 +39,7 @@ describe("workspace release configuration", () => {
     expect(personaut.publishConfig.access).toBe("public");
     expect(personaut.exports["."]).toBe("./dist/index.mjs");
     expect(Object.values(personaut.dependencies)).not.toContain("workspace:*");
+    expect(releaseWorkflow).toContain("playwright install --with-deps chromium");
     expect(releaseWorkflow).toContain("changesets/action@v1");
     expect(releaseWorkflow).not.toContain("release-please");
   });

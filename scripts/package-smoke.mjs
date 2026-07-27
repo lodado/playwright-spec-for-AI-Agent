@@ -53,6 +53,28 @@ try {
   if (manifest.name !== "playwright-spec-for-ai-agent") {
     throw new Error("installed package name changed");
   }
+
+  const specDir = join(consumer, "tests", "e2e", "pricing");
+  mkdirSync(specDir, { recursive: true });
+  writeFileSync(join(consumer, "playwright-spec-for-ai-agent.config.mjs"), `export default {
+  paths: { specDir: "tests/e2e/{page}", outputDir: ".qa/{page}" },
+  staging: { baseUrl: "https://staging.example.com", authRequired: false },
+  pages: { pricing: { targetPath: "/pricing", authRequired: false } },
+};\n`);
+  writeFileSync(join(specDir, "pricing.spec.ts"), `// @qa-page: pricing
+// @qa-scenario: A visitor can understand the pricing options
+import { expect, test } from "@playwright/test";
+// @qa-live-policy: readonly
+test("shows pricing options", async ({ page }) => {
+  await expect(page.getByRole("heading", { name: "Pricing" })).toBeVisible();
+});\n`);
+  run(process.execPath, [join(installed, "bin", "playwright-spec-for-ai-agent.mjs"), "spec", "--page=pricing"], consumer);
+  if (!readFileSync(join(consumer, ".qa", "pricing", "pricing-qa-spec.json"), "utf8").includes("pricing options")) {
+    throw new Error("README quick-start scenario was not extracted");
+  }
+  if (!readFileSync(join(installed, "docs", "qa-native.md"), "utf8").includes("QA Native")) {
+    throw new Error("QA Native guide is missing from the package");
+  }
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }

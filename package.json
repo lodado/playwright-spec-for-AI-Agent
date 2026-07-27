@@ -14,7 +14,7 @@
     "test": "turbo run test",
     "version-packages": "changeset version",
     "pack:compat": "pnpm --filter playwright-spec-for-ai-agent pack",
-    "package:smoke": "node scripts/package-smoke.mjs",
+    "package:smoke": "node scripts/package-smoke.mjs && node scripts/personaut-package-smoke.mjs",
     "personaut": "pnpm --filter @lodado/personaut build && node apps/personaut/bin/personaut.mjs",
     "fixture:hidden-cta": "node fixtures/hidden-below-fold-cta/server.mjs"
   },

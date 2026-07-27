@@ -42,6 +42,7 @@
     "scripts",
     "playwright-spec-for-ai-agent.config.example.mjs",
     "examples",
+    "docs",
     "README.md",
     "packages/cli/index.mjs",
     "packages/cli/qa-native-adaptive-evidence.mjs",

@@ -29,6 +29,19 @@ test("validate CLI accepts a versioned YAML study", async () => {
   await rm(root, { recursive: true, force: true });
 });
 
+test("init CLI writes a safe valid starter study without overwriting files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "personaut-init-"));
+  const path = join(root, "study.yaml");
+  const messages = [];
+  assert.equal(await runCli(["init", path], { log: message => messages.push(message) }), 0);
+  const initialized = await loadStudy(path);
+  assert.equal(initialized.environment.baseUrl, "https://example.com");
+  assert.equal(initialized.tasks[0].safetyPolicy.allowClick, false);
+  assert.match(messages[0], /study\.yaml$/);
+  await assert.rejects(runCli(["init", path], { log() {} }), /Study already exists/);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("import-playwright writes a valid StudySpec", async () => {
   const root = await mkdtemp(join(tmpdir(), "persona-import-"));
   const specDir = join(root, "specs");
