@@ -152,7 +152,7 @@ describe("playwright behavioral driver", () => {
 
   it("revalidates retained elements and excludes values and off-viewport semantics", async () => {
     if (!browserAvailable) return;
-    const app = await serve(`<title>super-secret</title><h1>Visible heading</h1><p>Token: super-secret</p><input aria-label="API key" value="super-secret"><input type="checkbox" aria-label="Remember" checked><button id="swap">Continue</button><h2 style="position:absolute;top:2000px">Offscreen secret</h2><script>console.error('super-secret');setTimeout(()=>swap.replaceWith(Object.assign(document.createElement('button'),{textContent:'Continue'})),150)</script>`);
+    const app = await serveControlledSwap();
     const driver = createPlaywrightDriver({ browserType: chromium });
     const dir = await tempDir();
     const handle = await driver.start({
@@ -169,7 +169,7 @@ describe("playwright behavioral driver", () => {
     expect(JSON.stringify(observation.runtime)).not.toContain("super-secret");
     expect(observation.semantic.headings[0]).toMatchObject({ text: "Visible heading", viewportPosition: { inViewport: true } });
     expect(observation.semantic.interactiveElements.find((item) => item.name === "Remember")).toMatchObject({ checked: true });
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await app.releaseSwap();
     expect(await driver.execute(handle, { type: "click", elementId: elementId(observation, "Continue"), reasonCode: "continue" })).toMatchObject({ status: "blocked", message: "Observed element changed before action" });
     expect((await driver.close(handle)).evidence.every((entry) => !["trace", "video"].includes(entry.type))).toBe(true);
     await app.close();
@@ -304,4 +304,32 @@ async function serve(html) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
   return { url: `http://127.0.0.1:${port}/`, close: () => new Promise((resolve) => server.close(resolve)) };
+}
+
+async function serveControlledSwap() {
+  let releaseSwapRequest;
+  let confirmSwap;
+  const swapRequest = new Promise((resolve) => { releaseSwapRequest = resolve; });
+  const swapConfirmed = new Promise((resolve) => { confirmSwap = resolve; });
+  const html = `<title>super-secret</title><h1>Visible heading</h1><p>Token: super-secret</p><input aria-label="API key" value="super-secret"><input type="checkbox" aria-label="Remember" checked><button id="swap">Continue</button><h2 style="position:absolute;top:2000px">Offscreen secret</h2><script>console.error('super-secret');fetch('/swap').then(()=>{swap.replaceWith(Object.assign(document.createElement('button'),{textContent:'Continue'}));return fetch('/swapped')})</script>`;
+  const server = createServer((request, response) => {
+    if (request.url === "/swap") {
+      releaseSwapRequest(response);
+      return;
+    }
+    response.writeHead(200, { "content-type": request.url === "/swapped" ? "text/plain" : "text/html" });
+    response.end(request.url === "/swapped" ? "ok" : html);
+    if (request.url === "/swapped") confirmSwap();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  return {
+    url: `http://127.0.0.1:${port}/`,
+    async releaseSwap() {
+      const response = await swapRequest;
+      response.end("ok");
+      await swapConfirmed;
+    },
+    close: () => new Promise((resolve) => server.close(resolve)),
+  };
 }
