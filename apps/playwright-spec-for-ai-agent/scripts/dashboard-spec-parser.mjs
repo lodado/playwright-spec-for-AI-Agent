@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { parsePlaywrightAst } from "./playwright-ast-parser.mjs";
 
 /**
  * Extract QA annotations from spec file source.
@@ -53,14 +54,14 @@ export const QA_LIVE_POLICY_MAP = {
 };
 
 export function parseAnnotations(source) {
-  const pageMatch = source.match(/\/\/\s*@qa-page:\s*(\S+)/);
-  const scenarioMatch = source.match(/\/\/\s*@qa-scenario:\s*(\S+)/);
+  const pageMatch = source.match(/\/\/\s*@qa-page:\s*([^\r\n]+)/);
+  const scenarioMatch = source.match(/\/\/\s*@qa-scenario:\s*([^\r\n]+)/);
   const liveSkipMatch = /\/\/\s*@qa-live-skip:\s*true/.test(source);
   const alwaysRunMatch = /\/\/\s*@qa-always-run:\s*true/.test(source);
 
   return {
-    page: pageMatch?.[1] ?? null,
-    scenario: scenarioMatch?.[1] ?? null,
+    page: pageMatch?.[1].trim() ?? null,
+    scenario: scenarioMatch?.[1].trim() ?? null,
     liveSkip: liveSkipMatch,
     alwaysRun: alwaysRunMatch,
   };
@@ -74,33 +75,7 @@ function unescapeString(value) {
 }
 
 export function extractTestBlocks(source) {
-  const blocks = [];
-  const pattern =
-    /test\(\s*(["'`])((?:\\.|(?!\1).)*?)\1\s*,\s*async\s*\(\{[^}]*\}\)\s*=>\s*\{/g;
-
-  for (const match of source.matchAll(pattern)) {
-    const title = unescapeString(match[2]);
-    const bodyStart = match.index + match[0].length;
-    let depth = 1;
-    let index = bodyStart;
-
-    while (index < source.length && depth > 0) {
-      const char = source[index];
-      if (char === "{") depth += 1;
-      else if (char === "}") depth -= 1;
-      index += 1;
-    }
-
-    blocks.push({
-      title,
-      body: source.slice(bodyStart, index - 1),
-      index: match.index,
-      bodyStart,
-      endIndex: index,
-    });
-  }
-
-  return blocks;
+  return parsePlaywrightAst("inline.spec.ts", source).tests;
 }
 
 const LIVE_POLICY_COMMENT_PATTERN = /^\/\/\s*@qa-live-policy:\s*(\S+)\s*$/;
@@ -215,34 +190,10 @@ export function mapLivePolicyAnnotation(annotation) {
 }
 
 function findDescribeBlocks(source) {
-  const blocks = [];
-  const pattern = /test\.describe\s*\(/g;
-
-  for (const match of source.matchAll(pattern)) {
-    const start = match.index;
-    const after = source.slice(start);
-    const arrow = after.match(/=>\s*\{/);
-    if (!arrow) continue;
-
-    const bodyStart = start + arrow.index + arrow[0].length - 1;
-    let depth = 1;
-    let cursor = bodyStart + 1;
-
-    while (cursor < source.length && depth > 0) {
-      const char = source[cursor];
-      if (char === "{") depth += 1;
-      else if (char === "}") depth -= 1;
-      cursor += 1;
-    }
-
-    blocks.push({
-      start,
-      end: cursor,
-      policy: parseLivePolicyBeforeIndex(source, start),
-    });
-  }
-
-  return blocks;
+  return parsePlaywrightAst("inline.spec.ts", source).describes.map(block => ({
+    ...block,
+    policy: parseLivePolicyBeforeIndex(source, block.start),
+  }));
 }
 
 /**
@@ -370,71 +321,9 @@ export function describeLiveRunPolicy(liveRunPolicy) {
   }
 }
 
-function parseLocatorExpression(expression) {
-  const testIdMatch = expression.match(
-    /page\.getByTestId\(\s*(["'`])((?:\\.|(?!\1).)*?)\1\s*\)/
-  );
-  if (testIdMatch) {
-    return { kind: "testId", value: unescapeString(testIdMatch[2]) };
-  }
-
-  const textMatch = expression.match(
-    /page\.getByText\(\s*(["'`])((?:\\.|(?!\1).)*?)\1\s*\)/
-  );
-  if (textMatch) {
-    return { kind: "text", value: unescapeString(textMatch[2]) };
-  }
-
-  return null;
-}
-
-function parseStringLiteral(value) {
-  if (value.includes("${")) {
-    return { kind: "template", pattern: "^Credit [\\d,]+$" };
-  }
-  return { kind: "literal", value };
-}
-
 export function parseReadOnlyExpectations(body) {
-  const expectations = [];
-  const chunks = body.split(/await expect\(/).slice(1);
-
-  for (const chunk of chunks) {
-    const statement = `await expect(${chunk}`;
-    const notVisibleMatch = statement.match(
-      /expect\(\s*([\s\S]*?)\s*\)\.not\.toBeVisible/m
-    );
-    if (notVisibleMatch) {
-      const locator = parseLocatorExpression(notVisibleMatch[1]);
-      if (locator) expectations.push({ type: "notVisible", locator });
-      continue;
-    }
-
-    const containTextMatch = statement.match(
-      /expect\(\s*([\s\S]*?)\s*\)\.toContainText\(\s*(["'`])((?:\\.|(?!\2).)*?)\2/m
-    );
-    if (containTextMatch) {
-      const locator = parseLocatorExpression(containTextMatch[1]);
-      if (locator) {
-        expectations.push({
-          type: "containText",
-          locator,
-          expected: parseStringLiteral(unescapeString(containTextMatch[3])),
-        });
-      }
-      continue;
-    }
-
-    const visibleMatch = statement.match(
-      /expect\(\s*([\s\S]*?)\s*\)\.toBeVisible/m
-    );
-    if (visibleMatch) {
-      const locator = parseLocatorExpression(visibleMatch[1]);
-      if (locator) expectations.push({ type: "visible", locator });
-    }
-  }
-
-  return expectations;
+  const wrapped = `test("inline", async ({ page }) => {${body}\n});`;
+  return parsePlaywrightAst("inline.spec.ts", wrapped).tests[0]?.expectations ?? [];
 }
 
 import {
@@ -459,33 +348,78 @@ function slugify(value) {
     .slice(0, 80);
 }
 
-export function parseDashboardSpecFile(fileName, source) {
-  const annotations = parseAnnotations(source);
+export function parsePlaywrightSource(fileName, source) {
+  const ast = parsePlaywrightAst(fileName, source);
+  const headerEnd = ast.sourceFile.statements[0]?.getStart(ast.sourceFile) ?? source.length;
+  const header = source.slice(0, headerEnd);
+  const annotations = parseAnnotations(header);
   const scenarioId = annotations.scenario;
-  if (!scenarioId) return null;
+  const diagnostics = [...ast.diagnostics];
+  if (!scenarioId) return { scenario: null, blocks: ast.tests, diagnostics, annotations };
 
+  const scenarioLabelMatch = header.match(/\/\/\s*@qa-scenario-label:\s*([^\r\n]+)/);
   const labelMatch = source.match(SCENARIO_LABEL_PATTERN);
-  const label = labelMatch ? unescapeString(labelMatch[2]) : fileName;
+  const label = scenarioLabelMatch
+    ? scenarioLabelMatch[1].trim().replace(/^(["'])(.*)\1$/, "$2")
+    : ast.describes[0]?.title ?? (labelMatch ? unescapeString(labelMatch[2]) : fileName);
   const fileFixtures = parseFileFixtures(source);
 
-  const tests = extractTestBlocks(source).map(block => {
+  const tests = ast.tests.map(block => {
+    const inheritedModifier = [...block.describes]
+      .reverse()
+      .find(describe => ["skip", "fixme"].includes(describe.modifier))?.modifier;
+    const modifier = block.modifier ?? inheritedModifier ?? null;
+
     // Whole-file @qa-live-skip marks every test as liveSkip.
-    if (annotations.liveSkip) {
+    if (annotations.liveSkip || modifier === "skip" || modifier === "fixme") {
       return {
         title: block.title,
         stagingMode: "live-skip",
         liveRunPolicy: "blocked-live-skip",
+        ...(modifier ? { modifier } : {}),
         expectations: [],
         checkId: slugify(block.title) || "unnamed-test",
       };
     }
 
-    const declared = resolveTestLivePolicy(source, block.index);
+    let declared;
+    let policyError = false;
+    try {
+      const direct = parseLivePolicyBeforeIndex(source, block.index);
+      const inherited = [...block.describes]
+        .reverse()
+        .map(describe => parseLivePolicyBeforeIndex(source, describe.start))
+        .find(Boolean);
+      const annotation = direct ?? inherited;
+      declared = annotation
+        ? { annotation, ...mapLivePolicyAnnotation(annotation) }
+        : null;
+    } catch (error) {
+      policyError = true;
+      diagnostics.push({
+        code: "UNKNOWN_LIVE_POLICY",
+        severity: "ERROR",
+        message: error.message,
+        path: fileName,
+      });
+      declared = null;
+    }
     if (!declared) {
-      throw new Error(
-        `Missing // @qa-live-policy on test "${block.title}" in ${fileName}. ` +
-          `Add it on the test or an enclosing test.describe.`
-      );
+      if (!policyError) {
+        diagnostics.push({
+          code: "MISSING_LIVE_POLICY",
+          severity: "ERROR",
+          message: `Missing // @qa-live-policy on test "${block.title}" in ${fileName}. Add it on the test or an enclosing test.describe.`,
+          path: fileName,
+        });
+      }
+      return {
+        title: block.title,
+        stagingMode: "live-skip",
+        liveRunPolicy: "blocked-unknown",
+        expectations: [],
+        checkId: slugify(block.title) || "unnamed-test",
+      };
     }
 
     const {
@@ -493,12 +427,37 @@ export function parseDashboardSpecFile(fileName, source) {
       liveRunPolicy,
       annotation: livePolicyAnnotation,
     } = declared;
-    const expectations =
-      stagingMode === "read-only"
-        ? parseReadOnlyExpectations(block.body).map(expectation =>
-            adaptExpectationForLive(expectation, block.title, scenarioId)
-          )
-        : [];
+    const expectations = block.expectations.map(expectation =>
+      adaptExpectationForLive(expectation, block.title, scenarioId)
+    );
+    const actions = block.actions;
+    if (stagingMode === "read-only" && actions.length > 0) {
+      diagnostics.push({
+        code: "POLICY_ACTION_CONFLICT",
+        severity: "ERROR",
+        message: `readonly test "${block.title}" contains browser actions.`,
+        path: fileName,
+      });
+    }
+    if (liveRunPolicy === "executable-interaction" && block.opaqueCalls.length > 0) {
+      diagnostics.push({
+        code: "OPAQUE_INTERACTION_STEP",
+        severity: "ERROR",
+        message: `safe-interaction test "${block.title}" contains steps that cannot be statically compiled: ${block.opaqueCalls.join("; ")}`,
+        path: fileName,
+      });
+    }
+    if (
+      !liveRunPolicy.startsWith("blocked-") &&
+      JSON.stringify({ actions, expectations }).includes('"kind":"dynamic"')
+    ) {
+      diagnostics.push({
+        code: "DYNAMIC_EXECUTION_VALUE",
+        severity: "ERROR",
+        message: `live test "${block.title}" contains a locator or action value that cannot be resolved statically.`,
+        path: fileName,
+      });
+    }
 
     const fixtures = resolveTestFixtures(source, block.index, fileFixtures);
 
@@ -507,13 +466,24 @@ export function parseDashboardSpecFile(fileName, source) {
       stagingMode,
       liveRunPolicy,
       livePolicyAnnotation,
+      ...(modifier ? { modifier } : {}),
+      ...(actions.length > 0 ? { actions } : {}),
       expectations,
       ...(Object.keys(fixtures).length > 0 ? { fixtures } : {}),
       checkId: slugify(block.title) || "unnamed-test",
     };
   });
 
-  return {
+  for (const describe of ast.describes.filter(item => item.modifier === "only")) {
+    diagnostics.push({
+      code: "FOCUSED_TEST",
+      severity: "WARNING",
+      message: "test.describe.only is imported without filtering sibling tests.",
+      path: fileName,
+    });
+  }
+
+  const scenario = {
     scenarioId,
     page: annotations.page ?? null,
     liveSkip: annotations.liveSkip,
@@ -523,6 +493,15 @@ export function parseDashboardSpecFile(fileName, source) {
     ...(Object.keys(fileFixtures).length > 0 ? { fixtures: fileFixtures } : {}),
     tests,
   };
+
+  return { scenario, blocks: ast.tests, diagnostics, annotations };
+}
+
+export function parseDashboardSpecFile(fileName, source) {
+  const result = parsePlaywrightSource(fileName, source);
+  const error = result.diagnostics.find(item => item.severity === "ERROR");
+  if (error) throw new Error(error.message);
+  return result.scenario;
 }
 
 /** Parse all annotated spec files in a directory. Requires @qa-scenario. */

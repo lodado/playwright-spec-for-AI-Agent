@@ -16,7 +16,16 @@
             "stagingMode": "read-only",
             "liveRunPolicy": "executable-readonly",
             "livePolicyAnnotation": "readonly",
-            "expectations": [],
+            "expectations": [
+              {
+                "type": "visible",
+                "locator": {
+                  "kind": "role",
+                  "role": "navigation",
+                  "name": "Main"
+                }
+              }
+            ],
             "checkId": "always-checks-navigation-shell"
           }
         ]
@@ -34,7 +43,16 @@
             "stagingMode": "auth",
             "liveRunPolicy": "blocked-auth-mock",
             "livePolicyAnnotation": "auth-mock",
-            "expectations": [],
+            "expectations": [
+              {
+                "type": "url",
+                "expected": {
+                  "kind": "regex",
+                  "pattern": "\\/login",
+                  "flags": ""
+                }
+              }
+            ],
             "checkId": "redirects-unauthenticated-users"
           }
         ]
@@ -52,7 +70,25 @@
             "stagingMode": "interaction",
             "liveRunPolicy": "executable-interaction",
             "livePolicyAnnotation": "safe-interaction",
-            "expectations": [],
+            "actions": [
+              {
+                "type": "click",
+                "target": {
+                  "kind": "testId",
+                  "value": "subscription-history-button"
+                },
+                "arguments": []
+              }
+            ],
+            "expectations": [
+              {
+                "type": "visible",
+                "locator": {
+                  "kind": "text",
+                  "value": "Subscription History"
+                }
+              }
+            ],
             "checkId": "opens-subscription-history"
           },
           {
@@ -60,7 +96,26 @@
             "stagingMode": "interaction",
             "liveRunPolicy": "judgment-interaction-no-confirm",
             "livePolicyAnnotation": "safe-interaction-no-confirm",
-            "expectations": [],
+            "actions": [
+              {
+                "type": "click",
+                "target": {
+                  "kind": "testId",
+                  "value": "cancel-subscription-button"
+                },
+                "arguments": []
+              }
+            ],
+            "expectations": [
+              {
+                "type": "visible",
+                "locator": {
+                  "kind": "role",
+                  "role": "button",
+                  "name": "Confirm cancellation"
+                }
+              }
+            ],
             "checkId": "stops-before-destructive-confirmation"
           },
           {
@@ -89,6 +144,26 @@
             "stagingMode": "interaction",
             "liveRunPolicy": "blocked-subscription-mutation",
             "livePolicyAnnotation": "subscription-mutation",
+            "actions": [
+              {
+                "type": "click",
+                "target": {
+                  "kind": "role",
+                  "role": "button",
+                  "name": "Resume subscription"
+                },
+                "arguments": []
+              },
+              {
+                "type": "click",
+                "target": {
+                  "kind": "role",
+                  "role": "button",
+                  "name": "Confirm"
+                },
+                "arguments": []
+              }
+            ],
             "expectations": [],
             "checkId": "resumes-subscription-with-mocked-post"
           }
@@ -129,6 +204,14 @@
             "livePolicyAnnotation": "readonly",
             "expectations": [
               {
+                "type": "visible",
+                "locator": {
+                  "kind": "role",
+                  "role": "heading",
+                  "name": "Dashboard"
+                }
+              },
+              {
                 "type": "containText",
                 "locator": {
                   "kind": "testId",
@@ -151,7 +234,30 @@
             "stagingMode": "interaction",
             "liveRunPolicy": "executable-interaction",
             "livePolicyAnnotation": "safe-interaction",
-            "expectations": [],
+            "actions": [
+              {
+                "type": "setInputFiles",
+                "target": {
+                  "kind": "testId",
+                  "value": "avatar-input"
+                },
+                "arguments": [
+                  {
+                    "kind": "literal",
+                    "value": "tests/fixtures/qa-avatar.png"
+                  }
+                ]
+              }
+            ],
+            "expectations": [
+              {
+                "type": "visible",
+                "locator": {
+                  "kind": "text",
+                  "value": "Avatar uploaded"
+                }
+              }
+            ],
             "fixtures": {
               "avatar": "tests/fixtures/qa-avatar.png",
               "invoice": "tests/fixtures/invoice.pdf"
@@ -179,7 +285,16 @@
             "stagingMode": "read-only",
             "liveRunPolicy": "executable-readonly",
             "livePolicyAnnotation": "readonly",
-            "expectations": [],
+            "expectations": [
+              {
+                "type": "visible",
+                "locator": {
+                  "kind": "role",
+                  "role": "navigation",
+                  "name": "Main"
+                }
+              }
+            ],
             "checkId": "always-checks-navigation-shell"
           }
         ]
@@ -197,7 +312,25 @@
             "stagingMode": "interaction",
             "liveRunPolicy": "executable-interaction",
             "livePolicyAnnotation": "safe-interaction",
-            "expectations": [],
+            "actions": [
+              {
+                "type": "click",
+                "target": {
+                  "kind": "testId",
+                  "value": "subscription-history-button"
+                },
+                "arguments": []
+              }
+            ],
+            "expectations": [
+              {
+                "type": "visible",
+                "locator": {
+                  "kind": "text",
+                  "value": "Subscription History"
+                }
+              }
+            ],
             "checkId": "opens-subscription-history"
           },
           {
@@ -205,7 +338,26 @@
             "stagingMode": "interaction",
             "liveRunPolicy": "judgment-interaction-no-confirm",
             "livePolicyAnnotation": "safe-interaction-no-confirm",
-            "expectations": [],
+            "actions": [
+              {
+                "type": "click",
+                "target": {
+                  "kind": "testId",
+                  "value": "cancel-subscription-button"
+                },
+                "arguments": []
+              }
+            ],
+            "expectations": [
+              {
+                "type": "visible",
+                "locator": {
+                  "kind": "role",
+                  "role": "button",
+                  "name": "Confirm cancellation"
+                }
+              }
+            ],
             "checkId": "stops-before-destructive-confirmation"
           },
           {
@@ -249,6 +401,14 @@
             "livePolicyAnnotation": "readonly",
             "expectations": [
               {
+                "type": "visible",
+                "locator": {
+                  "kind": "role",
+                  "role": "heading",
+                  "name": "Dashboard"
+                }
+              },
+              {
                 "type": "containText",
                 "locator": {
                   "kind": "testId",
@@ -271,7 +431,30 @@
             "stagingMode": "interaction",
             "liveRunPolicy": "executable-interaction",
             "livePolicyAnnotation": "safe-interaction",
-            "expectations": [],
+            "actions": [
+              {
+                "type": "setInputFiles",
+                "target": {
+                  "kind": "testId",
+                  "value": "avatar-input"
+                },
+                "arguments": [
+                  {
+                    "kind": "literal",
+                    "value": "tests/fixtures/qa-avatar.png"
+                  }
+                ]
+              }
+            ],
+            "expectations": [
+              {
+                "type": "visible",
+                "locator": {
+                  "kind": "text",
+                  "value": "Avatar uploaded"
+                }
+              }
+            ],
             "fixtures": {
               "avatar": "tests/fixtures/qa-avatar.png",
               "invoice": "tests/fixtures/invoice.pdf"
@@ -349,10 +532,38 @@
   ],
   "executableChecks": [
     {
+      "scenarioId": "GLOBAL_NAV",
+      "sourceFile": "always-run.spec.ts",
+      "testTitle": "always checks navigation shell",
+      "checkId": "GLOBAL_NAV:always-checks-navigation-shell:0",
+      "expectation": {
+        "type": "visible",
+        "locator": {
+          "kind": "role",
+          "role": "navigation",
+          "name": "Main"
+        }
+      }
+    },
+    {
       "scenarioId": "DASHBOARD_READONLY",
       "sourceFile": "readonly.spec.ts",
       "testTitle": "shows stable dashboard copy",
       "checkId": "DASHBOARD_READONLY:shows-stable-dashboard-copy:0",
+      "expectation": {
+        "type": "visible",
+        "locator": {
+          "kind": "role",
+          "role": "heading",
+          "name": "Dashboard"
+        }
+      }
+    },
+    {
+      "scenarioId": "DASHBOARD_READONLY",
+      "sourceFile": "readonly.spec.ts",
+      "testTitle": "shows stable dashboard copy",
+      "checkId": "DASHBOARD_READONLY:shows-stable-dashboard-copy:1",
       "expectation": {
         "type": "containText",
         "locator": {
@@ -392,10 +603,10 @@
     "live": 6
   },
   "coverage": {
-    "GLOBAL_NAV": "GLOBAL_NAV: 1 test(s)",
+    "GLOBAL_NAV": "GLOBAL_NAV: 1 test(s), playwright: 1 expectation(s)",
     "AUTH_MOCK": "AUTH_MOCK: 1 test(s), blocked-auth-mock: 1",
     "DASHBOARD_INTERACTIONS": "DASHBOARD_INTERACTIONS: 4 test(s), blocked-subscription-mutation: 1, executable-interaction: 1, judgment-interaction-no-confirm: 1, judgment-mock-api: 1",
     "LIVE_SKIP": "LIVE_SKIP: skipped (@qa-live-skip)",
-    "DASHBOARD_READONLY": "DASHBOARD_READONLY: 2 test(s), playwright: 1 expectation(s), executable-interaction: 1"
+    "DASHBOARD_READONLY": "DASHBOARD_READONLY: 2 test(s), playwright: 2 expectation(s), executable-interaction: 1"
   }
 }

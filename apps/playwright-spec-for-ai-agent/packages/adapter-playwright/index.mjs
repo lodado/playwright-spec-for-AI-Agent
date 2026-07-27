@@ -5,7 +5,7 @@ import {
   QA_IR_VERSION,
   validateContract,
 } from "../contracts/index.mjs";
-import { extractTestBlocks, parseAnnotations, parseDashboardSpecFile, parseReadOnlyExpectations } from "../../scripts/dashboard-spec-parser.mjs";
+import { parsePlaywrightSource } from "../../scripts/dashboard-spec-parser.mjs";
 
 const ADAPTER_NAME = "adapter-playwright";
 const ADAPTER_VERSION = "0.2.0";
@@ -25,24 +25,25 @@ export function compilePlaywrightSpec({ source, sourcePath, revision } = {}) {
   if (typeof source !== "string") throw new TypeError("source must be a string");
   if (typeof sourcePath !== "string" || sourcePath.length === 0) throw new TypeError("sourcePath must be a non-empty string");
 
-  const diagnostics = detectUnsupportedSyntax(source, sourcePath);
-  const annotations = parseAnnotations(source);
+  const parsed = parsePlaywrightSource(sourcePath, source);
+  const diagnostics = parsed.diagnostics.map(item => diagnostic(
+    item.code,
+    item.severity,
+    item.message,
+    sourcePath,
+    positionFromPath(item.path),
+  ));
+  const annotations = parsed.annotations;
   if (!annotations.scenario) {
     diagnostics.push(diagnostic("MISSING_QA_SCENARIO", "ERROR", "Missing @qa-scenario annotation.", sourcePath));
   }
 
-  const blocks = extractTestBlocks(source);
-  let legacy;
-  if (annotations.scenario) {
-    try {
-      legacy = parseDashboardSpecFile(sourcePath, source);
-    } catch (error) {
-      diagnostics.push(diagnostic("UNSUPPORTED_PLAYWRIGHT_SPEC", "ERROR", error.message, sourcePath));
-    }
-  }
+  const blocks = parsed.blocks;
+  const legacy = parsed.scenario;
 
+  const parseFailed = diagnostics.some(item => item.severity === "ERROR");
   const scenarios = legacy
-    ? legacy.tests.map((test, index) => scenarioFromLegacyTest(legacy, test, index, blocks[index], source, sourcePath, revision, diagnostics))
+    ? legacy.tests.map((test, index) => scenarioFromLegacyTest(legacy, test, index, blocks[index], source, sourcePath, revision, diagnostics, parseFailed))
     : [];
 
   const qaIr = {
@@ -76,29 +77,16 @@ export function compilePlaywrightSpec({ source, sourcePath, revision } = {}) {
   });
 }
 
-function scenarioFromLegacyTest(legacy, test, index, block, source, sourcePath, revision, diagnostics) {
+function scenarioFromLegacyTest(legacy, test, index, block, source, sourcePath, revision, diagnostics, parseFailed) {
   const provenance = blockProvenance(source, sourcePath, block, revision);
   const discriminator = `${index}:${block?.index ?? "unknown"}`;
-  const body = block?.body ?? "";
   const executableInteraction = test.liveRunPolicy === "executable-interaction";
-  const parsedInteraction = executableInteraction ? parseExecutableInteraction(body) : undefined;
-  const assertionBody = executableInteraction ? parsedInteraction?.assertionBody ?? "" : body;
-  const expectations = normalizeExpectations(test.expectations ?? [], assertionBody, isReadonly(test.liveRunPolicy) || executableInteraction).map((expectation, expectationIndex) =>
+  const parsedActions = executableInteraction && !parseFailed ? normalizeActions(test.actions ?? []) : [];
+  const expectations = (test.expectations ?? []).map((expectation, expectationIndex) =>
     expectationFromLegacy(legacy, test, discriminator, expectation, expectationIndex, provenance),
   );
-  const interactions = executableInteraction ? parsedInteraction?.clicks : [];
-
-  if (isReadonly(test.liveRunPolicy)) {
-    const assertionCount = countAssertions(body);
-    if (assertionCount === 0 || assertionCount !== expectations.length) {
-      diagnostics.push(diagnostic("UNSUPPORTED_READONLY_ASSERTIONS", "ERROR", `Unsupported readonly assertions found in test: ${test.title}`, sourcePath, positionAt(source, block?.index ?? 0)));
-    }
-  }
-  if (executableInteraction && countAssertions(assertionBody) !== expectations.length) {
-    diagnostics.push(diagnostic("UNSUPPORTED_INTERACTION_ASSERTIONS", "ERROR", `Unsupported interaction assertions found in test: ${test.title}`, sourcePath, positionAt(source, block?.index ?? 0)));
-  }
-  if (executableInteraction && interactions === undefined) {
-    diagnostics.push(diagnostic("UNSUPPORTED_INTERACTION_STEPS", "ERROR", `Unsupported or mixed interaction steps found in test: ${test.title}`, sourcePath, positionAt(source, block?.index ?? 0)));
+  if (executableInteraction && parsedActions === undefined) {
+    diagnostics.push(diagnostic("UNSUPPORTED_INTERACTION_STEPS", "ERROR", `Unsupported interaction action found in test: ${test.title}`, sourcePath, positionAt(source, block?.index ?? 0)));
   } else if (test.stagingMode === "interaction" && !executableInteraction) {
     diagnostics.push(diagnostic("DEFERRED_INTERACTION_STEPS", "WARNING", `Interaction steps are deferred for Playwright execution: ${test.title}`, sourcePath, positionAt(source, block?.index ?? 0)));
   }
@@ -107,20 +95,27 @@ function scenarioFromLegacyTest(legacy, test, index, block, source, sourcePath, 
     id: stableId("scenario", legacy.scenarioId, test.checkId, discriminator),
     title: test.title,
     preconditions: [],
-    steps: stepsFromLegacy(legacy, test, discriminator, expectations, interactions ?? []),
+    steps: stepsFromLegacy(legacy, test, discriminator, expectations, parsedActions ?? []),
     expectations,
     policy: clonePolicy(POLICY_BY_LIVE_RUN[test.liveRunPolicy] ?? blockedPolicy()),
     provenance: [clone(provenance)],
   };
 }
 
-function stepsFromLegacy(legacy, test, discriminator, expectations, interactions) {
+function stepsFromLegacy(legacy, test, discriminator, expectations, actions) {
   const steps = [];
   if (legacy.page) {
     steps.push({ id: stableId("step-navigate", legacy.scenarioId, test.checkId, discriminator), kind: "NAVIGATE", milestoneClass: "REQUIRED_SEMANTIC_MILESTONE", target: { type: "PATH", value: legacy.page } });
   }
-  interactions.forEach((locator, index) => {
-    steps.push({ id: stableId("step-interact", legacy.scenarioId, test.checkId, discriminator, index), kind: "INTERACT", milestoneClass: "REQUIRED_EXACT_ACTION", action: "CLICK", target: semanticTargetFromLocator(locator) });
+  actions.forEach((interaction, index) => {
+    steps.push({
+      id: stableId("step-interact", legacy.scenarioId, test.checkId, discriminator, index),
+      kind: "INTERACT",
+      milestoneClass: "REQUIRED_EXACT_ACTION",
+      action: interaction.action,
+      target: semanticTargetFromLocator(interaction.target),
+      ...(interaction.value !== undefined ? { value: interaction.value } : {}),
+    });
   });
   if (expectations.length > 0) {
     steps.push({ id: stableId("step-observe", legacy.scenarioId, test.checkId, discriminator), kind: "OBSERVE", requests: [{ type: "ELEMENT_OBSERVATION" }, { type: "VISIBLE_TEXT" }] });
@@ -129,68 +124,24 @@ function stepsFromLegacy(legacy, test, discriminator, expectations, interactions
   return steps;
 }
 
-function normalizeExpectations(expectations, body, parseBody) {
-  if (!parseBody) return expectations;
-  const parsed = parseReadOnlyExpectations(body);
-  const roleVisibility = parseRoleVisibilityExpectations(body);
-  if (expectations.length > 0) return [...expectations, ...roleVisibility];
-  if (parsed.length > 0 || roleVisibility.length > 0) return [...parsed, ...roleVisibility];
-  return parseRegexContainTextExpectations(body);
-}
-
-function parseRoleVisibilityExpectations(body) {
-  return [...body.matchAll(/expect\(\s*page\.getByRole\(\s*(["'])([^"'\\]*)\1\s*,\s*\{\s*name\s*:\s*(["'])([^"'\\]*)\3\s*\}\s*\)\s*\)\.toBeVisible\(\s*\)/g)].map((match) => ({
-    type: "visible",
-    locator: { kind: "role", role: match[2], name: match[4] },
-  }));
-}
-
-function parseExecutableInteraction(body) {
-  if (body.includes("/*") || body.includes("*/") || body.includes("`")) return undefined;
-  const clicks = [];
-  const assertions = [];
-  for (const line of body.split("\n").map(item => item.trim()).filter(item => item && !item.startsWith("//"))) {
-    const direct = line.match(/^await\s+page\.(getByTestId|getByText)\(\s*(["'])([^"'\\]*)\2\s*\)\.click\(\s*\)\s*;?$/);
-    if (direct) {
-      clicks.push({ kind: direct[1] === "getByTestId" ? "testId" : "text", value: direct[3] });
-      continue;
-    }
-    const role = line.match(/^await\s+page\.getByRole\(\s*(["'])([^"'\\]*)\1\s*,\s*\{\s*name\s*:\s*(["'])([^"'\\]*)\3\s*\}\s*\)\.click\(\s*\)\s*;?$/);
-    if (role) {
-      clicks.push({ kind: "role", role: role[2], name: role[4] });
-      continue;
-    }
-    if (!isSupportedInteractionAssertion(line)) return undefined;
-    assertions.push(line);
+function normalizeActions(actions) {
+  const result = [];
+  const actionMap = {
+    click: "CLICK",
+    fill: "TYPE",
+    type: "TYPE",
+    pressSequentially: "TYPE",
+    setInputFiles: "UPLOAD",
+    selectOption: "SELECT",
+    press: "PRESS",
+  };
+  for (const action of actions) {
+    const mapped = actionMap[action.type];
+    if (!mapped) return undefined;
+    const value = action.arguments?.[0]?.kind === "literal" ? action.arguments[0].value : undefined;
+    result.push({ action: mapped, target: action.target, ...(value !== undefined ? { value } : {}) });
   }
-  return clicks.length > 0 ? { clicks, assertionBody: assertions.join("\n") } : undefined;
-}
-
-function isSupportedInteractionAssertion(line) {
-  return /^await\s+expect\(\s*page\.(?:getByTestId|getByText)\(\s*(["'])([^"'\\]*)\1\s*\)\s*\)(?:\.not)?\.toBeVisible\(\s*\)\s*;?$/.test(line)
-    || /^await\s+expect\(\s*page\.getByRole\(\s*(["'])([^"'\\]*)\1\s*,\s*\{\s*name\s*:\s*(["'])([^"'\\]*)\3\s*\}\s*\)\s*\)\.toBeVisible\(\s*\)\s*;?$/.test(line)
-    || /^await\s+expect\(\s*page\.(?:getByTestId|getByText)\(\s*(["'])([^"'\\]*)\1\s*\)\s*\)\.toContainText\(\s*(["'])([^"'\\]*)\3\s*\)\s*;?$/.test(line)
-    || /^await\s+expect\(\s*page\.(?:getByTestId|getByText)\(\s*(["'])([^"'\\]*)\1\s*\)\s*\)\.toContainText\(\s*\/((?:\\\/|[^/])+?)\/\s*\)\s*;?$/.test(line);
-}
-
-function parseRegexContainTextExpectations(body) {
-  const found = [];
-  for (const match of body.matchAll(/expect\(\s*([\s\S]*?)\s*\)\.toContainText\(\s*\/((?:\\\/|[^/])+)\//g)) {
-    found.push({
-      type: "containText",
-      locator: parseHintLocator(match[1]),
-      expected: { kind: "regex", pattern: match[2].replace(/\\\//g, "/") },
-    });
-  }
-  return found;
-}
-
-function parseHintLocator(expression) {
-  const testId = expression.match(/getByTestId\(\s*["'`]([^"'`]+)["'`]\s*\)/);
-  if (testId) return { kind: "testId", value: testId[1] };
-  const text = expression.match(/getByText\(\s*["'`]([^"'`]+)["'`]\s*\)/);
-  if (text) return { kind: "text", value: text[1] };
-  return { kind: "locator", value: expression.trim() };
+  return result;
 }
 
 function expectationFromLegacy(legacy, test, discriminator, expectation, index, provenance) {
@@ -207,7 +158,11 @@ function expectationFromLegacy(legacy, test, discriminator, expectation, index, 
 function expectationKind(expectation) {
   if (expectation.type === "notVisible") return "NOT_VISIBLE";
   if (expectation.type === "visible") return "VISIBLE";
-  return "CONTAINS_TEXT";
+  if (expectation.type === "containText") return "CONTAINS_TEXT";
+  if (expectation.type === "url") return expectation.expected?.kind === "regex" ? "URL_MATCH" : "URL";
+  if (expectation.type === "accessibleName") return "NAME";
+  if (["attribute", "cSS", "id", "jSProperty"].includes(expectation.type)) return "ATTRIBUTE";
+  return "VISIBLE_TEXT";
 }
 
 function semanticTargetFromLocator(locator = {}) {
@@ -223,32 +178,30 @@ function semanticTargetFromLocator(locator = {}) {
     role: String(locator.role ?? locator.value),
     accessibleName: { kind: "literal", value: String(locator.name ?? locator.value ?? "") },
   };
+  if (locator.kind === "chain") {
+    const operations = locator.operations ?? [];
+    const lastSemantic = [...operations].reverse().find(operation => ["getByRole", "getByTestId", "getByText"].includes(operation.method));
+    if (lastSemantic) {
+      const [first, options] = lastSemantic.arguments ?? [];
+      if (lastSemantic.method === "getByTestId") return semanticTargetFromLocator({ kind: "testId", value: first?.value });
+      if (lastSemantic.method === "getByText") return semanticTargetFromLocator({ kind: "text", value: first?.value });
+      return semanticTargetFromLocator({ kind: "role", role: first?.value, name: options?.value?.name?.value });
+    }
+    return semanticTargetFromLocator(locator.root);
+  }
   return { ...base, text: { kind: "literal", value: String(locator.value ?? "document") } };
-}
-
-function countAssertions(body) {
-  return (body.match(/\bexpect\s*\(/g) ?? []).length;
 }
 
 function matchValue(expected = {}) {
   if (expected.kind === "literal") return { kind: "literal", value: expected.value };
   if (expected.kind === "regex") return { kind: "regex", value: expected.pattern };
+  if (expected.kind === "array") return { kind: "literal", value: expected.value };
   return undefined;
 }
 
-function detectUnsupportedSyntax(source, sourcePath) {
-  const diagnostics = [];
-  for (const match of source.matchAll(/\btest\.(skip|only|fixme)\s*\(/g)) {
-    diagnostics.push(diagnostic("UNSUPPORTED_TEST_MODIFIER", "ERROR", "test.skip/only/fixme is not compiled to QA IR.", sourcePath, positionAt(source, match.index)));
-  }
-
-  for (const match of source.matchAll(/\btest\s*\(/g)) {
-    const header = source.slice(match.index, match.index + 240);
-    if (!/test\s*\(\s*["'`][\s\S]*?["'`]\s*,\s*async\s*\(\s*\{[^}]*\}\s*\)\s*=>\s*\{/.test(header)) {
-      diagnostics.push(diagnostic("UNSUPPORTED_TEST_CALLBACK", "ERROR", "Only async Playwright callbacks with a destructured fixture parameter are compiled.", sourcePath, positionAt(source, match.index)));
-    }
-  }
-  return diagnostics;
+function positionFromPath(path) {
+  const match = String(path ?? "").match(/:(\d+):(\d+)$/);
+  return match ? { line: Number(match[1]), column: Number(match[2]) } : undefined;
 }
 
 function diagnostic(code, severity, message, sourcePath, position) {
@@ -329,10 +282,6 @@ function clonePolicy(policy) {
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
-}
-
-function isReadonly(liveRunPolicy) {
-  return liveRunPolicy === "executable-readonly" || liveRunPolicy === "judgment-mock-api";
 }
 
 function stableId(...parts) {

@@ -22,7 +22,7 @@ export function parsePlaywrightSpecs({ specDir, page } = {}) {
     scenarios: page
       ? parsed.scenarios.filter(scenario => scenario.page === page || scenario.scenarioId === page)
       : parsed.scenarios,
-    provenance: { parser: "legacy-regex", parserVersion: "0.1.0" },
+    provenance: { parser: "typescript-ast", parserVersion: "0.2.0" },
   };
 }
 

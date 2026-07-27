@@ -37,10 +37,10 @@ describe("compilePlaywrightSpec", () => {
       path: "dashboard.spec.ts",
       range: {
         start: { line: 4, column: 1, offset: source.indexOf("test(") },
-        end: { line: 6, column: 2, offset: source.indexOf("});") + 1 },
+        end: { line: 6, column: 3, offset: source.indexOf("});") + 2 },
       },
       adapter: { name: "adapter-playwright", version: "0.2.0" },
-      contentHash: canonicalHash(source.slice(source.indexOf("test("), source.indexOf("});") + 1)),
+      contentHash: canonicalHash(source.slice(source.indexOf("test("), source.indexOf("});") + 2)),
       revision: "abc123",
     });
     expect(result.qaIr.suites[0].scenarios[0].expectations[0].provenance).toEqual([provenance]);
@@ -113,24 +113,26 @@ describe("compilePlaywrightSpec", () => {
     expect(policies.skip).toMatchObject({ navigation: "BLOCKED", readDom: false, click: "NONE" });
   });
 
-  it("diagnoses dropped or unsupported blocks as failed compiles", () => {
-    const unsupported = `// @qa-scenario: SKIPPED\n// @qa-live-policy: readonly\ntest.skip("skipped", async ({ page }) => {\n  await expect(page.getByText("A")).toContainText("A");\n});\ntest("plain callback", ({ page }) => {\n});\n`;
+  it("imports modifiers and callback variants without dropping tests", () => {
+    const unsupported = `// @qa-scenario: SKIPPED\n// @qa-live-policy: readonly\ntest.skip("skipped", async ({ page }) => {\n  await expect(page.getByText("A")).toContainText("A");\n});\n// @qa-live-policy: readonly\ntest("plain callback", ({ page }) => {\n  expect(page.getByText("B")).toBeVisible();\n});\n`;
     const result = compilePlaywrightSpec({ source: unsupported, sourcePath: "unsupported.spec.ts" });
 
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics.map(item => item.code)).toEqual(["UNSUPPORTED_TEST_MODIFIER", "UNSUPPORTED_TEST_CALLBACK"]);
-    expect(result.qaIr.suites[0].scenarios).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.qaIr.suites[0].scenarios).toHaveLength(2);
+    expect(result.qaIr.suites[0].scenarios[0].policy.navigation).toBe("BLOCKED");
+    expect(result.qaIr.suites[0].scenarios[1].expectations).toHaveLength(1);
   });
 
-  it("fails missing scenario and unsupported readonly assertions", () => {
+  it("fails missing scenario and supports locator count assertions", () => {
     const missingScenario = `// @qa-live-policy: readonly\ntest("missing", async ({ page }) => {\n  await expect(page.getByText("A")).toContainText("A");\n});\n`;
     expect(compilePlaywrightSpec({ source: missingScenario, sourcePath: "missing.spec.ts" })).toMatchObject({ ok: false });
 
     const unsupportedAssertion = `// @qa-scenario: BAD\n// @qa-live-policy: readonly\ntest("bad", async ({ page }) => {\n  await expect(page.getByText("A")).toBeVisible();\n  await expect(page.locator("h1")).toHaveCount(1);\n});\n`;
     const result = compilePlaywrightSpec({ source: unsupportedAssertion, sourcePath: "bad.spec.ts" });
-    expect(result.qaIr.suites[0].scenarios[0].expectations).toHaveLength(1);
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics.map(item => item.code)).toContain("UNSUPPORTED_READONLY_ASSERTIONS");
+    expect(result.qaIr.suites[0].scenarios[0].expectations).toHaveLength(2);
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toEqual([]);
   });
 
   it("compiles static semantic clicks without using Playwright selectors as runtime authority", () => {
@@ -161,16 +163,16 @@ describe("compilePlaywrightSpec", () => {
     }]);
   });
 
-  it("fails executable interactions atomically when any action is unsupported", () => {
+  it("compiles locator, fill, and count patterns while rejecting opaque helpers atomically", () => {
     const interaction = `// @qa-scenario: MIXED\n// @qa-live-policy: safe-interaction\ntest("mixed", async ({ page }) => {\n  // await page.getByTestId("comment-only").click();\n  await page.getByTestId("menu").click();\n  await page.locator(".unsafe").click();\n  await page.getByTestId("name").fill("value");\n  await expect(page.locator(".result")).toHaveCount(1);\n});\n`;
     const result = compilePlaywrightSpec({ source: interaction, sourcePath: "mixed.spec.ts" });
 
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics).toMatchObject([{ code: "UNSUPPORTED_INTERACTION_STEPS", severity: "ERROR" }]);
-    expect(result.qaIr.suites[0].scenarios[0].steps.some(step => step.kind === "INTERACT")).toBe(false);
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.qaIr.suites[0].scenarios[0].steps.filter(step => step.kind === "INTERACT")).toHaveLength(3);
+    expect(result.qaIr.suites[0].scenarios[0].expectations).toHaveLength(1);
 
     for (const hidden of [
-      `/* await page.getByTestId("commented").click(); */`,
       `if (false) {\n    await page.getByTestId("conditional").click();\n  }`,
       `await replayHelper(page);\n  await page.getByTestId("after-helper").click();`,
       `await page.getByTestId("before-helper").click();\n  await expect(page.getByText("Ready")).toBeVisible(); await replayHelper(page);`,

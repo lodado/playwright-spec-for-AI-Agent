@@ -23,7 +23,7 @@
 ---
 
 > [!NOTE]
-> This adapter preserves the legacy annotation parser and live-policy semantics. It converts Playwright intent into `qa-ir/0.1` and `study-spec/0.1`; it does not launch browsers or weaken unsafe policies.
+> This adapter preserves the legacy annotation and live-policy contracts while using the shared TypeScript AST parser. It converts Playwright intent into `qa-ir/0.1` and `study-spec/0.1`; it does not launch browsers or weaken unsafe policies.
 
 ```text
 *.spec.ts annotations → PlaywrightScenarioIR → StudySpec
@@ -201,6 +201,6 @@ pnpm --filter playwright-spec-adapter build
 
 ## Limits
 
-- The canonical parser is still `legacy-regex`; TypeScript AST parsing is not implemented here.
+- Arbitrary imported helper bodies and runtime-generated parameterized tests remain manual-review diagnostics rather than being executed during parsing.
 - Imported oracles are deterministic only when expectations can be mapped from source.
 - Fixture semantics are preserved as intent; the adapter does not upload files or execute tests.

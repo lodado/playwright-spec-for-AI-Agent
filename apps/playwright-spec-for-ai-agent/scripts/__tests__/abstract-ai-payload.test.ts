@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildGwtPromptSpec } from "../abstract-ai-payload.mjs";
 
 describe("buildGwtPromptSpec", () => {
-  it("includes only qaLivePolicy annotation per test", () => {
+  it("includes compact actions and expectations with the declared policy", () => {
     const compact = buildGwtPromptSpec({
       scenarios: [
         {
@@ -19,6 +19,8 @@ describe("buildGwtPromptSpec", () => {
               livePolicyAnnotation: "mock-judgment",
               liveRunPolicy: "judgment-mock-api",
               stagingMode: "read-only",
+              actions: [{ type: "click", target: { kind: "text", value: "Details" }, arguments: [] }],
+              expectations: [{ type: "visible", locator: { kind: "role", role: "dialog", name: "Details" } }],
             },
           ],
         },
@@ -33,6 +35,8 @@ describe("buildGwtPromptSpec", () => {
       title: "credit zero",
       checkId: "to-be-0",
       qaLivePolicy: "mock-judgment",
+      actions: [{ type: "click", target: { kind: "text", value: "Details" }, arguments: [] }],
+      expectations: [{ type: "visible", locator: { kind: "role", role: "dialog", name: "Details" } }],
     });
     expect(compact.scenarios[0].tests[0]).not.toHaveProperty("liveRunPolicy");
     expect(compact.scenarios[0]).not.toHaveProperty("fileAnnotations");

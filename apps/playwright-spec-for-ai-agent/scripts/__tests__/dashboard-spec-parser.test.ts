@@ -14,9 +14,126 @@ import {
   parseFixtureFromCommentLine,
   parseFixturesBeforeIndex,
   parseLivePolicyBeforeIndex,
+  parsePlaywrightSource,
   resolveTestFixtures,
   resolveTestLivePolicy,
 } from "../dashboard-spec-parser.mjs";
+
+describe("AST Playwright parsing", () => {
+  it("parses callback variants and ignores braces inside strings and templates", () => {
+    const source = `// @qa-scenario: AST
+// @qa-live-policy: readonly
+test("arrow", async ({ page }) => {
+  const selector = '[data-json="{\\"open\\":true}"]';
+  await expect(page.locator(selector)).toHaveCount(1);
+});
+// @qa-live-policy: readonly
+test.only("function callback", async function ({ page }) {
+  await expect(page.getByRole("heading", { name: "Pricing" })).toHaveText(\`Plans {today}\`);
+});`;
+
+    const result = parsePlaywrightSource("ast.spec.ts", source);
+
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: "FOCUSED_TEST", severity: "WARNING" }),
+    ]);
+    expect(result.scenario?.tests).toMatchObject([
+      {
+        title: "arrow",
+        expectations: [{ type: "count", expected: { kind: "literal", value: 1 } }],
+      },
+      {
+        title: "function callback",
+        modifier: "only",
+        expectations: [{ type: "text", expected: { kind: "literal", value: "Plans {today}" } }],
+      },
+    ]);
+  });
+
+  it("parses nested locators, actions, negation, regex, and arrays", () => {
+    const source = `// @qa-scenario: INTERACTION
+// @qa-live-policy: safe-interaction
+test("edits a plan", async ({ page }) => {
+  const card = page.getByRole("listitem").filter({ hasText: "Pro" }).first();
+  await card.getByRole("button", { name: "Edit" }).click();
+  await page.getByLabel("Plan name").fill("Enterprise");
+  await expect(card).not.toBeHidden();
+  await expect(page.getByTestId("features")).toHaveText(["SSO", /Audit/]);
+});`;
+
+    const result = parsePlaywrightSource("interaction.spec.ts", source);
+    const test = result.scenario?.tests[0];
+
+    expect(result.diagnostics).toEqual([]);
+    expect(test?.actions.map(action => action.type)).toEqual(["click", "fill"]);
+    expect(test?.actions[0].target).toMatchObject({ kind: "chain" });
+    expect(test?.expectations).toMatchObject([
+      { type: "visible", negated: true },
+      {
+        type: "text",
+        expected: {
+          kind: "array",
+          value: [
+            { kind: "literal", value: "SSO" },
+            { kind: "regex", pattern: "Audit", flags: "" },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("extracts skipped tests and reports unsupported matchers instead of dropping them", () => {
+    const source = `// @qa-scenario: DIAGNOSTICS
+// @qa-live-policy: readonly
+test.skip("temporarily skipped", async ({ page }) => {
+  await expect(page.getByText("Soon")).toBeVisible();
+});
+// @qa-live-policy: readonly
+test("custom assertion", async ({ page }) => {
+  await expect(page.getByText("A")).toBeVisible();
+  await expect(page.getByText("B")).toUseCustomMatcher();
+});`;
+
+    const result = parsePlaywrightSource("diagnostics.spec.ts", source);
+
+    expect(result.scenario?.tests[0]).toMatchObject({
+      title: "temporarily skipped",
+      modifier: "skip",
+      liveRunPolicy: "blocked-live-skip",
+    });
+    expect(result.scenario?.tests[1].expectations).toHaveLength(1);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: "UNSUPPORTED_MATCHER", severity: "ERROR" }),
+    ]);
+  });
+
+  it("resolves aliased imports, describe modifiers, scenario labels, and dynamic-value diagnostics", () => {
+    const source = `// @qa-scenario: ACCOUNT
+// @qa-scenario-label: "Account settings"
+import { test as pwTest, expect as assert } from "@playwright/test";
+// @qa-live-policy: readonly
+pwTest.describe.skip("disabled suite", () => {
+  pwTest("uses an alias", async ({ page }) => {
+    const expected = loadExpectedName();
+    await assert(page.getByLabel("Name")).toHaveValue(expected);
+  });
+});`;
+
+    const result = parsePlaywrightSource("alias.spec.ts", source);
+
+    expect(result.scenario).toMatchObject({
+      label: "Account settings",
+      tests: [{
+        title: "uses an alias",
+        modifier: "skip",
+        liveRunPolicy: "blocked-live-skip",
+      }],
+    });
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: "DYNAMIC_EXPECTED_VALUE", severity: "ERROR" }),
+    ]);
+  });
+});
 
 describe("parseAnnotations", () => {
   it("extracts all three annotations", () => {
@@ -47,6 +164,12 @@ describe("parseAnnotations", () => {
       scenario: null,
       liveSkip: false,
       alwaysRun: false,
+    });
+  });
+
+  it("preserves multi-word scenario intent", () => {
+    expect(parseAnnotations("// @qa-scenario: A visitor understands pricing\n")).toMatchObject({
+      scenario: "A visitor understands pricing",
     });
   });
 });
