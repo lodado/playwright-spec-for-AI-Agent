@@ -231,6 +231,30 @@ npx qa-native report \
 
 The report pins `HEAD` to an exact Git commit before locating likely files and line ranges. If a run contains multiple completed judgment sets, select one result explicitly with `--judgment=judgments/<set>/judge-result-<id>.json`.
 
+Generate a private, reviewable patch proposal without applying it:
+
+```bash
+npx qa-native propose-patch \
+  --run-dir=.qa/runs/dashboard-1 \
+  --repository-root=. \
+  --revision=HEAD
+```
+
+Hermes receives only the bounded Diagnosis, Code Context, and Repair Recommendation and returns structured `REPLACE_RANGE` or `CREATE_FILE` operations. The runtime revalidates every reference against the pinned commit, rejects stale hashes, ambiguous candidates, symlinks, binary or sensitive paths, overlapping ranges, and size-limit violations, then writes `patch-proposal/0.1` under the private run directory. This command does not edit files, create a branch or worktree, run verification, publish GitHub content, or claim the failure is fixed.
+
+Projects may narrow patch eligibility with `remediation.patch` in `playwright-spec-for-ai-agent.config.mjs`: `minimumConfidence`, `maxFiles`, `maxChangedLines`, `allowedPaths`, and `deniedPaths`. These settings cannot override the built-in sensitive-path deny rules.
+
+Apply the saved proposal only in its private git worktree and run the trusted repository checks:
+
+```bash
+npx qa-native verify-patch \
+  --run-dir=.qa/runs/dashboard-1 \
+  --repository-root=. \
+  --revision=HEAD
+```
+
+`remediation.verification.checks` must define `format`, `lint`, `typecheck`, `unit`, and `playwright` commands. Commands are executed without a shell, with bounded per-command/total time and output, an allowlisted environment, and network isolation. A missing, failed, timed-out, output-limited, or patch-mutating check never becomes an implicit pass. The patch remains under `.qa/worktrees/`; the caller's workspace and index are not modified.
+
 Publish one failed or manual-review result as an evidence-backed GitHub Issue after authenticating `gh`:
 
 ```bash
@@ -244,6 +268,25 @@ npx qa-native publish-issue \
 ```
 
 Before publication, the runtime verifies the pinned commit and Code Context file hashes against the target repository. A credential-safe canonical fingerprint excludes run IDs, model wording, query strings, evidence IDs, and raw path segments. The publisher scans a bounded set of open Issues and Draft PRs for the exact hidden marker: no match creates an Issue, one match appends an HMAC-authenticated occurrence comment, the same source run is a no-op, and multiple matches fail as ambiguous without selecting one. `QA_NATIVE_PUBLICATION_KEY` authenticates managed publication state and must remain stable across runs; it is removed before invoking `gh` and is never persisted. The command rejects passing and ambiguous multi-failure inputs, publishes no source snippets or credentials, and stores only the bounded publication result under the private run directory. It cannot create branches, patches, pull requests, or merges.
+
+Run or resume the complete remediation state machine and choose the safe publication automatically:
+
+```bash
+npx qa-native remediate \
+  --run-dir=.qa/runs/dashboard-1 \
+  --repository-root=. \
+  --repository=owner/repository \
+  --publish=auto
+
+# Resume authenticated saved stages and publication intent.
+npx qa-native publish \
+  --run-dir=.qa/runs/dashboard-1 \
+  --repository-root=. \
+  --repository=owner/repository \
+  --publish=auto
+```
+
+The pipeline persists HMAC-authenticated `proposal`, `application`, `verification`, `comparison`, `integrity`, `review`, `decision`, and `publication` artifacts under `.qa/runs/<id>/remediation/<proposal-id>/`. A verified eligible patch must pass all five deterministic checks, improve the original authenticated live scenario without new failures, preserve expectation strength, and receive approval from an invocation separate from the patch generator. Only then can `--publish=auto` create or update a `qa/fix-*` **Draft PR**. Stale hashes, unsafe paths, failed checks, unchanged/regressed/inconclusive evidence, integrity findings, reviewer uncertainty, and ambiguous publication state fall back to an evidence-backed Issue or manual review. The publisher revalidates the exact diff before every push and has no merge or auto-merge path.
 
 ## Recommended workflow
 

@@ -22,6 +22,13 @@ export const SEMANTIC_JUDGE_DECISION_VERSION = "semantic-judge-decision/0.1";
 export const FAILURE_DIAGNOSIS_VERSION = "failure-diagnosis/0.1";
 export const CODE_CONTEXT_VERSION = "code-context/0.1";
 export const REPAIR_RECOMMENDATION_VERSION = "repair-recommendation/0.1";
+export const PATCH_PROPOSAL_VERSION = "patch-proposal/0.1";
+export const PATCH_APPLICATION_RESULT_VERSION = "patch-application-result/0.1";
+export const VERIFICATION_RESULT_VERSION = "verification-result/0.1";
+export const EVIDENCE_COMPARISON_VERSION = "evidence-comparison/0.1";
+export const EXPECTATION_INTEGRITY_RESULT_VERSION = "expectation-integrity-result/0.1";
+export const INDEPENDENT_REMEDIATION_REVIEW_VERSION = "independent-remediation-review/0.1";
+export const PUBLICATION_DECISION_VERSION = "publication-decision/0.1";
 export const GITHUB_PUBLICATION_RESULT_VERSION = "github-publication-result/0.2";
 
 export const VERDICTS = Object.freeze(["PASS", "FAIL", "SKIP", "MANUAL_REVIEW"]);
@@ -50,7 +57,7 @@ export const RUNTIME_ERROR_CODES = Object.freeze([
   "UNKNOWN_RUNTIME_ERROR",
 ]);
 
-const runtimeStages = ["compile", "plan", "execute", "evidence", "evaluate", "judge", "diagnose", "report"];
+const runtimeStages = ["compile", "plan", "execute", "evidence", "evaluate", "judge", "diagnose", "report", "propose-patch", "apply-patch", "verify-patch"];
 const failureOrigins = ["PRODUCT_CODE", "TEST_CODE", "QA_SPEC", "API_CONTRACT", "FIXTURE_OR_MOCK", "TEST_DATA", "ENVIRONMENT", "THIRD_PARTY", "UNKNOWN"];
 const codeMatchReasons = ["TEST_ID_MATCH", "VISIBLE_TEXT_MATCH", "ROUTE_MATCH", "NETWORK_ENDPOINT_MATCH", "STACK_TRACE_MATCH", "RECENTLY_CHANGED", "DEPENDENCY_MATCH"];
 const payloadHashNoise = new Set([
@@ -92,6 +99,13 @@ const schemas = {
   FailureDiagnosis: validateFailureDiagnosis,
   CodeContextBundle: validateCodeContextBundle,
   RepairRecommendation: validateRepairRecommendation,
+  PatchProposal: validatePatchProposal,
+  PatchApplicationResult: validatePatchApplicationResult,
+  VerificationResult: validateVerificationResult,
+  EvidenceComparison: validateEvidenceComparison,
+  ExpectationIntegrityResult: validateExpectationIntegrityResult,
+  IndependentRemediationReview: validateIndependentRemediationReview,
+  PublicationDecision: validatePublicationDecision,
   GitHubPublicationResult: validateGitHubPublicationResult,
 };
 
@@ -1002,6 +1016,428 @@ function validateRepairRecommendation(value, path, context = {}) {
   }
 }
 
+function validatePatchProposal(value, path, context = {}) {
+  const contract = "PatchProposal";
+  object(value, path, contract);
+  allowedKeys(value, ["schemaVersion", "proposalId", "diagnosisId", "codeContextBundleId", "repairRecommendationId", "baseRevision", "intent", "expectedEffect", "risks", "files", "operations", "verificationPlan"], path, contract);
+  exact(value.schemaVersion, PATCH_PROPOSAL_VERSION, `${path}.schemaVersion`, contract);
+  for (const key of ["proposalId", "diagnosisId", "codeContextBundleId", "repairRecommendationId"]) boundedString(value[key], 512, `${path}.${key}`, contract);
+  boundedString(value.baseRevision, 128, `${path}.baseRevision`, contract);
+  boundedString(value.intent, 4_096, `${path}.intent`, contract);
+  boundedString(value.expectedEffect, 4_096, `${path}.expectedEffect`, contract);
+  uniqueStringArray(value.risks, `${path}.risks`, contract);
+  if (value.risks.length > 20) fail(contract, `${path}.risks`, "must contain at most 20 risks");
+  value.risks.forEach((risk, index) => boundedString(risk, 2_000, `${path}.risks[${index}]`, contract));
+
+  array(value.files, `${path}.files`, contract);
+  if (value.files.length === 0 || value.files.length > 10) fail(contract, `${path}.files`, "must contain 1 to 10 files");
+  value.files.forEach((file, index) => {
+    const filePath = `${path}.files[${index}]`;
+    object(file, filePath, contract);
+    allowedKeys(file, ["path", "action", "originalContentHash"], filePath, contract);
+    repositoryPath(file.path, `${filePath}.path`, contract);
+    oneOf(file.action, ["MODIFY", "CREATE"], `${filePath}.action`, contract);
+    if (file.action === "MODIFY") sha256Hash(file.originalContentHash, `${filePath}.originalContentHash`, contract);
+    else if (file.originalContentHash !== undefined) fail(contract, `${filePath}.originalContentHash`, "is not allowed for a created file");
+  });
+  const filePaths = value.files.map((file) => file.path);
+  if (new Set(filePaths).size !== filePaths.length) fail(contract, `${path}.files`, "must contain unique paths");
+
+  array(value.operations, `${path}.operations`, contract);
+  if (value.operations.length === 0 || value.operations.length > 20) fail(contract, `${path}.operations`, "must contain 1 to 20 operations");
+  value.operations.forEach((operation, index) => {
+    const operationPath = `${path}.operations[${index}]`;
+    object(operation, operationPath, contract);
+    if (operation.type === "REPLACE_RANGE") {
+      allowedKeys(operation, ["type", "path", "startLine", "endLine", "replacement"], operationPath, contract);
+      repositoryPath(operation.path, `${operationPath}.path`, contract);
+      boundedInteger(operation.startLine, 1, 1_000_000, `${operationPath}.startLine`, contract);
+      boundedInteger(operation.endLine, operation.startLine, 1_000_000, `${operationPath}.endLine`, contract);
+      utf8Text(operation.replacement, 131_072, true, `${operationPath}.replacement`, contract);
+    } else if (operation.type === "CREATE_FILE") {
+      allowedKeys(operation, ["type", "path", "content"], operationPath, contract);
+      repositoryPath(operation.path, `${operationPath}.path`, contract);
+      utf8Text(operation.content, 131_072, false, `${operationPath}.content`, contract);
+    } else {
+      fail(contract, `${operationPath}.type`, "must be one of: REPLACE_RANGE, CREATE_FILE");
+    }
+  });
+  for (const operation of value.operations) {
+    const file = value.files.find((candidate) => candidate.path === operation.path);
+    if (!file) fail(contract, `${path}.operations`, `unknown file ${operation.path}`);
+    if ((operation.type === "REPLACE_RANGE") !== (file.action === "MODIFY")) fail(contract, `${path}.operations`, `operation does not match file action for ${operation.path}`);
+  }
+  for (const file of value.files) if (!value.operations.some((operation) => operation.path === file.path)) fail(contract, `${path}.operations`, `missing operation for ${file.path}`);
+  for (const file of value.files.filter((candidate) => candidate.action === "CREATE")) {
+    if (value.operations.filter((operation) => operation.path === file.path).length !== 1) fail(contract, `${path}.operations`, `created file ${file.path} requires exactly one operation`);
+  }
+  const replacements = value.operations.filter((operation) => operation.type === "REPLACE_RANGE");
+  for (let index = 0; index < replacements.length; index += 1) {
+    for (let next = index + 1; next < replacements.length; next += 1) {
+      if (replacements[index].path === replacements[next].path && replacements[index].startLine <= replacements[next].endLine && replacements[next].startLine <= replacements[index].endLine) {
+        fail(contract, `${path}.operations`, `replacement ranges overlap for ${replacements[index].path}`);
+      }
+    }
+  }
+
+  array(value.verificationPlan, `${path}.verificationPlan`, contract);
+  if (value.verificationPlan.length === 0 || value.verificationPlan.length > 20) fail(contract, `${path}.verificationPlan`, "must contain 1 to 20 commands");
+  value.verificationPlan.forEach((step, index) => {
+    const stepPath = `${path}.verificationPlan[${index}]`;
+    object(step, stepPath, contract);
+    allowedKeys(step, ["command", "purpose"], stepPath, contract);
+    boundedString(step.command, 1_000, `${stepPath}.command`, contract);
+    boundedString(step.purpose, 2_000, `${stepPath}.purpose`, contract);
+  });
+
+  if (context.diagnosis) {
+    validateFailureDiagnosis(context.diagnosis, "$.diagnosis");
+    exact(value.diagnosisId, context.diagnosis.diagnosisId, `${path}.diagnosisId`, contract);
+  }
+  if (context.codeContext) {
+    validateCodeContextBundle(context.codeContext, "$.codeContext");
+    exact(value.codeContextBundleId, context.codeContext.bundleId, `${path}.codeContextBundleId`, contract);
+    exact(value.baseRevision, context.codeContext.revision, `${path}.baseRevision`, contract);
+    if (context.diagnosis) exact(context.codeContext.failureDiagnosisId, context.diagnosis.diagnosisId, "$.codeContext.failureDiagnosisId", contract);
+    for (const file of value.files.filter((candidate) => candidate.action === "MODIFY")) {
+      const candidate = context.codeContext.candidates.find((item) => item.path === file.path);
+      const snippet = context.codeContext.snippets.find((item) => item.path === file.path);
+      if (!candidate || !snippet) fail(contract, `${path}.files`, `modified file ${file.path} is not bound to CodeContext`);
+      exact(file.originalContentHash, snippet.contentHash, `${path}.files.${file.path}.originalContentHash`, contract);
+      for (const operation of value.operations.filter((item) => item.path === file.path)) {
+        const startLine = Math.max(candidate.range?.start.line ?? 1, snippet.range.start.line);
+        const endLine = Math.min(candidate.range?.end.line ?? Number.MAX_SAFE_INTEGER, snippet.range.end.line);
+        if (operation.startLine < startLine || operation.endLine > endLine) fail(contract, `${path}.operations`, `replacement range for ${file.path} is outside CodeContext`);
+      }
+    }
+  }
+  if (context.recommendation) {
+    validateRepairRecommendation(context.recommendation, "$.recommendation", { diagnosis: context.diagnosis, codeContext: context.codeContext });
+    exact(value.repairRecommendationId, context.recommendation.recommendationId, `${path}.repairRecommendationId`, contract);
+    exact(value.baseRevision, context.recommendation.repositoryRevision, `${path}.baseRevision`, contract);
+    if (canonicalHash(value.verificationPlan) !== canonicalHash(context.recommendation.verificationPlan)) fail(contract, `${path}.verificationPlan`, "must use the trusted RepairRecommendation verification plan");
+  }
+}
+
+function validatePatchApplicationResult(value, path, context = {}) {
+  const contract = "PatchApplicationResult";
+  object(value, path, contract);
+  allowedKeys(value, ["schemaVersion", "applicationId", "proposalId", "baseRevision", "status", "worktree", "appliedFiles", "diff", "reason"], path, contract);
+  exact(value.schemaVersion, PATCH_APPLICATION_RESULT_VERSION, `${path}.schemaVersion`, contract);
+  for (const key of ["applicationId", "proposalId"]) boundedString(value[key], 512, `${path}.${key}`, contract);
+  boundedString(value.baseRevision, 128, `${path}.baseRevision`, contract);
+  oneOf(value.status, ["APPLIED", "PATCH_STALE", "REJECTED", "ERROR"], `${path}.status`, contract);
+  if (value.reason !== undefined) boundedString(value.reason, 2_000, `${path}.reason`, contract);
+
+  if (value.worktree !== undefined) {
+    object(value.worktree, `${path}.worktree`, contract);
+    allowedKeys(value.worktree, ["worktreeId", "path", "branch", "revision"], `${path}.worktree`, contract);
+    boundedString(value.worktree.worktreeId, 128, `${path}.worktree.worktreeId`, contract);
+    repositoryPath(value.worktree.path, `${path}.worktree.path`, contract);
+    if (!value.worktree.path.startsWith(".qa/worktrees/")) fail(contract, `${path}.worktree.path`, "must be private .qa worktree storage");
+    boundedString(value.worktree.branch, 128, `${path}.worktree.branch`, contract);
+    if (!/^qa\/fix-[a-z0-9-]+$/.test(value.worktree.branch)) fail(contract, `${path}.worktree.branch`, "must be a safe qa/fix branch");
+    exact(value.worktree.revision, value.baseRevision, `${path}.worktree.revision`, contract);
+  }
+
+  array(value.appliedFiles, `${path}.appliedFiles`, contract);
+  if (value.appliedFiles.length > 10) fail(contract, `${path}.appliedFiles`, "must contain at most 10 files");
+  value.appliedFiles.forEach((file, index) => {
+    const filePath = `${path}.appliedFiles[${index}]`;
+    object(file, filePath, contract);
+    allowedKeys(file, ["path", "action", "beforeHash", "afterHash"], filePath, contract);
+    repositoryPath(file.path, `${filePath}.path`, contract);
+    oneOf(file.action, ["MODIFY", "CREATE"], `${filePath}.action`, contract);
+    if (file.action === "MODIFY") sha256Hash(file.beforeHash, `${filePath}.beforeHash`, contract);
+    else if (file.beforeHash !== undefined) fail(contract, `${filePath}.beforeHash`, "is not allowed for a created file");
+    sha256Hash(file.afterHash, `${filePath}.afterHash`, contract);
+  });
+  const appliedPaths = value.appliedFiles.map((file) => file.path);
+  if (new Set(appliedPaths).size !== appliedPaths.length) fail(contract, `${path}.appliedFiles`, "must contain unique paths");
+
+  object(value.diff, `${path}.diff`, contract);
+  allowedKeys(value.diff, ["fileCount", "changedLines", "contentHash"], `${path}.diff`, contract);
+  boundedInteger(value.diff.fileCount, 0, 10, `${path}.diff.fileCount`, contract);
+  boundedInteger(value.diff.changedLines, 0, 10_000, `${path}.diff.changedLines`, contract);
+  sha256Hash(value.diff.contentHash, `${path}.diff.contentHash`, contract);
+  exact(value.diff.fileCount, value.appliedFiles.length, `${path}.diff.fileCount`, contract);
+
+  if (value.status === "APPLIED") {
+    if (value.worktree === undefined || value.appliedFiles.length === 0 || value.reason !== undefined) fail(contract, path, "an applied result requires a retained worktree and files without a failure reason");
+  } else if (value.worktree !== undefined || value.appliedFiles.length !== 0 || value.reason === undefined) {
+    fail(contract, path, "a failed application cannot expose a publishable worktree or files");
+  }
+  if (context.proposal) {
+    validatePatchProposal(context.proposal, "$.proposal");
+    exact(value.proposalId, context.proposal.proposalId, `${path}.proposalId`, contract);
+    exact(value.baseRevision, context.proposal.baseRevision, `${path}.baseRevision`, contract);
+    if (value.status === "APPLIED") {
+      const expectedFiles = [...context.proposal.files].sort((left, right) => left.path.localeCompare(right.path));
+      const actualFiles = [...value.appliedFiles].sort((left, right) => left.path.localeCompare(right.path));
+      if (expectedFiles.length !== actualFiles.length || expectedFiles.some((file, index) => file.path !== actualFiles[index].path || file.action !== actualFiles[index].action)) fail(contract, `${path}.appliedFiles`, "must match the PatchProposal files");
+    }
+  }
+}
+
+function validateVerificationResult(value, path, context = {}) {
+  const contract = "VerificationResult";
+  object(value, path, contract);
+  allowedKeys(value, ["schemaVersion", "verificationId", "proposalId", "applicationId", "worktreeRevision", "diffHash", "status", "checks", "reason"], path, contract);
+  exact(value.schemaVersion, VERIFICATION_RESULT_VERSION, `${path}.schemaVersion`, contract);
+  for (const key of ["verificationId", "proposalId", "applicationId"]) boundedString(value[key], 512, `${path}.${key}`, contract);
+  boundedString(value.worktreeRevision, 128, `${path}.worktreeRevision`, contract);
+  sha256Hash(value.diffHash, `${path}.diffHash`, contract);
+  oneOf(value.status, ["PASS", "FAILED", "MANUAL_REVIEW", "ERROR"], `${path}.status`, contract);
+  if (value.reason !== undefined) boundedString(value.reason, 2_000, `${path}.reason`, contract);
+  array(value.checks, `${path}.checks`, contract);
+  if (value.checks.length === 0 || value.checks.length > 10) fail(contract, `${path}.checks`, "must contain 1 to 10 checks");
+  value.checks.forEach((check, index) => {
+    const checkPath = `${path}.checks[${index}]`;
+    object(check, checkPath, contract);
+    allowedKeys(check, ["name", "required", "status", "exitCode", "signal", "durationMs", "stdoutArtifact", "stderrArtifact", "resourceOutcome"], checkPath, contract);
+    oneOf(check.name, ["format", "lint", "typecheck", "unit", "playwright"], `${checkPath}.name`, contract);
+    bool(check.required, `${checkPath}.required`, contract);
+    oneOf(check.status, ["PASS", "FAIL", "TIMEOUT", "ERROR", "MISSING", "SKIPPED"], `${checkPath}.status`, contract);
+    if (check.exitCode !== undefined) boundedInteger(check.exitCode, 0, 255, `${checkPath}.exitCode`, contract);
+    if (check.signal !== undefined) boundedString(check.signal, 64, `${checkPath}.signal`, contract);
+    boundedInteger(check.durationMs, 0, 3_600_000, `${checkPath}.durationMs`, contract);
+    oneOf(check.resourceOutcome, ["WITHIN_LIMITS", "TIMEOUT", "OUTPUT_LIMIT", "NOT_RUN"], `${checkPath}.resourceOutcome`, contract);
+    for (const key of ["stdoutArtifact", "stderrArtifact"]) {
+      const artifact = check[key];
+      if (artifact === undefined) continue;
+      object(artifact, `${checkPath}.${key}`, contract);
+      allowedKeys(artifact, ["artifactId", "contentHash", "size", "truncated"], `${checkPath}.${key}`, contract);
+      boundedString(artifact.artifactId, 128, `${checkPath}.${key}.artifactId`, contract);
+      sha256Hash(artifact.contentHash, `${checkPath}.${key}.contentHash`, contract);
+      boundedInteger(artifact.size, 0, 65_536, `${checkPath}.${key}.size`, contract);
+      bool(artifact.truncated, `${checkPath}.${key}.truncated`, contract);
+    }
+    if (["MISSING", "SKIPPED"].includes(check.status) && (check.exitCode !== undefined || check.signal !== undefined || check.stdoutArtifact !== undefined || check.stderrArtifact !== undefined || check.resourceOutcome !== "NOT_RUN")) fail(contract, checkPath, "a non-run check cannot contain process artifacts");
+  });
+  const checkNames = value.checks.map((check) => check.name);
+  if (new Set(checkNames).size !== checkNames.length) fail(contract, `${path}.checks`, "must contain unique check names");
+  const expectedStatus = value.checks.some((check) => check.required && ["FAIL", "TIMEOUT"].includes(check.status))
+    ? "FAILED"
+    : value.checks.some((check) => check.required && check.status === "ERROR")
+      ? "ERROR"
+      : value.checks.some((check) => check.required && ["MISSING", "SKIPPED"].includes(check.status))
+        ? "MANUAL_REVIEW"
+        : "PASS";
+  exact(value.status, expectedStatus, `${path}.status`, contract);
+  if (value.status === "PASS" && value.reason !== undefined) fail(contract, `${path}.reason`, "is not allowed for a passing result");
+  if (context.proposal) {
+    validatePatchProposal(context.proposal, "$.proposal");
+    exact(value.proposalId, context.proposal.proposalId, `${path}.proposalId`, contract);
+  }
+  if (context.application) {
+    validatePatchApplicationResult(context.application, "$.application", { proposal: context.proposal });
+    exact(context.application.status, "APPLIED", "$.application.status", contract);
+    exact(value.applicationId, context.application.applicationId, `${path}.applicationId`, contract);
+    exact(value.worktreeRevision, context.application.baseRevision, `${path}.worktreeRevision`, contract);
+    exact(value.diffHash, context.application.diff.contentHash, `${path}.diffHash`, contract);
+  }
+}
+
+function validateEvidenceComparison(value, path, context = {}) {
+  const contract = "EvidenceComparison";
+  object(value, path, contract);
+  allowedKeys(value, ["schemaVersion", "comparisonId", "proposalId", "applicationId", "verificationId", "before", "after", "fixedExpectationIds", "newlyFailedExpectationIds", "unchangedFailureIds", "requiredMilestoneIds", "preservedMilestoneIds", "policyChanges", "routeChanges", "conclusion", "inconclusiveReasons"], path, contract);
+  exact(value.schemaVersion, EVIDENCE_COMPARISON_VERSION, `${path}.schemaVersion`, contract);
+  for (const key of ["comparisonId", "proposalId", "applicationId", "verificationId"]) boundedString(value[key], 512, `${path}.${key}`, contract);
+  for (const side of ["before", "after"]) {
+    const sidePath = `${path}.${side}`;
+    object(value[side], sidePath, contract);
+    allowedKeys(value[side], ["runId", "evidenceBundleId", "judgeResultId", "qaIrHash", "authenticated"], sidePath, contract);
+    for (const key of ["runId", "evidenceBundleId", "judgeResultId"]) boundedString(value[side][key], 512, `${sidePath}.${key}`, contract);
+    sha256Hash(value[side].qaIrHash, `${sidePath}.qaIrHash`, contract);
+    bool(value[side].authenticated, `${sidePath}.authenticated`, contract);
+  }
+  for (const key of ["fixedExpectationIds", "newlyFailedExpectationIds", "unchangedFailureIds", "requiredMilestoneIds", "preservedMilestoneIds", "inconclusiveReasons"]) {
+    uniqueStringArray(value[key], `${path}.${key}`, contract);
+    if (value[key].length > 100) fail(contract, `${path}.${key}`, "must contain at most 100 entries");
+    value[key].forEach((item, index) => boundedString(item, key === "inconclusiveReasons" ? 2_000 : 512, `${path}.${key}[${index}]`, contract));
+  }
+  array(value.policyChanges, `${path}.policyChanges`, contract);
+  if (value.policyChanges.length > 20) fail(contract, `${path}.policyChanges`, "must contain at most 20 entries");
+  value.policyChanges.forEach((change, index) => {
+    const changePath = `${path}.policyChanges[${index}]`;
+    object(change, changePath, contract);
+    allowedKeys(change, ["scenarioId", "beforeHash", "afterHash"], changePath, contract);
+    boundedString(change.scenarioId, 512, `${changePath}.scenarioId`, contract);
+    sha256Hash(change.beforeHash, `${changePath}.beforeHash`, contract);
+    sha256Hash(change.afterHash, `${changePath}.afterHash`, contract);
+    if (change.beforeHash === change.afterHash) fail(contract, changePath, "must describe a real policy change");
+  });
+  array(value.routeChanges, `${path}.routeChanges`, contract);
+  if (value.routeChanges.length > 20) fail(contract, `${path}.routeChanges`, "must contain at most 20 entries");
+  value.routeChanges.forEach((change, index) => {
+    const changePath = `${path}.routeChanges[${index}]`;
+    object(change, changePath, contract);
+    allowedKeys(change, ["before", "after"], changePath, contract);
+    boundedString(change.before, 4_096, `${changePath}.before`, contract);
+    boundedString(change.after, 4_096, `${changePath}.after`, contract);
+    if (change.before === change.after) fail(contract, changePath, "must describe a real route change");
+  });
+  oneOf(value.conclusion, ["IMPROVED", "UNCHANGED", "REGRESSED", "INCONCLUSIVE"], `${path}.conclusion`, contract);
+  if ((value.conclusion === "INCONCLUSIVE") !== (value.inconclusiveReasons.length > 0)) fail(contract, `${path}.inconclusiveReasons`, "must exist only for an inconclusive comparison");
+  if (value.conclusion === "IMPROVED" && (value.fixedExpectationIds.length === 0 || value.newlyFailedExpectationIds.length > 0 || !value.after.authenticated || value.preservedMilestoneIds.length !== value.requiredMilestoneIds.length)) fail(contract, path, "an improved comparison must fix an expectation without regressions and preserve required milestones");
+  if (value.conclusion === "REGRESSED" && value.newlyFailedExpectationIds.length === 0) fail(contract, `${path}.newlyFailedExpectationIds`, "a regression requires a newly failed expectation");
+  if (context.proposal) exact(value.proposalId, context.proposal.proposalId, `${path}.proposalId`, contract);
+  if (context.application) exact(value.applicationId, context.application.applicationId, `${path}.applicationId`, contract);
+  if (context.verification) {
+    validateVerificationResult(context.verification, "$.verification", { proposal: context.proposal, application: context.application });
+    exact(value.verificationId, context.verification.verificationId, `${path}.verificationId`, contract);
+  }
+}
+
+function validateExpectationIntegrityResult(value, path, context = {}) {
+  const contract = "ExpectationIntegrityResult";
+  object(value, path, contract);
+  allowedKeys(value, ["schemaVersion", "integrityId", "proposalId", "applicationId", "comparisonId", "weakened", "manualReview", "removedExpectationIds", "modifiedSemanticStrength", "suspiciousRanges", "beforeQaIrHash", "afterQaIrHash", "ruleResults"], path, contract);
+  exact(value.schemaVersion, EXPECTATION_INTEGRITY_RESULT_VERSION, `${path}.schemaVersion`, contract);
+  for (const key of ["integrityId", "proposalId", "applicationId", "comparisonId"]) boundedString(value[key], 512, `${path}.${key}`, contract);
+  bool(value.weakened, `${path}.weakened`, contract);
+  bool(value.manualReview, `${path}.manualReview`, contract);
+  uniqueStringArray(value.removedExpectationIds, `${path}.removedExpectationIds`, contract);
+  if (value.removedExpectationIds.length > 100) fail(contract, `${path}.removedExpectationIds`, "must contain at most 100 entries");
+  array(value.modifiedSemanticStrength, `${path}.modifiedSemanticStrength`, contract);
+  if (value.modifiedSemanticStrength.length > 100) fail(contract, `${path}.modifiedSemanticStrength`, "must contain at most 100 entries");
+  value.modifiedSemanticStrength.forEach((change, index) => {
+    const changePath = `${path}.modifiedSemanticStrength[${index}]`;
+    object(change, changePath, contract);
+    allowedKeys(change, ["expectationId", "beforeStrength", "afterStrength", "reason"], changePath, contract);
+    boundedString(change.expectationId, 512, `${changePath}.expectationId`, contract);
+    boundedInteger(change.beforeStrength, 0, 100, `${changePath}.beforeStrength`, contract);
+    boundedInteger(change.afterStrength, 0, 100, `${changePath}.afterStrength`, contract);
+    boundedString(change.reason, 2_000, `${changePath}.reason`, contract);
+  });
+  array(value.suspiciousRanges, `${path}.suspiciousRanges`, contract);
+  if (value.suspiciousRanges.length > 200) fail(contract, `${path}.suspiciousRanges`, "must contain at most 200 entries");
+  value.suspiciousRanges.forEach((range, index) => {
+    const rangePath = `${path}.suspiciousRanges[${index}]`;
+    object(range, rangePath, contract);
+    allowedKeys(range, ["path", "startLine", "endLine", "rule", "reason"], rangePath, contract);
+    repositoryPath(range.path, `${rangePath}.path`, contract);
+    boundedInteger(range.startLine, 1, 1_000_000, `${rangePath}.startLine`, contract);
+    boundedInteger(range.endLine, range.startLine, 1_000_000, `${rangePath}.endLine`, contract);
+    boundedString(range.rule, 128, `${rangePath}.rule`, contract);
+    boundedString(range.reason, 2_000, `${rangePath}.reason`, contract);
+  });
+  sha256Hash(value.beforeQaIrHash, `${path}.beforeQaIrHash`, contract);
+  sha256Hash(value.afterQaIrHash, `${path}.afterQaIrHash`, contract);
+  array(value.ruleResults, `${path}.ruleResults`, contract);
+  if (value.ruleResults.length === 0 || value.ruleResults.length > 20) fail(contract, `${path}.ruleResults`, "must contain 1 to 20 rules");
+  value.ruleResults.forEach((rule, index) => {
+    const rulePath = `${path}.ruleResults[${index}]`;
+    object(rule, rulePath, contract);
+    allowedKeys(rule, ["rule", "status", "matches"], rulePath, contract);
+    boundedString(rule.rule, 128, `${rulePath}.rule`, contract);
+    oneOf(rule.status, ["PASS", "FAIL", "MANUAL_REVIEW"], `${rulePath}.status`, contract);
+    boundedInteger(rule.matches, 0, 200, `${rulePath}.matches`, contract);
+    if ((rule.status === "PASS") !== (rule.matches === 0)) fail(contract, rulePath, "PASS must have no matches and a finding must have matches");
+  });
+  const ruleNames = value.ruleResults.map((rule) => rule.rule);
+  if (new Set(ruleNames).size !== ruleNames.length) fail(contract, `${path}.ruleResults`, "must contain unique rules");
+  exact(value.weakened, value.ruleResults.some((rule) => rule.status === "FAIL"), `${path}.weakened`, contract);
+  exact(value.manualReview, value.ruleResults.some((rule) => rule.status === "MANUAL_REVIEW"), `${path}.manualReview`, contract);
+  if (context.proposal) exact(value.proposalId, context.proposal.proposalId, `${path}.proposalId`, contract);
+  if (context.application) exact(value.applicationId, context.application.applicationId, `${path}.applicationId`, contract);
+  if (context.comparison) {
+    validateEvidenceComparison(context.comparison, "$.comparison", { proposal: context.proposal, application: context.application, verification: context.verification });
+    exact(value.comparisonId, context.comparison.comparisonId, `${path}.comparisonId`, contract);
+    exact(value.beforeQaIrHash, context.comparison.before.qaIrHash, `${path}.beforeQaIrHash`, contract);
+    exact(value.afterQaIrHash, context.comparison.after.qaIrHash, `${path}.afterQaIrHash`, contract);
+  }
+}
+
+function validateIndependentRemediationReview(value, path, context = {}) {
+  const contract = "IndependentRemediationReview";
+  object(value, path, contract);
+  allowedKeys(value, ["schemaVersion", "reviewId", "proposalId", "applicationId", "verificationId", "comparisonId", "integrityId", "generator", "reviewer", "referenceHashes", "decision", "confidence", "risks", "unsupportedClaims", "rationale"], path, contract);
+  exact(value.schemaVersion, INDEPENDENT_REMEDIATION_REVIEW_VERSION, `${path}.schemaVersion`, contract);
+  for (const key of ["reviewId", "proposalId", "applicationId", "verificationId", "comparisonId", "integrityId"]) boundedString(value[key], 512, `${path}.${key}`, contract);
+  for (const identity of ["generator", "reviewer"]) {
+    const identityPath = `${path}.${identity}`;
+    object(value[identity], identityPath, contract);
+    allowedKeys(value[identity], ["provider", "model", "invocationId"], identityPath, contract);
+    for (const key of ["provider", "model", "invocationId"]) boundedString(value[identity][key], 512, `${identityPath}.${key}`, contract);
+  }
+  if (value.generator.invocationId === value.reviewer.invocationId) fail(contract, `${path}.reviewer.invocationId`, "must differ from the patch generator invocation");
+  object(value.referenceHashes, `${path}.referenceHashes`, contract);
+  allowedKeys(value.referenceHashes, ["proposal", "application", "verification", "comparison", "integrity", "diff"], `${path}.referenceHashes`, contract);
+  for (const key of ["proposal", "application", "verification", "comparison", "integrity", "diff"]) sha256Hash(value.referenceHashes[key], `${path}.referenceHashes.${key}`, contract);
+  oneOf(value.decision, ["APPROVE_DRAFT", "REJECT", "MANUAL_REVIEW"], `${path}.decision`, contract);
+  probability(value.confidence, `${path}.confidence`, contract);
+  for (const key of ["risks", "unsupportedClaims"]) {
+    uniqueStringArray(value[key], `${path}.${key}`, contract);
+    if (value[key].length > 50) fail(contract, `${path}.${key}`, "must contain at most 50 entries");
+    value[key].forEach((item, index) => boundedString(item, 2_000, `${path}.${key}[${index}]`, contract));
+  }
+  boundedString(value.rationale, 4_096, `${path}.rationale`, contract);
+  if (value.decision === "APPROVE_DRAFT" && (value.confidence < 0.5 || value.unsupportedClaims.length > 0)) fail(contract, path, "approval requires confidence and no unsupported claims");
+  const bindings = [
+    ["proposal", context.proposal, "proposalId"],
+    ["application", context.application, "applicationId"],
+    ["verification", context.verification, "verificationId"],
+    ["comparison", context.comparison, "comparisonId"],
+    ["integrity", context.integrity, "integrityId"],
+  ];
+  for (const [key, artifact, idKey] of bindings) {
+    if (!artifact) continue;
+    exact(value[idKey], artifact[idKey], `${path}.${idKey}`, contract);
+    exact(value.referenceHashes[key], canonicalHash(artifact), `${path}.referenceHashes.${key}`, contract);
+  }
+  if (context.application) exact(value.referenceHashes.diff, context.application.diff.contentHash, `${path}.referenceHashes.diff`, contract);
+}
+
+function validatePublicationDecision(value, path) {
+  const contract = "PublicationDecision";
+  object(value, path, contract);
+  allowedKeys(value, ["schemaVersion", "decisionId", "repository", "action", "publication", "eligibleDraft", "publicationFingerprint", "source", "gates", "existingTargets", "target", "branch", "baseRevision"], path, contract);
+  exact(value.schemaVersion, PUBLICATION_DECISION_VERSION, `${path}.schemaVersion`, contract);
+  boundedString(value.decisionId, 512, `${path}.decisionId`, contract);
+  repositorySlug(value.repository, `${path}.repository`, contract);
+  oneOf(value.action, ["CREATE_ISSUE", "UPDATE_ISSUE", "CREATE_DRAFT_PR", "UPDATE_DRAFT_PR", "NOOP", "MANUAL_REVIEW"], `${path}.action`, contract);
+  oneOf(value.publication, ["ISSUE", "DRAFT_PR", "NONE"], `${path}.publication`, contract);
+  bool(value.eligibleDraft, `${path}.eligibleDraft`, contract);
+  sha256Hash(value.publicationFingerprint, `${path}.publicationFingerprint`, contract);
+  object(value.source, `${path}.source`, contract);
+  allowedKeys(value.source, ["diagnosisId", "codeContextBundleId", "repairRecommendationId", "proposalId", "applicationId", "verificationId", "comparisonId", "integrityId", "reviewId"], `${path}.source`, contract);
+  for (const [key, item] of Object.entries(value.source)) boundedString(item, 512, `${path}.source.${key}`, contract);
+  for (const key of ["diagnosisId", "codeContextBundleId"]) if (value.source[key] === undefined) fail(contract, `${path}.source.${key}`, "is required");
+  array(value.gates, `${path}.gates`, contract);
+  if (value.gates.length === 0 || value.gates.length > 20) fail(contract, `${path}.gates`, "must contain 1 to 20 gates");
+  value.gates.forEach((gate, index) => {
+    const gatePath = `${path}.gates[${index}]`;
+    object(gate, gatePath, contract);
+    allowedKeys(gate, ["gate", "status", "reason"], gatePath, contract);
+    boundedString(gate.gate, 128, `${gatePath}.gate`, contract);
+    oneOf(gate.status, ["PASS", "FAIL", "UNKNOWN"], `${gatePath}.status`, contract);
+    boundedString(gate.reason, 2_000, `${gatePath}.reason`, contract);
+  });
+  const gateNames = value.gates.map((gate) => gate.gate);
+  if (new Set(gateNames).size !== gateNames.length) fail(contract, `${path}.gates`, "must contain unique gates");
+  exact(value.eligibleDraft, value.gates.every((gate) => gate.status === "PASS"), `${path}.eligibleDraft`, contract);
+  array(value.existingTargets, `${path}.existingTargets`, contract);
+  if (value.existingTargets.length > 10) fail(contract, `${path}.existingTargets`, "must contain at most 10 targets");
+  value.existingTargets.forEach((target, index) => validateGitHubPublicationTarget(target, `${path}.existingTargets[${index}]`, value.repository, contract));
+  if (value.target !== undefined) {
+    object(value.target, `${path}.target`, contract);
+    allowedKeys(value.target, ["publication", "number", "url"], `${path}.target`, contract);
+    if (!value.existingTargets.some((target) => canonicalHash(target) === canonicalHash(value.target))) fail(contract, `${path}.target`, "must select an existing target");
+  }
+  if (value.branch !== undefined) {
+    boundedString(value.branch, 128, `${path}.branch`, contract);
+    if (!/^qa\/fix-[a-z0-9-]+$/.test(value.branch)) fail(contract, `${path}.branch`, "must be a safe qa/fix branch");
+  }
+  if (value.baseRevision !== undefined) boundedString(value.baseRevision, 128, `${path}.baseRevision`, contract);
+  if (["CREATE_DRAFT_PR", "UPDATE_DRAFT_PR"].includes(value.action) && (value.publication !== "DRAFT_PR" || !value.eligibleDraft || value.branch === undefined || value.baseRevision === undefined)) fail(contract, path, "Draft PR action requires every gate and a bounded branch");
+  if (["CREATE_ISSUE", "UPDATE_ISSUE"].includes(value.action) && value.publication !== "ISSUE") fail(contract, `${path}.publication`, "must be ISSUE for an Issue action");
+  if (["NOOP", "MANUAL_REVIEW"].includes(value.action) && value.publication !== "NONE") fail(contract, `${path}.publication`, "must be NONE without a publication side effect");
+  if (["UPDATE_ISSUE", "UPDATE_DRAFT_PR", "NOOP"].includes(value.action) && value.target === undefined) fail(contract, `${path}.target`, "is required for an existing publication action");
+  if (["CREATE_ISSUE", "CREATE_DRAFT_PR", "MANUAL_REVIEW"].includes(value.action) && value.target !== undefined) fail(contract, `${path}.target`, "is not allowed for this action");
+}
+
 function validateGitHubPublicationResult(value, path) {
   const contract = "GitHubPublicationResult";
   object(value, path, contract);
@@ -1221,6 +1657,7 @@ function stringArray(value, path, contract) { array(value, path, contract); valu
 function uniqueStringArray(value, path, contract) { stringArray(value, path, contract); if (new Set(value).size !== value.length) fail(contract, path, "must contain unique strings"); }
 function string(value, path, contract) { if (typeof value !== "string" || value.length === 0) fail(contract, path, "must be a non-empty string"); }
 function boundedString(value, maxLength, path, contract) { string(value, path, contract); if (value.length > maxLength) fail(contract, path, `must contain at most ${maxLength} characters`); }
+function utf8Text(value, maxBytes, allowEmpty, path, contract) { if (typeof value !== "string" || (!allowEmpty && value.length === 0) || value.includes("\0")) fail(contract, path, "must be bounded UTF-8 text"); const encoded = new TextEncoder().encode(value); if (encoded.length > maxBytes || new TextDecoder("utf-8", { fatal: true }).decode(encoded) !== value) fail(contract, path, "must be bounded UTF-8 text"); }
 function sha256Hash(value, path, contract) { if (typeof value !== "string" || !/^sha256:[0-9a-f]{64}$/.test(value)) fail(contract, path, "must be a SHA-256 hash"); }
 function boundedInteger(value, min, max, path, contract) { number(value, path, contract); if (!Number.isInteger(value) || value < min || value > max) fail(contract, path, `must be an integer between ${min} and ${max}`); }
 function repositoryPath(value, path, contract) { boundedString(value, 4_096, path, contract); if (/^(?:[a-z]:[\\/]|[\\/])|(?:^|[\\/])\.\.(?:[\\/]|$)|[\0\r\n]/i.test(value)) fail(contract, path, "must be a safe repository-relative path"); }

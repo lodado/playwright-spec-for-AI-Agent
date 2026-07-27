@@ -1,8 +1,16 @@
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createGitHubCliIssueTransport } from "../index.mjs";
+import { createGitHubCliDraftTransport, createGitHubCliIssueTransport } from "../index.mjs";
 
-afterEach(() => vi.unstubAllEnvs());
+const temporaryDirectories = [];
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
 
 describe("GitHub CLI Issue transport", () => {
   it("verifies the pinned revision and file hashes before creating an Issue", async () => {
@@ -86,5 +94,51 @@ describe("GitHub CLI Issue transport", () => {
     const spawn = vi.fn().mockReturnValueOnce({ status: 0, stdout: Buffer.from(JSON.stringify(Array.from({ length: 100 }, (_, index) => ({ number: index + 1 })))) });
     const transport = createGitHubCliIssueTransport({ spawn });
     await expect(transport.findRecentPublications({ repository: "owner/example", fingerprint, since: "2026-07-26T00:00:00.000Z" })).rejects.toThrow(/ambiguous/);
+  });
+
+  it("commits bounded files and creates only a human-reviewable Draft PR", async () => {
+    vi.stubEnv("QA_NATIVE_INTEGRITY_KEY", "integrity-secret");
+    vi.stubEnv("GITHUB_TOKEN", "github-token");
+    const worktreePath = mkdtempSync(join(tmpdir(), "qa-native-draft-"));
+    temporaryDirectories.push(worktreePath);
+    const revision = "a".repeat(40);
+    const diff = Buffer.from("diff --git a/src/fix.mjs b/src/fix.mjs\n");
+    const expectedDiffHash = `sha256:${createHash("sha256").update(diff).digest("hex")}`;
+    const spawn = vi.fn()
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.from(revision) })
+      .mockReturnValueOnce({ status: 0, stdout: diff })
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.from("src/fix.mjs\n") })
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.alloc(0) })
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.from("src/fix.mjs\n") })
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.from("committed\n") })
+      .mockReturnValueOnce({ status: 0, stdout: diff })
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.from("src/fix.mjs\n") })
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.alloc(0) })
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.from("pushed\n") })
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.from("main\n") })
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.from("https://github.com/owner/example/pull/42\n") });
+    const transport = createGitHubCliDraftTransport({ spawn });
+    const decision = { eligibleDraft: true, branch: "qa/fix-abcdef", baseRevision: revision, source: { proposalId: "patch-proposal-abcdef" } };
+
+    expect(await transport.publishDraft({ action: "CREATE_DRAFT_PR", repository: "owner/example", decision, worktreePath, files: ["src/fix.mjs"], expectedDiffHash, title: "Verified fix", body: "## Verified", labels: ["qa-generated", "needs-human-review"] })).toEqual({ number: 42, url: "https://github.com/owner/example/pull/42" });
+    expect(spawn.mock.calls[11][1]).toEqual(expect.arrayContaining(["pr", "create", "--draft", "--head", "qa/fix-abcdef"]));
+    expect(spawn.mock.calls.flatMap((call) => call[1])).not.toContain("merge");
+    expect(spawn.mock.calls[5][2].env.QA_NATIVE_INTEGRITY_KEY).toBeUndefined();
+    expect(spawn.mock.calls[11][2].env.GITHUB_TOKEN).toBe("github-token");
+  });
+
+  it("rejects a changed committed diff before retrying a Draft PR push", async () => {
+    const worktreePath = mkdtempSync(join(tmpdir(), "qa-native-draft-retry-"));
+    temporaryDirectories.push(worktreePath);
+    const revision = "a".repeat(40);
+    const spawn = vi.fn()
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.from("b".repeat(40)) })
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.from("changed diff") })
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.from("src/fix.mjs\n") });
+    const transport = createGitHubCliDraftTransport({ spawn });
+    const decision = { eligibleDraft: true, branch: "qa/fix-abcdef", baseRevision: revision, source: { proposalId: "patch-proposal-abcdef" } };
+
+    await expect(transport.publishDraft({ action: "CREATE_DRAFT_PR", repository: "owner/example", decision, worktreePath, files: ["src/fix.mjs"], expectedDiffHash: `sha256:${"f".repeat(64)}`, title: "Verified fix", body: "## Verified", labels: [] })).rejects.toThrow("diff does not match");
+    expect(spawn.mock.calls.flatMap((call) => call[1])).not.toContain("push");
   });
 });

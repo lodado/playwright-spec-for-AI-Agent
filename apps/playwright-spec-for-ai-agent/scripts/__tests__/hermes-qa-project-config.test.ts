@@ -36,6 +36,14 @@ describe("applyPathTemplate", () => {
 });
 
 describe("loadProjectConfig", () => {
+  it("preserves remediation patch policy from config", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hermes-qa-remediation-"));
+    const configPath = join(root, "playwright-spec-for-ai-agent.config.mjs");
+    writeFileSync(configPath, `export default { remediation: { patch: { allowedPaths: ["src"], deniedPaths: ["src/secrets"], maxFiles: 2 } } };\n`);
+    const config = await loadProjectConfig([`--config=${configPath}`, `--root=${root}`]);
+    expect(config.remediation).toEqual({ patch: { allowedPaths: ["src"], deniedPaths: ["src/secrets"], maxFiles: 2 } });
+  });
+
   it("resolves pageUrl and staging baseUrl from config file", async () => {
     const root = mkdtempSync(join(tmpdir(), "hermes-qa-url-"));
     const configPath = join(root, "hermes-qa.config.mjs");

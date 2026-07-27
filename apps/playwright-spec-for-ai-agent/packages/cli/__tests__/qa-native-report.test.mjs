@@ -6,11 +6,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { compilePlaywrightSpec } from "../../adapter-playwright/index.mjs";
-import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_AGENT_OUTCOME_VERSION, JUDGE_RESULT_VERSION, PROVIDER_CAPABILITIES_VERSION, RUNTIME_OUTCOME_VERSION, canonicalHash, validateContract } from "../../contracts/index.mjs";
+import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_AGENT_OUTCOME_VERSION, JUDGE_RESULT_VERSION, PATCH_PROPOSAL_VERSION, PROVIDER_CAPABILITIES_VERSION, RUNTIME_OUTCOME_VERSION, canonicalHash, validateContract } from "../../contracts/index.mjs";
 import { createAdaptiveExecutionInput, createExecutionPlan } from "../../core/index.mjs";
 import { createInMemoryEvidenceStore, writeEvidenceArchive } from "../../evidence/index.mjs";
 import { playwrightBrowserToolCapabilities, playwrightExecutionCapabilities } from "../../provider-playwright/index.mjs";
 import { publishIssueQaNative } from "../qa-native-publish-issue.mjs";
+import { proposePatchQaNative } from "../qa-native-propose-patch.mjs";
 import { reportQaNative } from "../qa-native-report.mjs";
 import { writeAuthenticatedRunEnvelope } from "../qa-native-run-envelope.mjs";
 import { createExclusiveQaDirectory, runQaNative, writePrivateJsonExclusive } from "../qa-native.mjs";
@@ -104,6 +105,26 @@ describe("qa-native repository report", () => {
     symlinkSync(linked.judgmentDirectory, join(linked.runDirectory, "judgments", "linked"));
     expect(await dispatch(linked.cwd)).toBe(1);
     expect(existsSync(join(linked.runDirectory, "reports"))).toBe(false);
+  });
+});
+
+describe("qa-native PatchProposal generation", () => {
+  it("re-derives one authenticated failure and persists a proposal without repository mutation", async () => {
+    const fixture = persistedFailedRun();
+    const sourcePath = join(fixture.cwd, "src", "Dashboard.jsx");
+    const before = readFileSync(sourcePath);
+    const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture.cwd, encoding: "utf8" }).trim();
+
+    expect(await dispatchProposal(fixture.cwd)).toBe(0);
+
+    const directory = completedProposalDirectory(fixture.runDirectory);
+    expect(readdirSync(directory).sort()).toEqual(["model-output.json", "patch-proposal.json", "run.json"]);
+    expect(readJson(join(directory, "patch-proposal.json"))).toMatchObject({ schemaVersion: PATCH_PROPOSAL_VERSION, baseRevision: fixture.revision, files: [{ path: "src/Dashboard.jsx", action: "MODIFY" }] });
+    expect(readJson(join(directory, "run.json"))).toEqual({ schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "propose-patch", type: "COMPLETED" });
+    expect(readFileSync(sourcePath)).toEqual(before);
+    expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture.cwd, encoding: "utf8" }).trim()).toBe(revision);
+    expect(existsSync(join(fixture.runDirectory, "worktrees"))).toBe(false);
+    expect(existsSync(join(fixture.runDirectory, "publications"))).toBe(false);
   });
 });
 
@@ -203,6 +224,32 @@ async function dispatchIssue(cwd, githubTransport, { key = integrityKey, stderr 
     cwd,
     env: { QA_NATIVE_INTEGRITY_KEY: key.toString("base64"), QA_NATIVE_PUBLICATION_KEY: publicationKey.toString("base64") },
     handlers: { "publish-issue": (options) => publishIssueQaNative({ ...options, githubTransport }) },
+    stdout: vi.fn(),
+    stderr,
+  });
+}
+
+async function dispatchProposal(cwd, { key = integrityKey, stderr = vi.fn() } = {}) {
+  return runQaNative(["propose-patch", "--run-dir=.qa/runs/run-1", "--repository-root=."], {
+    cwd,
+    env: { QA_NATIVE_INTEGRITY_KEY: key.toString("base64") },
+    handlers: { "propose-patch": (options) => proposePatchQaNative(options, { loadPolicy: async () => ({ minimumConfidence: 0.2 }), propose: async ({ diagnosis, codeContext, recommendation }) => {
+      const snippet = codeContext.snippets[0];
+      return {
+        schemaVersion: PATCH_PROPOSAL_VERSION,
+        proposalId: "model-proposal",
+        diagnosisId: diagnosis.diagnosisId,
+        codeContextBundleId: codeContext.bundleId,
+        repairRecommendationId: recommendation.recommendationId,
+        baseRevision: codeContext.revision,
+        intent: recommendation.changes[0].recommendation,
+        expectedEffect: recommendation.changes[0].expectedEffect,
+        risks: recommendation.changes[0].risks,
+        files: [{ path: snippet.path, action: "MODIFY", originalContentHash: snippet.contentHash }],
+        operations: [{ type: "REPLACE_RANGE", path: snippet.path, startLine: codeContext.candidates[0].range.start.line, endLine: codeContext.candidates[0].range.start.line, replacement: "export function Dashboard() { return <h1>Dashboard</h1>; }" }],
+        verificationPlan: recommendation.verificationPlan,
+      };
+    } }) },
     stdout: vi.fn(),
     stderr,
   });
@@ -323,6 +370,13 @@ function completedReportDirectory(runDirectory) {
 
 function completedPublicationDirectory(runDirectory) {
   const root = join(runDirectory, "publications");
+  const directories = readdirSync(root);
+  expect(directories).toHaveLength(1);
+  return join(root, directories[0]);
+}
+
+function completedProposalDirectory(runDirectory) {
+  const root = join(runDirectory, "proposals");
   const directories = readdirSync(root);
   expect(directories).toHaveLength(1);
   return join(root, directories[0]);

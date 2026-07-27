@@ -144,7 +144,7 @@ describe("qa-native CLI security foundation", () => {
     writeFileSync(join(cwd, "a.spec.ts"), "test('a', () => {})");
     const key = Buffer.alloc(32, 0x61).toString("base64");
     const handler = vi.fn(() => 0);
-    const handlers = { execute: handler, judge: handler, replay: handler, diagnose: handler, "suggest-fix": handler, report: handler, "publish-issue": handler };
+    const handlers = { execute: handler, judge: handler, replay: handler, diagnose: handler, "suggest-fix": handler, report: handler, "publish-issue": handler, "propose-patch": handler, "verify-patch": handler, publish: handler, remediate: handler };
     const shared = { cwd, env: { QA_NATIVE_INTEGRITY_KEY: key, QA_NATIVE_PUBLICATION_KEY: Buffer.alloc(32, 0x62).toString("base64") }, handlers, stdout: vi.fn(), stderr: vi.fn() };
     expect(await runQaNative(["execute", "--spec=a.spec.ts", "--base-url=https://example.test", "--run-dir=.qa/runs/new"], shared)).toBe(0);
     expect(handler.mock.calls[0][0]).toMatchObject({ provider: "playwright", mode: "strict" });
@@ -154,24 +154,33 @@ describe("qa-native CLI security foundation", () => {
     expect(await runQaNative(["diagnose", "--run-dir=.qa/runs/existing", "--repository-root=."], shared)).toBe(0);
     expect(await runQaNative(["suggest-fix", "--run-dir=.qa/runs/existing", "--repository-root=."], shared)).toBe(0);
     expect(await runQaNative(["report", "--run-dir=.qa/runs/existing", "--repository-root=."], shared)).toBe(0);
+    expect(await runQaNative(["propose-patch", "--run-dir=.qa/runs/existing", "--repository-root=."], shared)).toBe(0);
+    expect(await runQaNative(["verify-patch", "--run-dir=.qa/runs/existing", "--repository-root=."], shared)).toBe(0);
     expect(await runQaNative(["publish-issue", "--run-dir=.qa/runs/existing", "--repository-root=.", "--repository=owner/example"], shared)).toBe(0);
-    expect(handler).toHaveBeenCalledTimes(7);
+    expect(await runQaNative(["publish", "--run-dir=.qa/runs/existing", "--repository-root=.", "--repository=owner/example", "--publish=auto"], shared)).toBe(0);
+    expect(await runQaNative(["remediate", "--run-dir=.qa/runs/existing", "--repository-root=.", "--repository=owner/example"], shared)).toBe(0);
+    expect(handler).toHaveBeenCalledTimes(11);
     expect(handler.mock.calls.at(-1)[0]).toMatchObject({
-      command: "publish-issue",
+      command: "remediate",
       publicationKey: Buffer.alloc(32),
+      publish: "auto",
       repository: "owner/example",
       repositoryRoot: realpathSync(cwd),
       revision: "HEAD",
     });
-    expect(handler.mock.calls.at(-3)[0]).toMatchObject({
+    expect(handler.mock.calls.at(-7)[0]).toMatchObject({
       command: "suggest-fix",
       repositoryRoot: realpathSync(cwd),
       revision: "HEAD",
     });
+    expect(handler.mock.calls.at(-5)[0]).toMatchObject({ command: "propose-patch", repositoryRoot: realpathSync(cwd), revision: "HEAD" });
+    expect(handler.mock.calls.at(-4)[0]).toMatchObject({ command: "verify-patch", repositoryRoot: realpathSync(cwd), revision: "HEAD" });
+    expect(handler.mock.calls.at(-2)[0]).toMatchObject({ command: "publish", publish: "auto" });
     const missingPublicationKey = { ...shared, env: { QA_NATIVE_INTEGRITY_KEY: key }, stderr: vi.fn() };
     expect(await runQaNative(["publish-issue", "--run-dir=.qa/runs/existing", "--repository-root=.", "--repository=owner/example"], missingPublicationKey)).toBe(1);
     expect(missingPublicationKey.stderr).toHaveBeenLastCalledWith("qa-native: publication key is missing or invalid\n");
     expect(await runQaNative(["publish-issue", "--run-dir=.qa/runs/existing", "--repository-root=.", "--repository=../secret"], shared)).toBe(1);
+    expect(await runQaNative(["remediate", "--run-dir=.qa/runs/existing", "--repository-root=.", "--repository=owner/example", "--publish=draft"], shared)).toBe(1);
   });
 
   it("accepts only the explicit strict and adaptive provider combinations", async () => {
