@@ -134,7 +134,7 @@ It writes no files by itself; the CLI or reporters persist outputs.
 
 ## Safety
 
-- Requires sealed `evidence-manifest/0.2` for functional evaluation.
+- Requires sealed `evidence-manifest/0.3` for functional evaluation.
 - Checks session, observation, event, and manifest links before trusting oracle results.
 - Does not read credentials, inspect hidden DOM state, or call Playwright.
 - Rejects unsafe regex-like oracles.

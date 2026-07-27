@@ -58,7 +58,7 @@ const observation = Object.freeze({
 });
 
 const event = Object.freeze({
-  schemaVersion: "interaction-event/0.1",
+    schemaVersion: "interaction-event/0.2",
   id: "event-1",
   sessionId: "session-1",
   index: 0,
@@ -73,7 +73,7 @@ const event = Object.freeze({
 });
 
 const manifestBody = {
-  schemaVersion: "evidence-manifest/0.2",
+  schemaVersion: "evidence-manifest/0.3",
   id: "manifest-1",
   runId: "run-1",
   sessionId: "session-1",

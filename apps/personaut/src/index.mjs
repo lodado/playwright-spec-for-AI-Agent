@@ -37,6 +37,9 @@ import {
   compilePlaywrightIRToStudyResult,
   parsePlaywrightSpecs,
 } from "playwright-spec-adapter";
+import { assertHermesStudySupported, createHermesActionPolicy } from "./hermes-action-policy.mjs";
+
+export { createHermesActionPolicy } from "./hermes-action-policy.mjs";
 
 const HELP = `Personaut — persona-driven browser exploration
 
@@ -95,8 +98,13 @@ export async function loadStudy(path) {
   return validateStudySpec(value);
 }
 
-export async function runPersonaStudy({ study, outputDir, driverFactory, policyFactory } = {}) {
+export async function runPersonaStudy({ study, outputDir, driverFactory, policyFactory, hermesTransport } = {}) {
   const validatedStudy = validateStudySpec(structuredClone(study));
+  let selectedPolicyFactory = policyFactory;
+  if (!selectedPolicyFactory && validatedStudy.runtime.modelRoles.action === "hermes") {
+    assertHermesStudySupported(validatedStudy);
+    selectedPolicyFactory = entry => createHermesActionPolicy(entry, { transport: hermesTransport });
+  }
   const runRoot = resolve(outputDir ?? `.qa/runs/run-${Date.now()}`);
   await mkdir(runRoot, { recursive: true });
   await atomicJson(`${runRoot}/study.json`, redactStudySecrets(validatedStudy));
@@ -104,7 +112,7 @@ export async function runPersonaStudy({ study, outputDir, driverFactory, policyF
   const result = await runStudy({
     study: validatedStudy,
     driverFactory: driverFactory ?? (() => createPlaywrightDriver()),
-    policyFactory: policyFactory ?? (entry => createDefaultPolicy(entry)),
+    policyFactory: selectedPolicyFactory ?? (entry => createDefaultPolicy(entry)),
     oracle: { evaluate: evaluateLiveOracles },
     storeFactory: entry => createFileSessionStore({ rootDir: runRoot, sessionId: entry.sessionId }),
     concurrency: validatedStudy.runtime.concurrency,
@@ -185,6 +193,7 @@ export async function runPersonaStudy({ study, outputDir, driverFactory, policyF
       baselineFindings: findingsForVariant(baselineSessions),
       candidateFindings: findingsForVariant(candidateSessions),
       canonicalFindings: findings,
+      assignment: validatedStudy.comparison.assignment,
     });
   }
   const report = buildReport({ study: validatedStudy, evaluatedSessions, validity, findings, variant });
@@ -456,7 +465,10 @@ function buildReport({ study, evaluatedSessions, validity, findings, variant }) 
     evidence: evaluatedSessions.flatMap(item => item.manifest.entries),
     runtime: evaluatedSessions.filter(item => item.session.status === "runtime_error").map(item => item.session.terminalReason),
     cost: [],
-    modelCard: { actionPolicy: "deterministic behavioral baseline", calibration: validity.calibration.level },
+    modelCard: {
+      actionPolicy: study.runtime.modelRoles.action === "hermes" ? "bounded Hermes action policy (uncalibrated)" : "deterministic behavioral baseline",
+      calibration: validity.calibration.level,
+    },
   };
 }
 

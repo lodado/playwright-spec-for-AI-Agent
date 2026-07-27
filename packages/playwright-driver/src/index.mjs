@@ -322,6 +322,7 @@ async function executeAction(session, action, now) {
     return Object.freeze({
       schemaVersion: "action-result/0.1",
       status: isPolicyError(error) ? "blocked" : "failure",
+      code: isPolicyError(error) ? error.code : "DRIVER_ACTION_FAILED",
       observationId,
       action: structuredClone(action),
       urlBefore,
