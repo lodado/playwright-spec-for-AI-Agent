@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.10.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.9.0...v0.10.0) (2026-07-27)
+
+
+### Features
+
+* add Persona Runtime behavioral release intelligence ([b090c54](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/b090c54671942e3c338aadc71707bab52ae5cf33))
+* complete evidence-driven remediation pipeline ([1389365](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/1389365f650c667e3b28c5889fa2c03259db9021))
+* **qa-native:** add structured patch proposals ([9f96dda](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/9f96dda622587aff7254864c8ad710532ceb80e8))
+* **qa-native:** complete remediation pipeline ([b1d4f49](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/b1d4f49c2d3a2a0c9493ca42c959ab0c0941f1e2))
+
 ## [0.9.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.8.0...v0.9.0) (2026-07-19)
 
 
