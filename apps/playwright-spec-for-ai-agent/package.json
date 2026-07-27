@@ -84,6 +84,9 @@
       "optional": true
     }
   },
+  "dependencies": {
+    "typescript": "^5.9.3"
+  },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
     "vitest": "^3.2.7"

@@ -34,6 +34,17 @@ function formatLocator(locator) {
     return `text:"${locator.value}"`;
   }
 
+  if (locator.kind === "role") {
+    return `role:${locator.role}${locator.name ? `[name=${JSON.stringify(locator.name)}]` : ""}`;
+  }
+
+  if (locator.kind === "chain") {
+    const operations = (locator.operations ?? []).map(operation => operation.method).join(" → ");
+    return `${formatLocator(locator.root)}${operations ? ` → ${operations}` : ""}`;
+  }
+
+  if (locator.value !== undefined) return `${locator.kind}:${JSON.stringify(locator.value)}`;
+
   return "target";
 }
 
@@ -88,7 +99,30 @@ function formatExpectationThen(expectation) {
     }
   }
 
+  if (expectation.expected) {
+    if (expectation.expected.kind === "literal") {
+      return `${target} ${expectation.type}: ${JSON.stringify(expectation.expected.value)}`;
+    }
+    if (expectation.expected.kind === "regex") {
+      return `${target} ${expectation.type}: /${expectation.expected.pattern}/${expectation.expected.flags ?? ""}`;
+    }
+    if (expectation.expected.kind === "array") {
+      return `${target} ${expectation.type}: ${expectation.expected.value.map(value => value.kind === "regex" ? `/${value.pattern}/${value.flags ?? ""}` : JSON.stringify(value.value)).join(", ")}`;
+    }
+  }
+
+  if (expectation.type) return `${target} ${expectation.type}`;
+
   return "Matches Playwright assertions";
+}
+
+function formatActionWhen(action) {
+  const args = (action.arguments ?? []).map(argument => {
+    if (argument.kind === "literal") return JSON.stringify(argument.value);
+    if (argument.kind === "regex") return `/${argument.pattern}/${argument.flags ?? ""}`;
+    return argument.source ?? argument.kind;
+  });
+  return `${action.type} ${formatLocator(action.target)}${args.length ? ` with ${args.join(", ")}` : ""}`;
 }
 
 function isBlockedPolicy(liveRunPolicy) {
@@ -120,6 +154,11 @@ function buildGivenWhenThen(test, scenario) {
 
   if (isBlockedPolicy(test.liveRunPolicy)) {
     return { given, when, then: ["skip"] };
+  }
+
+
+  for (const action of test.actions ?? []) {
+    when.push(formatActionWhen(action));
   }
 
   const then = [];

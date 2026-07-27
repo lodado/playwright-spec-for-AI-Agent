@@ -63,6 +63,35 @@ describe("renderJudgeHermesDocument", () => {
     expect(doc).not.toContain("non-deterministic");
     expect(doc).not.toContain("How to use this plan");
   });
+
+  it("renders parsed actions and non-legacy matchers into When/Then", () => {
+    const spec = {
+      scenarios: [{
+        scenarioId: "PRICING",
+        label: "Pricing",
+        sourceFile: "pricing.spec.ts",
+        tests: [{
+          title: "edits a plan",
+          liveRunPolicy: "executable-interaction",
+          actions: [{
+            type: "fill",
+            target: { kind: "label", value: "Plan name" },
+            arguments: [{ kind: "literal", value: "Enterprise" }],
+          }],
+          expectations: [{
+            type: "count",
+            locator: { kind: "locator", value: ".feature" },
+            expected: { kind: "literal", value: 3 },
+          }],
+        }],
+      }],
+    };
+
+    const doc = renderJudgeHermesDocument({ page: "pricing", spec, includeSession: false });
+
+    expect(doc).toContain('fill label:"Plan name" with "Enterprise"');
+    expect(doc).toContain('locator:".feature" count: 3');
+  });
 });
 
 describe("buildBrowseHermesQuery", () => {

@@ -69,8 +69,12 @@ test("shows pricing options", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Pricing" })).toBeVisible();
 });\n`);
   run(process.execPath, [join(installed, "bin", "playwright-spec-for-ai-agent.mjs"), "spec", "--page=pricing"], consumer);
-  if (!readFileSync(join(consumer, ".qa", "pricing", "pricing-qa-spec.json"), "utf8").includes("pricing options")) {
+  const extracted = JSON.parse(readFileSync(join(consumer, ".qa", "pricing", "pricing-qa-spec.json"), "utf8"));
+  if (extracted.scenarios?.[0]?.tests?.[0]?.title !== "shows pricing options") {
     throw new Error("README quick-start scenario was not extracted");
+  }
+  if (extracted.scenarios[0].tests[0].expectations?.[0]?.locator?.role !== "heading") {
+    throw new Error("published AST parser did not preserve the README role locator");
   }
   if (!readFileSync(join(installed, "docs", "qa-native.md"), "utf8").includes("QA Native")) {
     throw new Error("QA Native guide is missing from the package");

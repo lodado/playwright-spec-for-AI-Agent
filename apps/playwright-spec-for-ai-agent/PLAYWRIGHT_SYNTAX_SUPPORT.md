@@ -1,72 +1,93 @@
 # Playwright Syntax Support Matrix
 
-This matrix documents what the current parser accepts. It is based on `scripts/dashboard-spec-parser.mjs`; the CLI reads specs as source text and does not run Playwright.
+The CLI parses TypeScript source with the TypeScript compiler AST. It does not
+execute spec modules or run Playwright during `spec` extraction.
 
-## CI and release compatibility
-
-| Workflow | Trigger | Node | Commands | Notes |
-| --- | --- | --- | --- | --- |
-| PR regression CI | `pull_request`, `push` to `main` | 20 | `npm ci`, `npm test` | Keeps parser compatibility checks green before merge and after main updates. |
-| Release | `push` to `main` | 20 | Changesets, `pnpm install`, workspace checks, `pnpm release` | Opens a version PR or publishes public packages; requires `NPM_TOKEN`. |
-
-## Spec shape
+## Test and suite declarations
 
 | Syntax | Status | Notes |
 | --- | --- | --- |
-| `test("title", async ({ page }) => { ... })` | Supported | Single parser target for executable test blocks. Single, double, and template-quoted titles are accepted. |
-| `test.describe("group", () => { ... })` | Partially supported | Used only to inherit `@qa-live-policy` and `@qa-fixture` comments into child `test(...)` blocks. |
-| `test.skip`, `test.only`, `test.fixme`, `test.describe.configure` | Unsupported | They are not extracted as test blocks. Use `@qa-live-skip: true` or `@qa-live-policy: skip` for live QA skipping. |
-| Non-async tests, `async page =>`, `function` callbacks, tests without destructured fixtures | Unsupported | The extractor expects `async ({ ... }) => { ... }`. |
-| TypeScript syntax inside a supported test body | Best effort | Bodies are scanned as text; only the patterns below affect QA output. |
+| `test("title", callback)` | Supported | Arrow and function callbacks, async or synchronous, with any fixture parameter shape. |
+| Imported aliases | Supported | For example `import { test as pwTest, expect as assert }`. |
+| `base.extend()` test bindings | Supported | Locally declared bindings derived from an imported test binding are followed. |
+| `test.only` / `test.describe.only` | Supported with warning | Tests are imported without filtering siblings. |
+| `test.skip` / `test.fixme` | Supported | Imported with a blocked live policy. Enclosing skipped/fixme suites apply to their children. |
+| `test.fail` / `test.slow` | Supported as metadata | The modifier is preserved on the parsed test. |
+| `test.describe`, `.serial`, `.parallel` | Supported | Nested suites are used for annotation and fixture inheritance. |
+| `test.describe.configure` | Ignored | Runtime scheduling does not change QA intent extraction. |
+| Hooks (`beforeEach`, `afterEach`, etc.) | Not compiled | Put required live steps in the test or keep them in a named helper that receives manual review. |
+| Dynamically generated titles/tests | Diagnostic | Static string and no-substitution template titles are supported; unresolved runtime generation fails closed. |
 
 ## QA annotations
 
-| Annotation | Location | Status | Effect |
-| --- | --- | --- | --- |
-| `// @qa-page: billing` | File | Supported | Overrides the page id. |
-| `// @qa-scenario: ACTIVE` | File | Supported, required | Creates the scenario id. |
-| `// @qa-scenario-label: "Active account"` | File | Unsupported | Ignored by `parseDashboardSpecFile`; labels come from the first `test.describe(...)` title, or fall back to the file name. |
-| `// @qa-live-skip: true` | File | Supported | Blocks all tests in the file from live QA. |
-| `// @qa-always-run: true` | File | Supported | Keeps the scenario eligible during live filtering. |
-| `// @qa-live-policy: readonly` | `test` or enclosing `test.describe` | Supported | Required unless the file has `@qa-live-skip: true`. |
-| `// @qa-fixture: avatar=tests/fixtures/avatar.png` | File, `test.describe`, or `test` | Supported | Merged into parsed fixture metadata; later/narrower comments override earlier values. |
-
-## `@qa-live-policy` values
-
-| Value | Live run policy | Status |
+| Annotation | Location | Effect |
 | --- | --- | --- |
-| `readonly` | `executable-readonly` | Supported |
-| `safe-interaction` | `executable-interaction` | Supported |
-| `safe-interaction-no-confirm` | `judgment-interaction-no-confirm` | Supported |
-| `mock-judgment` | `judgment-mock-api` | Supported |
-| `subscription-mutation` | `blocked-subscription-mutation` | Supported |
-| `auth-mock` | `blocked-auth-mock` | Supported |
-| `skip` | `blocked-live-skip` | Supported |
+| `// @qa-page: billing` | File | Overrides the page id. |
+| `// @qa-scenario: ACTIVE` | File | Required scenario identity. The full line value is preserved. |
+| `// @qa-scenario-label: "Active account"` | File | Human-readable scenario label. |
+| `// @qa-live-skip: true` | File | Blocks the complete file from live QA. |
+| `// @qa-always-run: true` | File | Keeps the scenario eligible during filtering. |
+| `// @qa-live-policy: ...` | Test or enclosing suite | Required unless the test/file is skipped. Nearest declaration wins. |
+| `// @qa-fixture: name=path` | File, suite, or test | Merged from outer to inner scope; the closest value wins. |
 
-## Parsed read-only expectations
+Supported live policies remain `readonly`, `safe-interaction`,
+`safe-interaction-no-confirm`, `mock-judgment`, `subscription-mutation`,
+`auth-mock`, and `skip`.
 
-| Playwright assertion | Locator support | Status |
-| --- | --- | --- |
-| `await expect(page.getByTestId("id")).toBeVisible()` | `getByTestId` | Supported |
-| `await expect(page.getByText("copy")).toBeVisible()` | `getByText` | Supported |
-| `await expect(page.getByTestId("id")).not.toBeVisible()` | `getByTestId` | Supported |
-| `await expect(page.getByText("copy")).not.toBeVisible()` | `getByText` | Supported |
-| `await expect(page.getByTestId("id")).toContainText("copy")` | `getByTestId` | Supported |
-| `await expect(page.getByText("copy")).toContainText("copy")` | `getByText` | Supported |
-| `toHaveText`, `toHaveURL`, `toHaveCount`, `toBeEnabled`, `toBeDisabled` | Any | Unsupported for extracted read-only expectations. |
-| `page.getByRole(...)`, `page.locator(...)`, chained locators | Any | Unsupported for extracted read-only expectations. |
+## Locators
 
-## Classification hints
+The parser preserves static locator identity and chains for:
 
-`parseDashboardSpecFile` does not infer policy from test bodies. The helpers below are exported for standalone use only; parsed output follows the declared `@qa-live-policy` (or file-level `@qa-live-skip`).
+- `locator`, `frameLocator`
+- `getByAltText`, `getByLabel`, `getByPlaceholder`, `getByRole`
+- `getByTestId`, `getByText`, `getByTitle`
+- `filter`, `and`, `or`, `first`, `last`, `nth`
+- local `const` locator aliases
 
-| Pattern | Status | Result |
-| --- | --- | --- |
-| `page.getByTestId("id").click()` | Executable | With `safe-interaction`, compiles to `INTERACT/CLICK` and produces `ACTION_LOG` evidence. Links, forms, editable targets, and any post-click network request are blocked. |
-| `page.getByText("text").click()` | Executable | Static single- or double-quoted text only. |
-| `page.getByRole("role", { name: "name" }).click()` | Executable | Requires a static accessible name. |
-| CSS/XPath, aliased or chained locators, click options, and non-click actions | Unsupported | The whole `safe-interaction` test fails compilation; supported actions are never executed as a partial subset. |
-| Any click under `safe-interaction-no-confirm` | Deferred | The runtime does not guess which click is the destructive confirmation. |
-| `page.route(...)` / mocked API fulfillment | Helper only | `detectApiMock` and `classifyLiveRunPolicy` can detect this; annotate `mock-judgment` when that is the intended parsed policy. |
-| Login URL assertion such as `toHaveURL(/\/login/)` | Helper only | `classifyStagingTest` can detect this, but `parseDashboardSpecFile` does not call it; use `@qa-live-policy: auth-mock` for parsed output. |
-| Subscription/billing mutation keywords and routes | Helper only | `detectSubscriptionMutation` and `classifyLiveRunPolicy` can detect this; annotate `subscription-mutation` to produce `blocked-subscription-mutation`. |
+Literal, numeric, boolean, regular-expression, array, object, and statically
+resolvable template arguments are preserved. Dynamic arguments are retained as
+source text and produce a diagnostic when they are required for execution.
+
+## Assertions
+
+The following Playwright web-first matchers are parsed, including `.not` and
+`expect.soft`:
+
+- state: `toBeAttached`, `toBeChecked`, `toBeDisabled`, `toBeEditable`,
+  `toBeEmpty`, `toBeEnabled`, `toBeFocused`, `toBeHidden`, `toBeInViewport`,
+  `toBeVisible`
+- text/value: `toContainText`, `toHaveText`, `toHaveValue`, `toHaveValues`
+- semantics: `toHaveAccessibleDescription`, `toHaveAccessibleErrorMessage`,
+  `toHaveAccessibleName`, `toHaveRole`
+- properties: `toHaveAttribute`, `toHaveClass`, `toHaveCSS`, `toHaveId`,
+  `toHaveJSProperty`
+- page/collection: `toHaveCount`, `toHaveTitle`, `toHaveURL`
+
+Unknown matchers and unresolved expected values are errors rather than silently
+dropped expectations.
+
+## Actions
+
+The live spec preserves these statically targeted actions:
+
+- navigation: `goto`, `goBack`, `goForward`, `reload`
+- pointer/focus: `click`, `dblclick`, `hover`, `tap`, `focus`, `blur`,
+  `dragTo`, `dispatchEvent`
+- form/input: `fill`, `clear`, `type`, `pressSequentially`, `press`, `check`,
+  `uncheck`, `setChecked`, `selectOption`, `setInputFiles`
+
+Execution authority still comes only from `@qa-live-policy`. A `readonly` test
+containing an action is rejected. An opaque helper or control-flow step inside
+`safe-interaction` is rejected atomically so a supported subset is never run by
+itself.
+
+## Diagnostics and limits
+
+The parser fails closed for syntax errors, missing/unknown live policy, unknown
+matchers, dynamic expected values, unresolved assertion/action targets, policy
+conflicts, and opaque executable interaction steps. Diagnostics include source
+path, line, and column.
+
+Static analysis cannot safely infer arbitrary Page Object helpers, imported
+function bodies, network-derived parameterized tests, or runtime branches. Such
+code is preserved as source/diagnostics instead of being executed during parse.

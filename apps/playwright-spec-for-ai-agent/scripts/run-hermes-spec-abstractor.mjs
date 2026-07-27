@@ -33,7 +33,7 @@ function buildAbstractHermesQuery(payload) {
     "",
     "## Task",
     "Write livePlan as explicit Given/When/Then markdown — one block per test in specDefinition.",
-    "Each test includes only `qaLivePolicy` from Playwright `@qa-live-policy`; use that value in When/Then behavior.",
+    "Each test includes `qaLivePolicy` plus statically parsed actions and expectations when available; use them in When/Then behavior.",
     "Do not explain what policies mean. Just apply them.",
     "Scenario/Test options you must apply:",
     "- `alwaysRun: true` -> scenario header must include `always-run`.",

@@ -14,6 +14,8 @@ export function buildGwtPromptSpec(spec) {
         title: test.title,
         checkId: test.checkId,
         qaLivePolicy: test.livePolicyAnnotation ?? null,
+        ...(test.actions?.length ? { actions: test.actions } : {}),
+        ...(test.expectations?.length ? { expectations: test.expectations } : {}),
       })),
     })),
   };
