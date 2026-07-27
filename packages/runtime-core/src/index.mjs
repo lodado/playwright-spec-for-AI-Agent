@@ -3,16 +3,20 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   EVIDENCE_MANIFEST_VERSION,
+  INTERACTION_EVENT_VERSION,
+  INTERACTION_RESULT_CODES,
   SESSION_VERSION,
   canonicalHash,
   redactStudySecrets,
+  validateBrowserAction,
   validateEvidenceManifest,
+  validateInteractionEvent,
   validateSessionRecord,
 } from "@persona-runtime/contracts";
 
 export const RUNTIME_SESSION_SCHEMA_VERSION = "runtime-session/0.1";
 export const OBSERVATION_SCHEMA_VERSION = "observation/0.1";
-export const INTERACTION_EVENT_SCHEMA_VERSION = "interaction-event/0.1";
+export const INTERACTION_EVENT_SCHEMA_VERSION = INTERACTION_EVENT_VERSION;
 export const EVIDENCE_MANIFEST_SCHEMA_VERSION = EVIDENCE_MANIFEST_VERSION;
 
 export const SESSION_PHASES = Object.freeze([
@@ -80,6 +84,7 @@ const STATUS_BY_TERMINAL_PHASE = Object.freeze({
 
 const ELEMENT_ACTIONS = new Set(["click", "type", "select", "ignore"]);
 const NON_PROGRESS_ACTIONS = new Set(["wait", "observe_more", "ignore", "idle"]);
+const INTERACTION_RESULT_CODE_SET = new Set(INTERACTION_RESULT_CODES);
 
 export class RuntimeCoreError extends Error {
   constructor(code, message, options = {}) {
@@ -219,6 +224,7 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
     personaId: persona.id ?? persona.preset,
     seed,
     variant,
+    model: typeof policy.identity === "string" ? policy.identity : undefined,
     sampledPolicy: policy.sampledPolicy ?? {},
     now: now(),
   });
@@ -391,6 +397,7 @@ export function deriveInteractionEvent({ sessionId, index, observation, action, 
     action: structuredClone(action),
     result: {
       status: result.status,
+      ...(result.code ? { code: result.code } : {}),
       ...(result.message ? { message: result.message } : {}),
     },
     urlBefore: observation.page?.url ?? "about:blank",
@@ -402,11 +409,11 @@ export function deriveInteractionEvent({ sessionId, index, observation, action, 
       progressChanged: Boolean(result.progressChanged),
       backtrack: action.type === "back" || result.backtrack === true,
       repeatedPage: result.repeatedPage === true,
-      failedInteraction: result.status === "failure" || result.status === "blocked",
+      failedInteraction: false,
       noProgress: result.progressChanged !== true,
     },
   };
-  return deepFreeze(event);
+  return validateInteractionEvent(event);
 }
 
 async function sealSessionEvidence({ study, session, observations, events, driverEvidence, store, now }) {
@@ -488,7 +495,24 @@ function validateAction(decision, observation, task) {
   if (action.type === "type" && task.safetyPolicy?.allowTyping === false) throw new RuntimeCoreError(RUNTIME_ERROR_CODES.ACTION_NOT_ALLOWED, "typing is blocked by task safety policy");
   if (action.type === "type" && (typeof action.valueRef !== "string" || action.valueRef.length === 0)) throw new RuntimeCoreError(RUNTIME_ERROR_CODES.MODEL_INVALID_OUTPUT, "type action requires valueRef");
   if (action.type === "select" && typeof action.value !== "string") throw new RuntimeCoreError(RUNTIME_ERROR_CODES.MODEL_INVALID_OUTPUT, "select action requires value");
-  return deepFreeze(structuredClone(action));
+  try {
+    return validateBrowserAction(canonicalAction(action));
+  } catch (error) {
+    throw new RuntimeCoreError(RUNTIME_ERROR_CODES.MODEL_INVALID_OUTPUT, "policy returned an invalid action", { cause: error });
+  }
+}
+
+function canonicalAction(action) {
+  const result = { type: action.type, reasonCode: action.reasonCode };
+  if (["click", "type", "select", "ignore"].includes(action.type) && action.elementId !== undefined) result.elementId = action.elementId;
+  if (action.type === "type") result.valueRef = action.valueRef;
+  if (action.type === "select") result.value = action.value;
+  if (action.type === "scroll") {
+    result.direction = action.direction;
+    result.amount = action.amount;
+  }
+  if (["wait", "idle"].includes(action.type)) result.durationMs = action.durationMs;
+  return result;
 }
 
 function terminalFromOracle(result) {
@@ -589,7 +613,19 @@ function deduplicateEvidence(entries) {
 
 function normalizeActionResult(result) {
   if (!isRecord(result) || !["success", "failure", "no_change", "blocked"].includes(result.status)) throw new RuntimeCoreError(RUNTIME_ERROR_CODES.DRIVER_FAILED, "driver returned an invalid action result");
-  return result;
+  const code = result.code ?? (result.status === "failure" ? "DRIVER_ACTION_FAILED" : result.status === "blocked" ? "ACTION_NOT_ALLOWED" : undefined);
+  if (code !== undefined && !INTERACTION_RESULT_CODE_SET.has(code)) throw new RuntimeCoreError(RUNTIME_ERROR_CODES.DRIVER_FAILED, "driver returned an invalid action result code");
+  return deepFreeze({
+    status: result.status,
+    ...(code ? { code } : {}),
+    ...(typeof result.message === "string" && result.message.length > 0 ? { message: result.message } : {}),
+    ...(typeof result.urlAfter === "string" ? { urlAfter: result.urlAfter } : {}),
+    ...(Array.isArray(result.evidenceIds) ? { evidenceIds: [...result.evidenceIds] } : {}),
+    ...(Array.isArray(result.evidence) ? { evidence: [...result.evidence] } : {}),
+    ...(result.progressChanged === true ? { progressChanged: true } : {}),
+    ...(result.backtrack === true ? { backtrack: true } : {}),
+    ...(result.repeatedPage === true ? { repeatedPage: true } : {}),
+  });
 }
 
 function validateStudyShape(study) {
@@ -633,14 +669,14 @@ function hashJson(value) {
 }
 
 async function atomicWriteJson(path, value) {
-  await mkdir(dirname(path), { recursive: true });
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   await rename(tmp, path);
 }
 
 async function appendJsonLine(path, value) {
-  await mkdir(dirname(path), { recursive: true });
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   let current = "";
   try {
     current = await readFile(path, "utf8");
@@ -651,9 +687,9 @@ async function appendJsonLine(path, value) {
 }
 
 async function atomicWriteRaw(path, text) {
-  await mkdir(dirname(path), { recursive: true });
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(tmp, text, "utf8");
+  await writeFile(tmp, text, { encoding: "utf8", mode: 0o600 });
   await rename(tmp, path);
 }
 
@@ -714,7 +750,7 @@ function throwIfAborted(signal) {
 
 function toRuntimeError(error) {
   if (error instanceof RuntimeCoreError) return error;
-  return new RuntimeCoreError(error?.code ?? RUNTIME_ERROR_CODES.DRIVER_FAILED, error?.message ?? "runtime failed", { cause: error });
+  return new RuntimeCoreError(RUNTIME_ERROR_CODES.DRIVER_FAILED, "runtime failed", { cause: error });
 }
 
 function assertNonEmptyString(value, name) {

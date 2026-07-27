@@ -58,7 +58,7 @@ const observation = Object.freeze({
 });
 
 const event = Object.freeze({
-  schemaVersion: "interaction-event/0.1",
+    schemaVersion: "interaction-event/0.2",
   id: "event-1",
   sessionId: "session-1",
   index: 0,

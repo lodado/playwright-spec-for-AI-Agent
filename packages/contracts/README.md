@@ -117,7 +117,7 @@ Current schema version constants:
 study-spec/0.1
 session/0.1
 observation/0.1
-interaction-event/0.1
+interaction-event/0.2
 evidence-manifest/0.2
 functional-evaluation/0.1
 friction-point/0.1

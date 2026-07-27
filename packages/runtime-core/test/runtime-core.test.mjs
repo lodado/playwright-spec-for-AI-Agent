@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -66,6 +66,8 @@ test("runs one observation per action and seals evidence after closing the drive
   assert.ok(order.indexOf("close") < order.indexOf("seal"));
   const eventsJsonl = await readFile(join(rootDir, "sessions/session-1/events.jsonl"), "utf8");
   assert.equal(eventsJsonl.trim().split("\n").length, 1);
+  assert.equal((await stat(join(rootDir, "sessions/session-1"))).mode & 0o777, 0o700);
+  assert.equal((await stat(join(rootDir, "sessions/session-1/events.jsonl"))).mode & 0o777, 0o600);
   await removeFileSessionStore(rootDir);
 });
 
@@ -260,6 +262,65 @@ test("policy cannot act on an element that was not in the current observation", 
 
   assert.equal(result.session.terminalReason.code, "ACTION_NOT_ALLOWED");
   assert.equal(result.events.length, 0);
+});
+
+test("rejects malformed action fields before the driver executes", async () => {
+  let executed = false;
+  const driver = fakeDriver({ successAfterObserve: 99 });
+  driver.execute = async () => {
+    executed = true;
+    return { status: "success" };
+  };
+  const result = await runSession({
+    study,
+    task: study.tasks[0],
+    persona: study.personas[0],
+    seed: 101,
+    runId: "run-invalid-action",
+    sessionId: "session-invalid-action",
+    driver,
+    policy: { decide: () => ({ type: "scroll", direction: "sideways", amount: "huge", reasonCode: "bad" }) },
+    oracle: { evaluate: () => ({}) },
+    store: memoryStore(),
+  });
+
+  assert.equal(executed, false);
+  assert.equal(result.session.status, "runtime_error");
+  assert.equal(result.session.terminalReason.code, "MODEL_INVALID_OUTPUT");
+});
+
+test("preserves trusted driver failure codes and strips policy output extras before execution", async () => {
+  let executedAction;
+  const driver = fakeDriver({ successAfterObserve: 99 });
+  driver.execute = async (_handle, action) => {
+    executedAction = action;
+    return { status: "blocked", code: "ELEMENT_NOT_FOUND", message: "Element unavailable", evidenceIds: ["ev-blocked"] };
+  };
+  let decisions = 0;
+  const result = await runSession({
+    study,
+    task: study.tasks[0],
+    persona: study.personas[0],
+    seed: 101,
+    runId: "run-provenance",
+    sessionId: "session-provenance",
+    driver,
+    policy: {
+      identity: "test-model",
+      decide: () => decisions++ === 0
+        ? { type: "click", elementId: "el-1", reasonCode: "try", rationale: "must not persist" }
+        : { type: "finish", reasonCode: "done" },
+    },
+    oracle: { evaluate: () => ({}) },
+    store: memoryStore(),
+  });
+
+  assert.deepEqual(executedAction, { type: "click", elementId: "el-1", reasonCode: "try" });
+  assert.equal(result.events[0].schemaVersion, "interaction-event/0.2");
+  assert.equal(result.events[0].result.code, "ELEMENT_NOT_FOUND");
+  assert.equal(result.events[0].derivedSignals.failedInteraction, false);
+  assert.equal(result.events[0].action.rationale, undefined);
+  assert.equal(result.session.model, "test-model");
 });
 
 test("runStudy schedules the task/persona/seed matrix with bounded concurrency", async () => {

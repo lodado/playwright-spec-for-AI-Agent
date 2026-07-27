@@ -57,10 +57,27 @@ test("does not count runtime success when sealed functional evaluation failed", 
     candidateSessions: [{ session: session("c1", "p1", "success"), functionalEvaluation: { status: "runtime_error" }, fingerprint: fp("c1", 1, 0) }],
   });
   assert.equal(report.baseline.completionRate, 1);
-  assert.equal(report.candidate.completionRate, 0);
-  assert.equal(report.candidate.failureRate, 1);
+  assert.equal(report.status, "insufficient_evidence");
+  assert.equal(report.candidate.failureRate, 0);
+  assert.ok(report.delta.confidence.limitations.some((item) => item.includes("infrastructure")));
   assert.equal(report.delta.confidence.orderConsistency, "not_available");
   assert.ok(report.delta.confidence.limitations.some((item) => item.includes("not measured")));
+});
+
+test("excludes both sides of a paired comparison after one infrastructure failure", () => {
+  const baselineSessions = [
+    { session: { ...session("b1", "p1", "success"), seed: 1 }, functionalEvaluation: { status: "success" } },
+    { session: { ...session("b2", "p2", "success"), seed: 1 }, functionalEvaluation: { status: "success" } },
+  ];
+  const candidateSessions = [
+    { session: { ...session("c1", "p1", "runtime_error"), seed: 1 }, functionalEvaluation: { status: "runtime_error" } },
+    { session: { ...session("c2", "p2", "success"), seed: 1 }, functionalEvaluation: { status: "success" } },
+  ];
+  const report = compareVariants({ baselineSessions, candidateSessions, assignment: "paired" });
+
+  assert.equal(report.baseline.completionRate, 1);
+  assert.equal(report.candidate.completionRate, 1);
+  assert.ok(report.delta.confidence.limitations.some((item) => item.includes("1 infrastructure-failed pair")));
 });
 
 test("release gate never reports a baseline-better comparison as success", () => {
@@ -71,6 +88,13 @@ test("release gate never reports a baseline-better comparison as success", () =>
   assert.equal(warning.conclusion, "neutral");
   assert.match(warning.reasons.join(" "), /candidate regressed/);
   assert.equal(blocked.conclusion, "failure");
+});
+
+test("release gate exposes infrastructure failure without inventing a product finding", () => {
+  const report = evaluateReleaseGate({ infrastructureFailure: true });
+  assert.equal(report.infrastructureFailure, true);
+  assert.equal(report.conclusion, "action_required");
+  assert.match(report.reasons.join(" "), /infrastructure/);
 });
 
 test("release gate blocks reproduced critical behavioral findings but not uncalibrated exploratory singles", () => {

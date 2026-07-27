@@ -3,13 +3,20 @@ import { createHash } from "node:crypto";
 export const STUDY_SPEC_VERSION = "study-spec/0.1";
 export const SESSION_VERSION = "session/0.1";
 export const OBSERVATION_VERSION = "observation/0.1";
-export const INTERACTION_EVENT_VERSION = "interaction-event/0.1";
+export const INTERACTION_EVENT_VERSION = "interaction-event/0.2";
 export const EVIDENCE_MANIFEST_VERSION = "evidence-manifest/0.2";
 export const FUNCTIONAL_EVALUATION_VERSION = "functional-evaluation/0.1";
 export const FRICTION_POINT_VERSION = "friction-point/0.1";
 export const FINDING_VERSION = "finding/0.1";
 export const SIMULATION_VALIDITY_VERSION = "simulation-validity/0.1";
 export const VARIANT_COMPARISON_REPORT_VERSION = "variant-comparison-report/0.1";
+
+export const INTERACTION_RESULT_CODES = Object.freeze([
+  "ELEMENT_NOT_FOUND",
+  "ACTION_NOT_ALLOWED",
+  "ORIGIN_BLOCKED",
+  "DRIVER_ACTION_FAILED",
+]);
 
 export const VALIDATION_ERROR_CODE = "CONTRACT_VALIDATION_FAILED";
 export const MIGRATION_ERROR_CODE = "CONTRACT_MIGRATION_FAILED";
@@ -159,8 +166,9 @@ export function validateInteractionEvent(value) {
   ["id", "sessionId", "timestamp", "observationId", "urlBefore", "urlAfter"].forEach((key) => string(value[key], `$.${key}`));
   integer(value.index, "$.index");
   validateBrowserAction(value.action, "$.action");
-  object(value.result, "$.result", ["status", "message"]);
+  object(value.result, "$.result", ["status", "code", "message"]);
   oneOf(value.result.status, ["success", "failure", "no_change", "blocked"], "$.result.status");
+  optional(value.result.code, (code, path) => oneOf(code, INTERACTION_RESULT_CODES, path), "$.result.code");
   optional(value.result.message, string, "$.result.message");
   arrayOf(string)(value.evidenceIds, "$.evidenceIds");
   object(value.derivedSignals, "$.derivedSignals", ["progressChanged", "backtrack", "repeatedPage", "failedInteraction", "noProgress"]);
@@ -282,6 +290,13 @@ export function validateVariantComparisonReport(value) {
 }
 
 export const defaultMigrationRegistry = createMigrationRegistry();
+defaultMigrationRegistry.register({
+  from: "interaction-event/0.1",
+  to: INTERACTION_EVENT_VERSION,
+  migrate(value) {
+    return { ...value, schemaVersion: INTERACTION_EVENT_VERSION };
+  },
+});
 defaultMigrationRegistry.register({
   from: "evidence-manifest/0.1",
   to: EVIDENCE_MANIFEST_VERSION,
@@ -453,7 +468,7 @@ function validateEvaluationPolicy(value, path) {
   boolean(value.validityReport, `${path}.validityReport`);
 }
 
-function validateBrowserAction(value, path) {
+export function validateBrowserAction(value, path = "$") {
   object(value, path, ["type", "elementId", "valueRef", "value", "direction", "amount", "durationMs", "reasonCode"]);
   oneOf(value.type, ["click", "type", "select", "scroll", "back", "wait", "observe_more", "ignore", "idle", "finish", "abandon"], `${path}.type`);
   string(value.reasonCode, `${path}.reasonCode`);
@@ -473,6 +488,7 @@ function validateBrowserAction(value, path) {
     oneOf(value.amount, ["small", "medium", "large"], `${path}.amount`);
   }
   if (["wait", "idle"].includes(value.type)) positiveInteger(value.durationMs, `${path}.durationMs`);
+  return deepFreeze(value);
 }
 
 function validateSemanticNode(value, path) {

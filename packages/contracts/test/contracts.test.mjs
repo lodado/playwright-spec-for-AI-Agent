@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   ContractValidationError,
   EVIDENCE_MANIFEST_VERSION,
+  INTERACTION_EVENT_VERSION,
   STUDY_SPEC_VERSION,
   canonicalHash,
   createEventId,
@@ -108,7 +109,7 @@ test("stable ids and hashes ignore property order, not runtime wording", () => {
 
 test("typed actions require valueRef and reject plaintext value artifacts", () => {
   const event = {
-    schemaVersion: "interaction-event/0.1",
+    schemaVersion: INTERACTION_EVENT_VERSION,
     id: "event-1",
     sessionId: "session-1",
     index: 0,
@@ -122,7 +123,12 @@ test("typed actions require valueRef and reject plaintext value artifacts", () =
     derivedSignals: { progressChanged: true, backtrack: false, repeatedPage: false, failedInteraction: false, noProgress: false },
   };
   validateInteractionEvent(event);
+  validateInteractionEvent({ ...event, result: { status: "blocked", code: "ELEMENT_NOT_FOUND", message: "Element unavailable" } });
+  assert.throws(() => validateInteractionEvent({ ...event, result: { status: "failure", code: "UNKNOWN_FAILURE" } }), /must be one of/);
   assert.throws(() => validateInteractionEvent({ ...event, action: { ...event.action, value: "plain@example.test" } }), /valueRef/);
+  const migrated = migrateContract({ ...event, schemaVersion: "interaction-event/0.1" }, INTERACTION_EVENT_VERSION);
+  assert.equal(migrated.schemaVersion, INTERACTION_EVENT_VERSION);
+  validateInteractionEvent(migrated);
 });
 
 test("EvidenceManifest 0.2 must be sealed, frozen, and migratable from 0.1", () => {

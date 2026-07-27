@@ -396,7 +396,7 @@ export function createBehavioralFingerprint({ session, events = [], observations
     : observations.map((observation) => routeKey(observation.page?.url)).filter(Boolean);
   const terminal = session?.terminalReason ?? {};
   const backtrackCount = events.filter((event) => event.derivedSignals?.backtrack || event.action?.type === "back").length;
-  const failedCount = events.filter((event) => event.derivedSignals?.failedInteraction || ["failure", "blocked"].includes(event.result?.status)).length;
+  const failedCount = events.filter((event) => event.derivedSignals?.failedInteraction && !isNonProductInteraction(event)).length;
   const retryCount = events.filter((event, index) => index > 0 && sameActionTarget(event, events[index - 1])).length;
   const noActionCount = events.filter((event) => ["wait", "observe_more", "ignore", "idle"].includes(event.action?.type)).length;
   const firstAction = events[0]?.action;
@@ -424,8 +424,8 @@ export function createBehavioralFingerprint({ session, events = [], observations
       abandon: session?.status === "abandoned" && failedCount > 0 ? 1 : 0,
     },
     progressCurve: events.map((event, index) => event.derivedSignals?.progressChanged ? ratio(index + 1, eventCount) : 0),
-    frustrationCurve: events.map((event, index) => ratio(events.slice(0, index + 1).filter((item) => item.derivedSignals?.noProgress || item.derivedSignals?.failedInteraction).length, eventCount)),
-    trustCurve: events.map((event, index) => 1 - ratio(events.slice(0, index + 1).filter((item) => item.derivedSignals?.failedInteraction).length, eventCount)),
+    frustrationCurve: events.map((event, index) => ratio(events.slice(0, index + 1).filter((item) => !isNonProductInteraction(item) && (item.derivedSignals?.noProgress || item.derivedSignals?.failedInteraction)).length, eventCount)),
+    trustCurve: events.map((event, index) => 1 - ratio(events.slice(0, index + 1).filter((item) => !isNonProductInteraction(item) && item.derivedSignals?.failedInteraction).length, eventCount)),
     goalDirectednessScore: clamp01(ratio(events.filter((event) => event.derivedSignals?.progressChanged).length, Math.max(eventCount, 1)) - ratio(backtrackCount + noActionCount, Math.max(eventCount * 2, 1)) + 0.5),
   };
   return validateBehavioralFingerprint(fingerprint);
@@ -596,33 +596,38 @@ export function extractFrictionPoints({ session, functionalEvaluation, observati
   const lastEvent = [...events].sort((left, right) => (left.index ?? 0) - (right.index ?? 0)).at(-1);
   const points = [];
   for (const event of events) {
+    if (isNonProductInteraction(event)) continue;
     if (!event.derivedSignals?.failedInteraction && !event.derivedSignals?.noProgress && event.result?.status === "success") continue;
     const evidenceIds = event.evidenceIds?.filter(Boolean) ?? [];
     if (evidenceIds.length === 0) continue;
     points.push(makeFrictionPoint({
       session,
       route: routeKey(event.urlAfter ?? event.urlBefore),
-      category: event.derivedSignals?.failedInteraction ? "functional" : "behavioral",
-      observation: event.derivedSignals?.failedInteraction ? `Action ${event.action?.type} failed or was blocked on ${routeKey(event.urlBefore)}.` : `Action ${event.action?.type} made no progress on ${routeKey(event.urlBefore)}.`,
-      interpretation: event.derivedSignals?.failedInteraction ? "The user-facing interaction did not complete successfully." : "The session showed a repeated or stalled step before task completion.",
-      severityCandidate: event.derivedSignals?.failedInteraction ? "high" : "medium",
+      category: "behavioral",
+      observation: `Action ${event.action?.type} made no progress on ${routeKey(event.urlBefore)}.`,
+      interpretation: "The session showed a repeated or stalled step before task completion.",
+      severityCandidate: "medium",
       eventIds: [event.id],
       evidenceIds,
       elementFingerprint: event.action?.elementId,
     }));
   }
 
-  if (functionalEvaluation && functionalEvaluation.status !== "success" && lastEvent) {
-    const oracleIds = [...(functionalEvaluation.violatedOracleIds ?? []), ...(functionalEvaluation.unknownOracleIds ?? [])];
+  if (functionalEvaluation && !["success", "runtime_error"].includes(functionalEvaluation.status) && lastEvent) {
+    const confirmedFailure = functionalEvaluation.status === "failure"
+      && (functionalEvaluation.reasons ?? []).some((reason) => reason.startsWith("failure oracle satisfied:"));
+    const oracleIds = confirmedFailure
+      ? [...(functionalEvaluation.satisfiedOracleIds ?? [])]
+      : [...(functionalEvaluation.violatedOracleIds ?? []), ...(functionalEvaluation.unknownOracleIds ?? [])];
     const evidenceIds = functionalEvaluation.evidenceIds?.length ? functionalEvaluation.evidenceIds : lastEvent.evidenceIds ?? [];
     if (oracleIds.length > 0 && evidenceIds.length > 0) {
       points.push(makeFrictionPoint({
         session,
         route: routeKey(latest?.page?.url ?? lastEvent.urlAfter),
-        category: functionalEvaluation.status === "runtime_error" ? "functional" : "behavioral",
+        category: confirmedFailure ? "functional" : "behavioral",
         observation: `${functionalEvaluation.status} with oracle signal(s): ${oracleIds.join(", ")}.`,
         interpretation: "The sealed evidence did not prove deterministic task success.",
-        severityCandidate: functionalEvaluation.status === "failure" || functionalEvaluation.status === "runtime_error" ? "high" : "medium",
+        severityCandidate: confirmedFailure ? "high" : "medium",
         eventIds: [lastEvent.id],
         evidenceIds,
         oracleIds,
@@ -741,17 +746,18 @@ function recommendationFor(point) {
 }
 
 
-export function compareVariants({ baselineSessions = [], candidateSessions = [], baselineFingerprints, candidateFingerprints, baselineFindings = [], candidateFindings = [], canonicalFindings, orderResults = [] } = {}) {
-  const baselinePrints = baselineFingerprints ?? baselineSessions.map((item) => item.fingerprint ?? createBehavioralFingerprint({ session: item.session ?? item, events: item.events ?? [], observations: item.observations ?? [] }));
-  const candidatePrints = candidateFingerprints ?? candidateSessions.map((item) => item.fingerprint ?? createBehavioralFingerprint({ session: item.session ?? item, events: item.events ?? [], observations: item.observations ?? [] }));
-  const baselineRecords = baselineSessions.map(effectiveVariantSession);
-  const candidateRecords = candidateSessions.map(effectiveVariantSession);
+export function compareVariants({ baselineSessions = [], candidateSessions = [], baselineFingerprints, candidateFingerprints, baselineFindings = [], candidateFindings = [], canonicalFindings, orderResults = [], assignment = "independent" } = {}) {
+  const eligibility = eligibleVariantSessions(baselineSessions, candidateSessions, assignment);
+  const baselineRecords = eligibility.baseline.map(effectiveVariantSession);
+  const candidateRecords = eligibility.candidate.map(effectiveVariantSession);
+  const baselinePrints = eligibleFingerprints(eligibility.baseline, baselineFingerprints);
+  const candidatePrints = eligibleFingerprints(eligibility.candidate, candidateFingerprints);
   const baseline = variantMetrics(baselineRecords, baselinePrints, baselineFindings);
   const candidate = variantMetrics(candidateRecords, candidatePrints, candidateFindings);
   const orderConsistency = orderResults.length < 2
     ? "not_available"
     : Number(new Set(orderResults.map((item) => item.status ?? item)).size === 1);
-  const confidence = comparisonConfidence({ baselineRecords, candidateRecords, orderConsistency });
+  const confidence = comparisonConfidence({ baselineRecords, candidateRecords, orderConsistency, infrastructureExclusions: eligibility.excluded });
   let status = comparisonStatus({ baseline, candidate, orderConsistency });
   if (baselineRecords.length === 0 || candidateRecords.length === 0) status = "insufficient_evidence";
   const variantFindings = [...baselineFindings, ...candidateFindings];
@@ -780,7 +786,7 @@ export function compareVariants({ baselineSessions = [], candidateSessions = [],
   return validateVariantComparisonReport(report);
 }
 
-export function evaluateReleaseGate({ findings = [], comparisonReport, validityReport, policy } = {}) {
+export function evaluateReleaseGate({ findings = [], comparisonReport, validityReport, policy, infrastructureFailure = false } = {}) {
   const failRules = policy?.failOn ?? [
     { category: "functional", severity: "critical" },
     { category: "functional", severity: "high" },
@@ -792,15 +798,17 @@ export function evaluateReleaseGate({ findings = [], comparisonReport, validityR
   let conclusion = blockingFindings.length > 0 ? "failure" : (warningFindings.length > 0 ? "neutral" : "success");
   if (comparisonReport?.status === "baseline_better" && conclusion === "success") conclusion = "neutral";
   if (comparisonReport?.status === "unstable" || validityReport?.recommendedUse === "human_validation_required") conclusion = "action_required";
+  if (infrastructureFailure) conclusion = "action_required";
   return Object.freeze({
     conclusion,
     blockingFindingIds: blockingFindings.map((finding) => finding.id),
     warningFindingIds: warningFindings.map((finding) => finding.id),
-    infrastructureFailure: false,
+    infrastructureFailure,
     reasons: [
       ...(comparisonReport?.status === "unstable" ? ["variant comparison is unstable"] : []),
       ...(comparisonReport?.status === "baseline_better" ? ["candidate regressed against baseline"] : []),
       ...(validityReport?.calibration?.level === "uncalibrated" ? ["synthetic results are uncalibrated"] : []),
+      ...(infrastructureFailure ? ["infrastructure failure requires operator review"] : []),
       ...(blockingFindings.length > 0 ? ["blocking release gate finding matched"] : []),
     ],
   });
@@ -840,7 +848,7 @@ function comparisonStatus({ baseline, candidate, orderConsistency }) {
   return "no_clear_difference";
 }
 
-function comparisonConfidence({ baselineRecords, candidateRecords, orderConsistency }) {
+function comparisonConfidence({ baselineRecords, candidateRecords, orderConsistency, infrastructureExclusions = 0 }) {
   const enoughPairs = Math.min(baselineRecords.length, candidateRecords.length) >= 3;
   return {
     evidenceConfidence: enoughPairs ? 0.8 : 0.5,
@@ -855,8 +863,47 @@ function comparisonConfidence({ baselineRecords, candidateRecords, orderConsiste
       "Relative synthetic comparison only; no absolute conversion prediction.",
       ...(orderConsistency === "not_available" ? ["Comparison order consistency was not measured."] : []),
       ...(orderConsistency === 0 ? ["Input/execution order produced inconsistent comparison."] : []),
+      ...(infrastructureExclusions > 0 ? [`Excluded ${infrastructureExclusions} infrastructure-failed ${infrastructureExclusions === 1 ? "pair/session" : "pairs/sessions"}.`] : []),
     ],
   };
+}
+
+function eligibleVariantSessions(baselineSessions, candidateSessions, assignment) {
+  const baselineInfrastructure = baselineSessions.filter(isInfrastructureSession);
+  const candidateInfrastructure = candidateSessions.filter(isInfrastructureSession);
+  if (assignment !== "paired") {
+    return {
+      baseline: baselineSessions.filter((item) => !isInfrastructureSession(item)),
+      candidate: candidateSessions.filter((item) => !isInfrastructureSession(item)),
+      excluded: baselineInfrastructure.length + candidateInfrastructure.length,
+    };
+  }
+  const invalidKeys = new Set([...baselineInfrastructure, ...candidateInfrastructure].map(variantPairKey));
+  return {
+    baseline: baselineSessions.filter((item) => !invalidKeys.has(variantPairKey(item))),
+    candidate: candidateSessions.filter((item) => !invalidKeys.has(variantPairKey(item))),
+    excluded: invalidKeys.size,
+  };
+}
+
+function eligibleFingerprints(items, supplied) {
+  if (!supplied) return items.map((item) => item.fingerprint ?? createBehavioralFingerprint({ session: item.session ?? item, events: item.events ?? [], observations: item.observations ?? [] }));
+  const sessionIds = new Set(items.map((item) => (item.session ?? item).sessionId));
+  return supplied.filter((fingerprint) => sessionIds.has(fingerprint.sessionId));
+}
+
+function isInfrastructureSession(item) {
+  const session = item.session ?? item;
+  return session.status === "runtime_error" || item.functionalEvaluation?.status === "runtime_error";
+}
+
+function variantPairKey(item) {
+  const session = item.session ?? item;
+  return [session.taskId, session.personaId, session.seed].join("\u0000");
+}
+
+function isNonProductInteraction(event) {
+  return ["failure", "blocked"].includes(event.result?.status) || typeof event.result?.code === "string";
 }
 
 function affectedPersonas(baselineRecords, candidateRecords) {
