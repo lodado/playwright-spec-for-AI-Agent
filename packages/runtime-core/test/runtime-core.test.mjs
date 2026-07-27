@@ -57,7 +57,7 @@ test("runs one observation per action and seals evidence after closing the drive
   assert.equal(result.session.phase, "EVIDENCE_SEALED");
   assert.equal(result.session.status, "success");
   assert.equal(result.session.evidenceManifestId, "manifest-session-1");
-  assert.equal(result.manifest.schemaVersion, "evidence-manifest/0.2");
+  assert.equal(result.manifest.schemaVersion, "evidence-manifest/0.3");
   assert.equal(result.manifest.sealed, true);
   assert.equal(toSessionRecord(result.session).schemaVersion, "session/0.1");
   assert.equal(result.events[0].evidenceIds.length > 0, true);
@@ -321,6 +321,42 @@ test("preserves trusted driver failure codes and strips policy output extras bef
   assert.equal(result.events[0].derivedSignals.failedInteraction, false);
   assert.equal(result.events[0].action.rationale, undefined);
   assert.equal(result.session.model, "test-model");
+});
+
+test("seals validated model attempt metadata without raw model content", async () => {
+  const result = await runSession({
+    study,
+    task: study.tasks[0],
+    persona: study.personas[0],
+    seed: 101,
+    runId: "run-model-attempt",
+    sessionId: "session-model-attempt",
+    driver: fakeDriver({ successAfterObserve: 99 }),
+    policy: {
+      identity: "hermes:test-model",
+      decide: () => ({
+        action: { type: "finish", reasonCode: "hermes_selected" },
+        attempts: [{
+          schemaVersion: "model-attempt/0.1",
+          provider: "hermes-agent",
+          model: "test-model",
+          promptVersion: "personaut-hermes-action/0.1",
+          attempt: 1,
+          inputDigest: "sha256:input",
+          outputDigest: "sha256:output",
+          latencyMs: 4,
+          outcomeCode: "MODEL_ACTION_ACCEPTED",
+        }],
+      }),
+    },
+    oracle: { evaluate: () => ({}) },
+    store: memoryStore(),
+  });
+
+  const entry = result.manifest.entries.find(item => item.type === "model_attempt");
+  assert.equal(result.manifest.schemaVersion, "evidence-manifest/0.3");
+  assert.equal(entry.metadata.model, "test-model");
+  assert.equal(JSON.stringify(entry).includes("raw prompt"), false);
 });
 
 test("runStudy schedules the task/persona/seed matrix with bounded concurrency", async () => {

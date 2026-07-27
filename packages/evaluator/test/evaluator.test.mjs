@@ -73,7 +73,7 @@ const event = Object.freeze({
 });
 
 const manifestBody = {
-  schemaVersion: "evidence-manifest/0.2",
+  schemaVersion: "evidence-manifest/0.3",
   id: "manifest-1",
   runId: "run-1",
   sessionId: "session-1",

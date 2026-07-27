@@ -228,7 +228,8 @@ test("regex oracles reject nested quantifiers and oversized patterns or inputs",
       }),
     });
     assert.ok(completed.sessions.every(item => item.session.status === "runtime_error"));
-    assert.match(completed.sessions[0].session.terminalReason.message, fixture.error);
+    assert.equal(completed.sessions[0].session.terminalReason.code, "DRIVER_FAILED");
+    assert.equal(completed.sessions[0].session.terminalReason.message, "runtime failed");
   }
   await rm(root, { recursive: true, force: true });
 });

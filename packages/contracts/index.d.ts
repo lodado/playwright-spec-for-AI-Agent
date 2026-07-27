@@ -2,8 +2,9 @@ export const STUDY_SPEC_VERSION: "study-spec/0.1";
 export const SESSION_VERSION: "session/0.1";
 export const OBSERVATION_VERSION: "observation/0.1";
 export const INTERACTION_EVENT_VERSION: "interaction-event/0.2";
+export const MODEL_ATTEMPT_VERSION: "model-attempt/0.1";
 export const INTERACTION_RESULT_CODES: readonly ["ELEMENT_NOT_FOUND", "ACTION_NOT_ALLOWED", "ORIGIN_BLOCKED", "DRIVER_ACTION_FAILED"];
-export const EVIDENCE_MANIFEST_VERSION: "evidence-manifest/0.2";
+export const EVIDENCE_MANIFEST_VERSION: "evidence-manifest/0.3";
 export const FUNCTIONAL_EVALUATION_VERSION: "functional-evaluation/0.1";
 export const FRICTION_POINT_VERSION: "friction-point/0.1";
 export const FINDING_VERSION: "finding/0.1";
@@ -43,7 +44,8 @@ export type BrowserAction =
 export function validateBrowserAction(value: unknown, path?: string): BrowserAction;
 export interface SessionRecord { schemaVersion: typeof SESSION_VERSION; runId: string; sessionId: string; studyId: string; taskId: string; personaId: string; seed: number; variant?: string; model?: string; status: "created" | "running" | "success" | "partial" | "failure" | "abandoned" | "runtime_error" | "manual_review"; startedAt: string; completedAt?: string; sampledPolicy: Record<string, unknown>; terminalReason?: Record<string, unknown>; eventIds: string[]; evidenceManifestId?: string; }
 export interface InteractionEvent { schemaVersion: typeof INTERACTION_EVENT_VERSION; id: string; sessionId: string; index: number; timestamp: string; observationId: string; action: BrowserAction; result: { status: "success" | "failure" | "no_change" | "blocked"; code?: typeof INTERACTION_RESULT_CODES[number]; message?: string }; urlBefore: string; urlAfter: string; evidenceIds: string[]; derivedSignals: Record<"progressChanged" | "backtrack" | "repeatedPage" | "failedInteraction" | "noProgress", boolean>; }
-export interface EvidenceEntry { id: string; type: "screenshot" | "semantic_snapshot" | "trace" | "video" | "console_issue" | "network_failure" | "download" | "oracle_result" | "action_result"; relativePath?: string; contentHash: string; byteSize?: number; metadata?: Record<string, unknown>; }
+export interface ModelAttempt { schemaVersion: typeof MODEL_ATTEMPT_VERSION; provider: string; model: string; promptVersion: string; attempt: number; inputDigest: string; outputDigest: string; latencyMs: number; outcomeCode: "MODEL_ACTION_ACCEPTED" | "MODEL_INVALID_OUTPUT" | "MODEL_TIMEOUT" | "MODEL_PROVIDER_FAILED"; }
+export interface EvidenceEntry { id: string; type: "screenshot" | "semantic_snapshot" | "trace" | "video" | "console_issue" | "network_failure" | "download" | "oracle_result" | "action_result" | "model_attempt"; relativePath?: string; contentHash: string; byteSize?: number; metadata?: Record<string, unknown>; }
 export interface EvidenceManifest { schemaVersion: typeof EVIDENCE_MANIFEST_VERSION; id: string; runId: string; sessionId: string; createdAt: string; sealedAt: string; sealed: true; repositoryRevision?: string; studyHash: string; policyHash: string; entries: EvidenceEntry[]; manifestHash: string; redactionSummary: { redactedCount: number; rulesVersion: string }; }
 export interface FunctionalEvaluation { schemaVersion: typeof FUNCTIONAL_EVALUATION_VERSION; status: "success" | "partial" | "failure" | "runtime_error" | "manual_review"; satisfiedOracleIds: string[]; violatedOracleIds: string[]; unknownOracleIds: string[]; evidenceIds: string[]; reasons: string[]; }
 export interface FindingConfidence { evidenceConfidence: number; recurrenceConfidence: number; seedStability: number | "not_available"; modelAgreement: number | "not_available"; calibrationConfidence: number | "not_available"; orderConsistency: number | "not_available"; overall: "low" | "medium" | "high"; limitations: string[]; }
@@ -61,6 +63,7 @@ export function validateStudySpec(value: unknown): Readonly<StudySpec>;
 export function validateSessionRecord(value: unknown): Readonly<SessionRecord>;
 export function validateObservation(value: unknown): unknown;
 export function validateInteractionEvent(value: unknown): Readonly<InteractionEvent>;
+export function validateModelAttempt(value: unknown): Readonly<ModelAttempt>;
 export function validateEvidenceManifest(value: unknown): Readonly<EvidenceManifest>;
 export function validateFunctionalEvaluation(value: unknown): Readonly<FunctionalEvaluation>;
 export function validateBehavioralFingerprint(value: unknown): unknown;

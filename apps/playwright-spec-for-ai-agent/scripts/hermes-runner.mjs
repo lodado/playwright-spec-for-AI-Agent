@@ -284,9 +284,11 @@ export function extractJsonFromHermesOutput(
     ? groups.map(g => g.join("+")).join(" OR ")
     : keys.join(", ");
   const artifactHint = rawOutputPath ? ` See raw output: ${rawOutputPath}` : "";
-  throw new Error(
+  const error = new Error(
     `Hermes did not return valid JSON (required: ${keyHint}).${artifactHint} Preview: ${surface.slice(0, 2_000)}`
   );
+  error.code = "HERMES_INVALID_OUTPUT";
+  throw error;
 }
 
 function redactHermesOutput(output) {
@@ -344,6 +346,7 @@ export function runHermes(
     requiredKeys = ["status"],
     requiredKeyGroups = null,
     mode = "browse",
+    timeoutMs,
   } = {}
 ) {
   if (HERMES_QA_COMMAND !== REQUIRED_HERMES_AGENT_BIN) {
@@ -384,6 +387,7 @@ export function runHermes(
         encoding: "utf8",
         maxBuffer: 1024 * 1024 * 10,
         env: buildHermesChildEnv(mode, hermesHome.path),
+        ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
       }
     );
   } finally {

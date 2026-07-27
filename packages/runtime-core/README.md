@@ -42,7 +42,7 @@ StudySpec → session matrix → browser loop → driver.close → EvidenceManif
   <td align="center">→</td>
   <td align="center"><strong>② loop</strong><br/><code>observe → decide → execute</code></td>
   <td align="center">→</td>
-  <td align="center"><strong>③ seal</strong><br/><code>evidence-manifest/0.2</code></td>
+  <td align="center"><strong>③ seal</strong><br/><code>evidence-manifest/0.3</code></td>
 </tr>
 </table>
 

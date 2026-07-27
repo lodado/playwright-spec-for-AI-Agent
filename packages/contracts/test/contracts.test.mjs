@@ -4,6 +4,7 @@ import {
   ContractValidationError,
   EVIDENCE_MANIFEST_VERSION,
   INTERACTION_EVENT_VERSION,
+  MODEL_ATTEMPT_VERSION,
   STUDY_SPEC_VERSION,
   canonicalHash,
   createEventId,
@@ -13,6 +14,7 @@ import {
   validateEvidenceManifest,
   validateFinding,
   validateInteractionEvent,
+  validateModelAttempt,
   validateStudySpec,
 } from "../index.mjs";
 
@@ -131,7 +133,19 @@ test("typed actions require valueRef and reject plaintext value artifacts", () =
   validateInteractionEvent(migrated);
 });
 
-test("EvidenceManifest 0.2 must be sealed, frozen, and migratable from 0.1", () => {
+test("EvidenceManifest 0.3 accepts model attempts and migrates older manifests", () => {
+  const attempt = validateModelAttempt({
+    schemaVersion: MODEL_ATTEMPT_VERSION,
+    provider: "hermes-agent",
+    model: "test-model",
+    promptVersion: "personaut-hermes-action/0.1",
+    attempt: 1,
+    inputDigest: "sha256:input",
+    outputDigest: "sha256:output",
+    latencyMs: 12,
+    outcomeCode: "MODEL_ACTION_ACCEPTED",
+  });
+  assert.equal(Object.isFrozen(attempt), true);
   const validated = validateEvidenceManifest(manifest());
   assert.equal(Object.isFrozen(validated.entries[0]), true);
   assert.throws(() => { validated.entries[0].metadata.changed = true; }, TypeError);
@@ -140,6 +154,9 @@ test("EvidenceManifest 0.2 must be sealed, frozen, and migratable from 0.1", () 
   assert.equal(migrated.schemaVersion, EVIDENCE_MANIFEST_VERSION);
   assert.equal(migrated.sealed, true);
   validateEvidenceManifest(migrated);
+  const migrated02 = migrateContract(({ ...manifest(), schemaVersion: "evidence-manifest/0.2" }), EVIDENCE_MANIFEST_VERSION);
+  validateEvidenceManifest(migrated02);
+  assert.throws(() => validateModelAttempt({ ...attempt, latencyMs: -1 }), /must not be negative/);
 });
 
 test("findings require event and evidence references", () => {

@@ -5,12 +5,14 @@ import {
   EVIDENCE_MANIFEST_VERSION,
   INTERACTION_EVENT_VERSION,
   INTERACTION_RESULT_CODES,
+  MODEL_ATTEMPT_VERSION,
   SESSION_VERSION,
   canonicalHash,
   redactStudySecrets,
   validateBrowserAction,
   validateEvidenceManifest,
   validateInteractionEvent,
+  validateModelAttempt,
   validateSessionRecord,
 } from "@persona-runtime/contracts";
 
@@ -63,6 +65,8 @@ export const RUNTIME_ERROR_CODES = Object.freeze({
   SPEC_INVALID: "SPEC_INVALID",
   BROWSER_START_FAILED: "BROWSER_START_FAILED",
   MODEL_INVALID_OUTPUT: "MODEL_INVALID_OUTPUT",
+  MODEL_TIMEOUT: "MODEL_TIMEOUT",
+  MODEL_PROVIDER_FAILED: "MODEL_PROVIDER_FAILED",
   ACTION_NOT_ALLOWED: "ACTION_NOT_ALLOWED",
   ACTION_BUDGET_EXHAUSTED: "ACTION_BUDGET_EXHAUSTED",
   TIME_BUDGET_EXHAUSTED: "TIME_BUDGET_EXHAUSTED",
@@ -92,6 +96,7 @@ export class RuntimeCoreError extends Error {
     this.name = "RuntimeCoreError";
     this.code = code;
     this.cause = options.cause;
+    this.modelAttempts = options.modelAttempts;
   }
 }
 
@@ -232,6 +237,7 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
   const events = [];
   const observations = [];
   const driverEvidence = [];
+  const modelAttempts = [];
   const budgets = createBudget(task, now());
 
   const saveSession = async () => store.saveSession?.(session);
@@ -283,7 +289,7 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
       enforceBudget(budgets, now());
 
       const perceivedObservation = buildPerceivedObservation(observation);
-      const action = validateAction(await policy.decide({
+      const decision = await policy.decide({
         study,
         task,
         persona,
@@ -292,7 +298,9 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
         perceivedObservation,
         events,
         signal,
-      }), perceivedObservation, task);
+      });
+      collectModelAttempts(modelAttempts, decision?.attempts);
+      const action = validateAction(decision, perceivedObservation, task);
       const actionTerminal = terminalFromAction(action);
       if (actionTerminal) {
         await setPhase(actionTerminal.phase, { terminalReason: actionTerminal.reason });
@@ -309,7 +317,13 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
       await saveSession();
     }
   } catch (error) {
-    const runtimeError = toRuntimeError(error);
+    let runtimeError;
+    try {
+      collectModelAttempts(modelAttempts, error?.modelAttempts);
+      runtimeError = toRuntimeError(error);
+    } catch (metadataError) {
+      runtimeError = toRuntimeError(metadataError);
+    }
     if (!TERMINAL_PHASES.includes(session.phase)) {
       await setPhase("RUNTIME_ERROR", { terminalReason: { code: runtimeError.code, message: runtimeError.message } });
     }
@@ -336,7 +350,7 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
 
   let manifest;
   try {
-    manifest = await sealSessionEvidence({ study, session, observations, events, driverEvidence, store, now: now() });
+    manifest = await sealSessionEvidence({ study, session, observations, events, driverEvidence, modelAttempts, store, now: now() });
   } catch (error) {
     const runtimeError = toRuntimeError(error);
     if (session.phase !== "RUNTIME_ERROR") {
@@ -416,7 +430,7 @@ export function deriveInteractionEvent({ sessionId, index, observation, action, 
   return validateInteractionEvent(event);
 }
 
-async function sealSessionEvidence({ study, session, observations, events, driverEvidence, store, now }) {
+async function sealSessionEvidence({ study, session, observations, events, driverEvidence, modelAttempts, store, now }) {
   const manifestBody = {
     schemaVersion: EVIDENCE_MANIFEST_SCHEMA_VERSION,
     id: `manifest-${session.sessionId}`,
@@ -441,6 +455,12 @@ async function sealSessionEvidence({ study, session, observations, events, drive
         contentHash: hashJson(event),
         metadata: { eventId: event.id, index: event.index },
       })),
+      ...modelAttempts.map((attempt, index) => ({
+        id: `evidence-model-attempt-${session.sessionId}-${index}`,
+        type: "model_attempt",
+        contentHash: hashJson(attempt),
+        metadata: attempt,
+      })),
     ],
     redactionSummary: {
       redactedCount: Object.keys(study.environment?.fixtures ?? {}).length,
@@ -454,6 +474,16 @@ async function sealSessionEvidence({ study, session, observations, events, drive
     throw new RuntimeCoreError(RUNTIME_ERROR_CODES.EVIDENCE_SEAL_FAILED, "failed to seal session evidence", { cause: error });
   }
   return manifest;
+}
+
+function collectModelAttempts(target, attempts) {
+  if (attempts === undefined) return;
+  if (!Array.isArray(attempts)) throw new RuntimeCoreError(RUNTIME_ERROR_CODES.MODEL_INVALID_OUTPUT, "policy returned invalid model attempt metadata");
+  try {
+    target.push(...attempts.map(attempt => validateModelAttempt({ ...attempt, schemaVersion: attempt.schemaVersion ?? MODEL_ATTEMPT_VERSION })));
+  } catch (error) {
+    throw new RuntimeCoreError(RUNTIME_ERROR_CODES.MODEL_INVALID_OUTPUT, "policy returned invalid model attempt metadata", { cause: error });
+  }
 }
 
 function createBudget(task, startedAt) {
@@ -493,6 +523,7 @@ function validateAction(decision, observation, task) {
 
   if (action.type === "click" && task.safetyPolicy?.allowClick === false) throw new RuntimeCoreError(RUNTIME_ERROR_CODES.ACTION_NOT_ALLOWED, "click is blocked by task safety policy");
   if (action.type === "type" && task.safetyPolicy?.allowTyping === false) throw new RuntimeCoreError(RUNTIME_ERROR_CODES.ACTION_NOT_ALLOWED, "typing is blocked by task safety policy");
+  if (action.type === "abandon" && task.abandonmentAllowed === false) throw new RuntimeCoreError(RUNTIME_ERROR_CODES.ACTION_NOT_ALLOWED, "abandonment is blocked by task policy");
   if (action.type === "type" && (typeof action.valueRef !== "string" || action.valueRef.length === 0)) throw new RuntimeCoreError(RUNTIME_ERROR_CODES.MODEL_INVALID_OUTPUT, "type action requires valueRef");
   if (action.type === "select" && typeof action.value !== "string") throw new RuntimeCoreError(RUNTIME_ERROR_CODES.MODEL_INVALID_OUTPUT, "select action requires value");
   try {

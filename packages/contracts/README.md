@@ -85,7 +85,7 @@ Those boundaries need one shared rule: validate the data before another package 
 - canonical JSON serialization and SHA-256 hashes
 - stable IDs for sessions, events, and evidence
 - StudySpec secret redaction before hashing
-- a small migration registry for `evidence-manifest/0.1` → `evidence-manifest/0.2`
+- a small migration registry for older evidence manifests → `evidence-manifest/0.3`
 
 It does not open browsers, parse YAML, evaluate oracles, render reports, or call model providers.
 
@@ -97,7 +97,8 @@ It does not open browsers, parse YAML, evaluate oracles, render reports, or call
 | `validateSessionRecord(value)` | Validates sealed/session-facing session records. |
 | `validateObservation(value)` | Validates semantic, visual, runtime, and oracle observation shape. |
 | `validateInteractionEvent(value)` | Validates action/result events and typed-input secrecy. |
-| `validateEvidenceManifest(value)` | Requires EvidenceManifest 0.2 to be sealed. |
+| `validateEvidenceManifest(value)` | Requires EvidenceManifest 0.3 to be sealed. |
+| `validateModelAttempt(value)` | Validates digest-only model attempt provenance. |
 | `validateFunctionalEvaluation(value)` | Validates deterministic/browserless functional output. |
 | `validateFinding(value)` | Requires findings to reference events and evidence. |
 | `validateSimulationValidityReport(value)` | Validates calibration, diversity, stability, and risk output. |
@@ -118,7 +119,8 @@ study-spec/0.1
 session/0.1
 observation/0.1
 interaction-event/0.2
-evidence-manifest/0.2
+model-attempt/0.1
+evidence-manifest/0.3
 functional-evaluation/0.1
 friction-point/0.1
 finding/0.1

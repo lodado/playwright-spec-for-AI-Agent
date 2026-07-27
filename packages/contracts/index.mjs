@@ -4,7 +4,8 @@ export const STUDY_SPEC_VERSION = "study-spec/0.1";
 export const SESSION_VERSION = "session/0.1";
 export const OBSERVATION_VERSION = "observation/0.1";
 export const INTERACTION_EVENT_VERSION = "interaction-event/0.2";
-export const EVIDENCE_MANIFEST_VERSION = "evidence-manifest/0.2";
+export const MODEL_ATTEMPT_VERSION = "model-attempt/0.1";
+export const EVIDENCE_MANIFEST_VERSION = "evidence-manifest/0.3";
 export const FUNCTIONAL_EVALUATION_VERSION = "functional-evaluation/0.1";
 export const FRICTION_POINT_VERSION = "friction-point/0.1";
 export const FINDING_VERSION = "finding/0.1";
@@ -189,6 +190,17 @@ export function validateEvidenceManifest(value) {
   return deepFreeze(value);
 }
 
+export function validateModelAttempt(value) {
+  object(value, "$", ["schemaVersion", "provider", "model", "promptVersion", "attempt", "inputDigest", "outputDigest", "latencyMs", "outcomeCode"]);
+  version(value, MODEL_ATTEMPT_VERSION, "$");
+  ["provider", "model", "promptVersion", "inputDigest", "outputDigest"].forEach((key) => string(value[key], `$.${key}`));
+  positiveInteger(value.attempt, "$.attempt");
+  integer(value.latencyMs, "$.latencyMs");
+  if (value.latencyMs < 0) throw new ContractValidationError("must not be negative", "$.latencyMs");
+  oneOf(value.outcomeCode, ["MODEL_ACTION_ACCEPTED", "MODEL_INVALID_OUTPUT", "MODEL_TIMEOUT", "MODEL_PROVIDER_FAILED"], "$.outcomeCode");
+  return deepFreeze(value);
+}
+
 export function validateFunctionalEvaluation(value) {
   object(value, "$", ["schemaVersion", "status", "satisfiedOracleIds", "violatedOracleIds", "unknownOracleIds", "evidenceIds", "reasons"]);
   version(value, FUNCTIONAL_EVALUATION_VERSION, "$");
@@ -304,6 +316,13 @@ defaultMigrationRegistry.register({
     return { ...value, schemaVersion: EVIDENCE_MANIFEST_VERSION, sealed: true };
   },
 });
+defaultMigrationRegistry.register({
+  from: "evidence-manifest/0.2",
+  to: EVIDENCE_MANIFEST_VERSION,
+  migrate(value) {
+    return { ...value, schemaVersion: EVIDENCE_MANIFEST_VERSION };
+  },
+});
 
 export function createMigrationRegistry() {
   const migrators = new Map();
@@ -335,6 +354,7 @@ export const validators = Object.freeze({
   SessionRecord: validateSessionRecord,
   Observation: validateObservation,
   InteractionEvent: validateInteractionEvent,
+  ModelAttempt: validateModelAttempt,
   EvidenceManifest: validateEvidenceManifest,
   FunctionalEvaluation: validateFunctionalEvaluation,
   BehavioralFingerprint: validateBehavioralFingerprint,
@@ -537,7 +557,7 @@ function validateOracleSignals(value, path) {
 function validateEvidenceEntry(value, path) {
   object(value, path, ["id", "type", "relativePath", "contentHash", "byteSize", "metadata"]);
   string(value.id, `${path}.id`);
-  oneOf(value.type, ["screenshot", "semantic_snapshot", "trace", "video", "console_issue", "network_failure", "download", "oracle_result", "action_result"], `${path}.type`);
+  oneOf(value.type, ["screenshot", "semantic_snapshot", "trace", "video", "console_issue", "network_failure", "download", "oracle_result", "action_result", "model_attempt"], `${path}.type`);
   optional(value.relativePath, string, `${path}.relativePath`);
   if (value.relativePath !== undefined && (value.relativePath.startsWith("/") || value.relativePath.includes("\\") || value.relativePath.split("/").includes(".."))) {
     throw new ContractValidationError("must be a contained relative path", `${path}.relativePath`);
