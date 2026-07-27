@@ -28,6 +28,7 @@ describe("workspace release configuration", () => {
     expect(config).toMatchObject({
       access: "public",
       baseBranch: "main",
+      ignore: ["@lodado/personaut"],
       privatePackages: { version: false, tag: false },
     });
     expect(rootPackage.scripts).toMatchObject({
