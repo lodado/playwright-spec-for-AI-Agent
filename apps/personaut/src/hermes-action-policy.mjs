@@ -1,7 +1,7 @@
 import { canonicalHash } from "@persona-runtime/contracts";
 import { PRESETS, deriveSessionSeed, sampleBehaviorPolicy } from "@persona-runtime/persona-policy";
 import { RUNTIME_ERROR_CODES, RuntimeCoreError } from "@persona-runtime/runtime-core";
-import { readHermesModelConfig, runHermes } from "../../playwright-spec-for-ai-agent/scripts/hermes-runner.mjs";
+import { readHermesModelConfig, redactSensitiveText, runHermes } from "../../playwright-spec-for-ai-agent/scripts/hermes-runner.mjs";
 
 export const HERMES_ACTION_PROMPT_VERSION = "personaut-hermes-action/0.1";
 const MODEL_DEADLINE_MS = 30_000;
@@ -101,7 +101,7 @@ export function buildHermesActionPrompt({ task, session, observation, events, sa
     "Shapes: click {type,elementId}; type {type,elementId,valueRef}; scroll {type,direction,amount}; back/finish/abandon {type}; wait {type,durationMs}.",
     "Use only listed element ids, valueRef names, and allowedActions. wait durationMs must be 100..5000; scroll direction up/down and amount small/medium/large.",
     ...(repair ? ["The previous response did not match this schema. Repair the format once without explaining."] : []),
-    JSON.stringify(payload),
+    redactSensitiveText(JSON.stringify(payload), Object.values(study.environment?.fixtures ?? {})),
   ].join("\n");
 }
 

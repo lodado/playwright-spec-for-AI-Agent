@@ -30,7 +30,7 @@ function input() {
     observation: {
       page: { url: "https://user:password@example.test/signup?token=secret#private" },
       semantic: {
-        visibleText: ["Create account"],
+        visibleText: ["Create account", "Signed in as private@example.test"],
         headings: [{ role: "heading", name: "Sign up", fingerprint: "raw-fingerprint" }],
         landmarks: [],
         interactiveElements: [{ id: "email-field", role: "textbox", name: "Email", enabled: true, fingerprint: "raw-selector" }],
