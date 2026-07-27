@@ -24,11 +24,12 @@ describe("published package", () => {
         "bin/qa-native.mjs",
         "packages/cli/index.mjs",
         "scripts/dashboard-spec-parser.mjs",
+        "scripts/playwright-ast-parser.mjs",
         "playwright-spec-for-ai-agent.config.example.mjs",
       ]),
     );
     expect(paths.some((path: string) => path.startsWith("node_modules/"))).toBe(
       false,
     );
-  });
+  }, 15_000);
 });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -228,7 +228,8 @@ test("regex oracles reject nested quantifiers and oversized patterns or inputs",
       }),
     });
     assert.ok(completed.sessions.every(item => item.session.status === "runtime_error"));
-    assert.match(completed.sessions[0].session.terminalReason.message, fixture.error);
+    assert.equal(completed.sessions[0].session.terminalReason.code, "DRIVER_FAILED");
+    assert.equal(completed.sessions[0].session.terminalReason.message, "runtime failed");
   }
   await rm(root, { recursive: true, force: true });
 });
@@ -257,6 +258,62 @@ test("real browser sessions cannot click the below-fold CTA before scrolling", a
       const clickIndex = session.events.findIndex(event => event.action.type === "click");
       if (clickIndex >= 0) assert.ok(session.events.slice(0, clickIndex).some(event => event.action.type === "scroll"));
     }
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("real Chromium executes bounded Hermes type(valueRef) and submit without persisting fixture values", async (context) => {
+  try {
+    const browser = await chromium.launch();
+    await browser.close();
+  } catch {
+    context.skip("Chromium is not installed");
+    return;
+  }
+  const app = await serveHermesForm();
+  const root = await mkdtemp(join(tmpdir(), "personaut-hermes-browser-"));
+  const secret = "private@example.test";
+  const prompts = [];
+  try {
+    const hermesStudy = structuredClone(study);
+    hermesStudy.environment = {
+      baseUrl: app.url,
+      allowedOrigins: [app.url],
+      viewport: { width: 390, height: 844 },
+      fixtures: { email: secret },
+    };
+    hermesStudy.personas = [{ preset: "impatient_new_user" }];
+    hermesStudy.runtime = { seeds: [101], concurrency: 1, modelRoles: { action: "hermes", evaluator: "deterministic-oracle" } };
+    hermesStudy.evidence = { screenshot: "off", trace: false, video: "off", semanticSnapshot: "every_action" };
+    hermesStudy.tasks[0] = {
+      ...hermesStudy.tasks[0],
+      goal: "Submit the signup form",
+      successOracles: [{ id: "done", type: "visible_text", operation: "contains", value: "Account created" }],
+      safetyPolicy: { ...hermesStudy.tasks[0].safetyPolicy, allowTyping: true, allowStateMutation: true },
+      maxActions: 4,
+    };
+
+    const completed = await runPersonaStudy({
+      study: hermesStudy,
+      outputDir: root,
+      hermesTransport(prompt) {
+        prompts.push(prompt);
+        const payload = JSON.parse(prompt.split("\n").at(-1));
+        const elements = payload.interactiveElements;
+        if (!payload.recentEvents.some(event => event.action === "type")) {
+          return { action: { type: "type", elementId: elements.find(element => element.role === "textbox").id, valueRef: "email" } };
+        }
+        return { action: { type: "click", elementId: elements.find(element => element.role === "button").id } };
+      },
+    });
+
+    assert.equal(completed.sessions[0].session.status, "success", JSON.stringify({ reason: completed.sessions[0].session.terminalReason, events: completed.sessions[0].events }));
+    assert.deepEqual(completed.sessions[0].events.map(event => event.action.type), ["type", "click"]);
+    assert.equal(completed.sessions[0].manifest.entries.filter(entry => entry.type === "model_attempt").length, 2);
+    assert.equal(prompts.some(prompt => prompt.includes(secret)), false);
+    assert.equal((await readTextTree(root)).includes(secret), false);
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });
@@ -315,4 +372,31 @@ async function serveHiddenCta() {
     url: `http://127.0.0.1:${port}`,
     close: () => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())),
   };
+}
+
+async function serveHermesForm() {
+  const server = createServer((request, response) => {
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    response.end(request.url === "/complete"
+      ? "<!doctype html><title>Complete</title><h1>Account created</h1>"
+      : "<!doctype html><title>Sign up</title><main><h1>Create account</h1><form action='/complete' method='post'><label>Email <input name='email' type='email'></label><button type='submit'>Submit</button></form></main>");
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  return {
+    url: `http://127.0.0.1:${port}`,
+    close: () => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())),
+  };
+}
+
+async function readTextTree(root) {
+  const contents = [];
+  for (const name of await readdir(root, { recursive: true })) {
+    try {
+      contents.push(await readFile(join(root, name), "utf8"));
+    } catch {
+      // Directories are expected in the recursive listing.
+    }
+  }
+  return contents.join("\n");
 }

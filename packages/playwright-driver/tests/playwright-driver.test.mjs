@@ -58,7 +58,7 @@ describe("playwright behavioral driver", () => {
     expect(safeClick).toMatchObject({ status: "success" });
     await driver.observe(handle);
     const result = await driver.execute(handle, { type: "click", elementId: "el_999", reasonCode: "forged" });
-    expect(result).toMatchObject({ status: "blocked", message: "Element was not in the latest perceived observation" });
+    expect(result).toMatchObject({ status: "blocked", code: "ELEMENT_NOT_FOUND", message: "Element was not in the latest perceived observation" });
     await driver.close(handle);
     await app.close();
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
@@ -72,10 +72,10 @@ describe("playwright behavioral driver", () => {
     const handle = await driver.start(input("safety", app.url, dir, { allowClick: true, allowStateMutation: true, stopBeforeConfirmation: true }));
     const observation = await driver.observe(handle);
     const del = await driver.execute(handle, { type: "click", elementId: observation.semantic.interactiveElements.find((item) => item.name === "Delete account").id, reasonCode: "confirm_delete" });
-    expect(del).toMatchObject({ status: "blocked", message: "Destructive confirmation/payment action blocked" });
+    expect(del).toMatchObject({ status: "blocked", code: "ACTION_NOT_ALLOWED", message: "Destructive confirmation/payment action blocked" });
     const freshObservation = await driver.observe(handle);
     const redirect = await driver.execute(handle, { type: "click", elementId: freshObservation.semantic.interactiveElements.find((item) => item.name === "Continue").id, reasonCode: "primary_action" });
-    expect(redirect).toMatchObject({ status: "blocked" });
+    expect(redirect).toMatchObject({ status: "blocked", code: "ORIGIN_BLOCKED" });
     expect(redirect.message).not.toContain("abc");
     await driver.close(handle);
     await app.close();
@@ -108,13 +108,13 @@ describe("playwright behavioral driver", () => {
 
     const navigation = await driver.start({ ...input("navigation", app.url, path.join(dir, "navigation"), { allowClick: true, allowNavigation: false }), environment });
     let observation = await driver.observe(navigation);
-    expect(await driver.execute(navigation, { type: "click", elementId: elementId(observation, "External"), reasonCode: "follow_link" })).toMatchObject({ status: "blocked", message: "Navigation is blocked by policy" });
+    expect(await driver.execute(navigation, { type: "click", elementId: elementId(observation, "External"), reasonCode: "follow_link" })).toMatchObject({ status: "blocked", code: "ACTION_NOT_ALLOWED", message: "Navigation is blocked by policy" });
     observation = await driver.observe(navigation);
     expect(await driver.execute(navigation, { type: "back", reasonCode: "go_back" })).toMatchObject({ status: "blocked", message: "Navigation is blocked by policy" });
 
     const externalBlocked = await driver.start({ ...input("external", app.url, path.join(dir, "external"), { allowClick: true, allowNavigation: true, allowExternalOrigin: false }), environment });
     observation = await driver.observe(externalBlocked);
-    expect(await driver.execute(externalBlocked, { type: "click", elementId: elementId(observation, "External"), reasonCode: "follow_link" })).toMatchObject({ status: "blocked", message: "External-origin navigation is blocked by policy" });
+    expect(await driver.execute(externalBlocked, { type: "click", elementId: elementId(observation, "External"), reasonCode: "follow_link" })).toMatchObject({ status: "blocked", code: "ORIGIN_BLOCKED", message: "External-origin navigation is blocked by policy" });
 
     const mutation = await driver.start({ ...input("mutation", app.url, path.join(dir, "mutation"), { allowClick: true, allowNavigation: true, allowStateMutation: false }), environment });
     observation = await driver.observe(mutation);
@@ -170,7 +170,7 @@ describe("playwright behavioral driver", () => {
     expect(observation.semantic.headings[0]).toMatchObject({ text: "Visible heading", viewportPosition: { inViewport: true } });
     expect(observation.semantic.interactiveElements.find((item) => item.name === "Remember")).toMatchObject({ checked: true });
     await app.releaseSwap();
-    expect(await driver.execute(handle, { type: "click", elementId: elementId(observation, "Continue"), reasonCode: "continue" })).toMatchObject({ status: "blocked", message: "Observed element changed before action" });
+    expect(await driver.execute(handle, { type: "click", elementId: elementId(observation, "Continue"), reasonCode: "continue" })).toMatchObject({ status: "blocked", code: "ELEMENT_NOT_FOUND", message: "Observed element changed before action" });
     expect((await driver.close(handle)).evidence.every((entry) => !["trace", "video"].includes(entry.type))).toBe(true);
     await app.close();
     cleanup.push(() => rm(dir, { recursive: true, force: true }));

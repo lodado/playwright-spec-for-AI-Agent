@@ -3,13 +3,21 @@ import { createHash } from "node:crypto";
 export const STUDY_SPEC_VERSION = "study-spec/0.1";
 export const SESSION_VERSION = "session/0.1";
 export const OBSERVATION_VERSION = "observation/0.1";
-export const INTERACTION_EVENT_VERSION = "interaction-event/0.1";
-export const EVIDENCE_MANIFEST_VERSION = "evidence-manifest/0.2";
+export const INTERACTION_EVENT_VERSION = "interaction-event/0.2";
+export const MODEL_ATTEMPT_VERSION = "model-attempt/0.1";
+export const EVIDENCE_MANIFEST_VERSION = "evidence-manifest/0.3";
 export const FUNCTIONAL_EVALUATION_VERSION = "functional-evaluation/0.1";
 export const FRICTION_POINT_VERSION = "friction-point/0.1";
 export const FINDING_VERSION = "finding/0.1";
 export const SIMULATION_VALIDITY_VERSION = "simulation-validity/0.1";
 export const VARIANT_COMPARISON_REPORT_VERSION = "variant-comparison-report/0.1";
+
+export const INTERACTION_RESULT_CODES = Object.freeze([
+  "ELEMENT_NOT_FOUND",
+  "ACTION_NOT_ALLOWED",
+  "ORIGIN_BLOCKED",
+  "DRIVER_ACTION_FAILED",
+]);
 
 export const VALIDATION_ERROR_CODE = "CONTRACT_VALIDATION_FAILED";
 export const MIGRATION_ERROR_CODE = "CONTRACT_MIGRATION_FAILED";
@@ -159,8 +167,9 @@ export function validateInteractionEvent(value) {
   ["id", "sessionId", "timestamp", "observationId", "urlBefore", "urlAfter"].forEach((key) => string(value[key], `$.${key}`));
   integer(value.index, "$.index");
   validateBrowserAction(value.action, "$.action");
-  object(value.result, "$.result", ["status", "message"]);
+  object(value.result, "$.result", ["status", "code", "message"]);
   oneOf(value.result.status, ["success", "failure", "no_change", "blocked"], "$.result.status");
+  optional(value.result.code, (code, path) => oneOf(code, INTERACTION_RESULT_CODES, path), "$.result.code");
   optional(value.result.message, string, "$.result.message");
   arrayOf(string)(value.evidenceIds, "$.evidenceIds");
   object(value.derivedSignals, "$.derivedSignals", ["progressChanged", "backtrack", "repeatedPage", "failedInteraction", "noProgress"]);
@@ -178,6 +187,17 @@ export function validateEvidenceManifest(value) {
   object(value.redactionSummary, "$.redactionSummary", ["redactedCount", "rulesVersion"]);
   integer(value.redactionSummary.redactedCount, "$.redactionSummary.redactedCount");
   string(value.redactionSummary.rulesVersion, "$.redactionSummary.rulesVersion");
+  return deepFreeze(value);
+}
+
+export function validateModelAttempt(value) {
+  object(value, "$", ["schemaVersion", "provider", "model", "promptVersion", "attempt", "inputDigest", "outputDigest", "latencyMs", "outcomeCode"]);
+  version(value, MODEL_ATTEMPT_VERSION, "$");
+  ["provider", "model", "promptVersion", "inputDigest", "outputDigest"].forEach((key) => string(value[key], `$.${key}`));
+  positiveInteger(value.attempt, "$.attempt");
+  integer(value.latencyMs, "$.latencyMs");
+  if (value.latencyMs < 0) throw new ContractValidationError("must not be negative", "$.latencyMs");
+  oneOf(value.outcomeCode, ["MODEL_ACTION_ACCEPTED", "MODEL_INVALID_OUTPUT", "MODEL_TIMEOUT", "MODEL_PROVIDER_FAILED"], "$.outcomeCode");
   return deepFreeze(value);
 }
 
@@ -283,10 +303,24 @@ export function validateVariantComparisonReport(value) {
 
 export const defaultMigrationRegistry = createMigrationRegistry();
 defaultMigrationRegistry.register({
+  from: "interaction-event/0.1",
+  to: INTERACTION_EVENT_VERSION,
+  migrate(value) {
+    return { ...value, schemaVersion: INTERACTION_EVENT_VERSION };
+  },
+});
+defaultMigrationRegistry.register({
   from: "evidence-manifest/0.1",
   to: EVIDENCE_MANIFEST_VERSION,
   migrate(value) {
     return { ...value, schemaVersion: EVIDENCE_MANIFEST_VERSION, sealed: true };
+  },
+});
+defaultMigrationRegistry.register({
+  from: "evidence-manifest/0.2",
+  to: EVIDENCE_MANIFEST_VERSION,
+  migrate(value) {
+    return { ...value, schemaVersion: EVIDENCE_MANIFEST_VERSION };
   },
 });
 
@@ -320,6 +354,7 @@ export const validators = Object.freeze({
   SessionRecord: validateSessionRecord,
   Observation: validateObservation,
   InteractionEvent: validateInteractionEvent,
+  ModelAttempt: validateModelAttempt,
   EvidenceManifest: validateEvidenceManifest,
   FunctionalEvaluation: validateFunctionalEvaluation,
   BehavioralFingerprint: validateBehavioralFingerprint,
@@ -453,7 +488,7 @@ function validateEvaluationPolicy(value, path) {
   boolean(value.validityReport, `${path}.validityReport`);
 }
 
-function validateBrowserAction(value, path) {
+export function validateBrowserAction(value, path = "$") {
   object(value, path, ["type", "elementId", "valueRef", "value", "direction", "amount", "durationMs", "reasonCode"]);
   oneOf(value.type, ["click", "type", "select", "scroll", "back", "wait", "observe_more", "ignore", "idle", "finish", "abandon"], `${path}.type`);
   string(value.reasonCode, `${path}.reasonCode`);
@@ -473,6 +508,7 @@ function validateBrowserAction(value, path) {
     oneOf(value.amount, ["small", "medium", "large"], `${path}.amount`);
   }
   if (["wait", "idle"].includes(value.type)) positiveInteger(value.durationMs, `${path}.durationMs`);
+  return deepFreeze(value);
 }
 
 function validateSemanticNode(value, path) {
@@ -521,7 +557,7 @@ function validateOracleSignals(value, path) {
 function validateEvidenceEntry(value, path) {
   object(value, path, ["id", "type", "relativePath", "contentHash", "byteSize", "metadata"]);
   string(value.id, `${path}.id`);
-  oneOf(value.type, ["screenshot", "semantic_snapshot", "trace", "video", "console_issue", "network_failure", "download", "oracle_result", "action_result"], `${path}.type`);
+  oneOf(value.type, ["screenshot", "semantic_snapshot", "trace", "video", "console_issue", "network_failure", "download", "oracle_result", "action_result", "model_attempt"], `${path}.type`);
   optional(value.relativePath, string, `${path}.relativePath`);
   if (value.relativePath !== undefined && (value.relativePath.startsWith("/") || value.relativePath.includes("\\") || value.relativePath.split("/").includes(".."))) {
     throw new ContractValidationError("must be a contained relative path", `${path}.relativePath`);

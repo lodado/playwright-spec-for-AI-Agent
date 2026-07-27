@@ -39,6 +39,11 @@ try {
   if (manifest.name !== "@lodado/personaut" || Object.values(manifest.dependencies).some(value => value.startsWith("workspace:"))) {
     throw new Error("Personaut publish manifest contains workspace runtime dependencies");
   }
+  const bundle = readFileSync(join(installed, "dist", "index.mjs"), "utf8");
+  if (/\bfrom\s*["'][^"']*playwright-spec-for-ai-agent\/scripts/.test(bundle)) {
+    throw new Error("Personaut bundle imports sibling workspace source");
+  }
+  run(process.execPath, ["--input-type=module", "--eval", "import('@lodado/personaut').then(m => { if (typeof m.createHermesActionPolicy !== 'function') process.exit(1) })"], consumer);
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }

@@ -12,7 +12,7 @@
 
 </div>
 
-Personaut opens isolated Playwright sessions, lets deterministic persona policies choose bounded actions, seals the resulting evidence, and evaluates success after the browser closes.
+Personaut opens isolated Playwright sessions, lets deterministic or opt-in bounded Hermes persona policies choose actions, seals the resulting evidence, and evaluates success after the browser closes.
 
 ```text
 StudySpec → persona × task × seed sessions → sealed evidence → JSON + HTML report
@@ -144,6 +144,29 @@ Run `personaut validate` after every StudySpec edit.
 
 Seeds make policy sampling repeatable. Reusing the same StudySpec and seeds makes baseline/candidate comparison meaningful.
 
+## Opt-in Hermes actions
+
+Hermes can choose the next action from visible semantic page state while sampled persona values remain hints rather than code-owned rankings. Install and configure `hermes-agent`, then use this local-only v0.1 configuration:
+
+```yaml
+runtime:
+  seeds: [101]
+  concurrency: 1
+  modelRoles:
+    action: hermes
+    evaluator: deterministic-oracle
+
+evidence:
+  screenshot: off
+  trace: false
+  video: off
+  semanticSnapshot: every_action
+```
+
+Hermes receives the task goal, path-only route, visible text and interactive semantics, recent canonical event summaries, persona hints, allowed actions, and fixture **names**. It does not receive fixture values, oracles, selectors, raw DOM, screenshots, network/console internals, auth, or storage state. Valid actions are limited to `click`, `type(valueRef)`, `scroll`, `back`, `wait`, `finish`, and `abandon`, further restricted by the task safety policy.
+
+Invalid output gets one format-repair attempt. Timeout and provider failures are not retried, and none of these failures fall back to the deterministic policy. Sealed manifests contain digest-only model attempt provenance, never raw prompts or model output.
+
 ## Commands
 
 ```text
@@ -204,6 +227,7 @@ Evidence files are verified against the sealed manifest before an outcome is rep
 | Navigation is blocked | Add the exact origin, including scheme and port, to `environment.allowedOrigins`. |
 | Sessions never click | Check `safetyPolicy.allowClick` and make the task goal match visible button/link wording. |
 | Everything becomes manual review | Prefer deterministic URL, text, or element success oracles. |
+| Hermes preflight rejects the study | Hermes v0.1 requires a loopback URL, `concurrency: 1`, `semanticSnapshot: every_action`, and no auth or storage state. |
 | Report says `uncalibrated` or `exploration_only` | This is expected without a human reference dataset; do not present the result as real-user behavior. |
 
 ## Safety and limits
@@ -213,6 +237,7 @@ Evidence files are verified against the sealed manifest before an outcome is rep
 - Study safety policy gates navigation, clicking, typing, uploads, mutations, external origins, and confirmation stopping.
 - Browser capability closes before browserless evaluation begins.
 - Study files are trusted operator input; keep secrets in operator-controlled configuration or environment variables.
+- Hermes v0.1 is restricted to loopback test environments because its CLI query is passed through process arguments; external beta and production use are intentionally blocked.
 - Synthetic findings support release decisions but do not replace deterministic tests, analytics, or human research.
 
 For the full schema and trust-boundary details, see the [StudySpec contracts reference](https://github.com/lodado/playwright-spec-for-AI-Agent/blob/main/packages/contracts/README.md).
