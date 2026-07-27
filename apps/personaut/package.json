@@ -1,6 +1,6 @@
 {
   "name": "@lodado/personaut",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Evidence-first behavioral testing CLI for running persona-based Playwright sessions from StudySpec files.",
   "type": "module",
   "license": "MIT",

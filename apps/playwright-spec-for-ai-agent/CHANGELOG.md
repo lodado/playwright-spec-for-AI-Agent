@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0
+
+### Major Changes
+
+- Release the stable 1.0.0 version of the Playwright live staging QA CLI.
+
 ## [0.9.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.8.0...v0.9.0) (2026-07-19)
 
 
