@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Persona Runtime deterministic functional evaluator.",
+  "description": "Personaut deterministic functional evaluator.",
   "exports": {
     ".": "./src/index.mjs"
   },

@@ -2,7 +2,7 @@
 
 # @persona-runtime/evaluator
 
-**Browserless judgment for sealed Persona Runtime evidence.**
+**Browserless judgment for sealed Personaut evidence.**
 
 ![Node.js](https://img.shields.io/badge/node-%3E%3D20-339933?style=for-the-badge&logo=node.js&logoColor=white)
 ![ESM](https://img.shields.io/badge/module-ESM-4b5563?style=for-the-badge)

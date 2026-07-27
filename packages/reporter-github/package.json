@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Persona Runtime GitHub behavioral PR reporter.",
+  "description": "Personaut GitHub behavioral PR reporter.",
   "exports": {
     ".": "./src/index.mjs"
   },

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { runCli } from "../src/index.mjs";
+import { runCli } from "../dist/index.mjs";
 
 runCli(process.argv.slice(2)).catch(error => {
   console.error(error?.message ?? String(error));

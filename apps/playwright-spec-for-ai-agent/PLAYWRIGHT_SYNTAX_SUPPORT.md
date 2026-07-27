@@ -7,7 +7,7 @@ This matrix documents what the current parser accepts. It is based on `scripts/d
 | Workflow | Trigger | Node | Commands | Notes |
 | --- | --- | --- | --- | --- |
 | PR regression CI | `pull_request`, `push` to `main` | 20 | `npm ci`, `npm test` | Keeps parser compatibility checks green before merge and after main updates. |
-| Release | `push` to `main` | 20 | release-please, `npm ci`, `npm test`, `npm publish` | Existing publish path; requires `NPM_TOKEN` for npm publish. |
+| Release | `push` to `main` | 20 | Changesets, `pnpm install`, workspace checks, `pnpm release` | Opens a version PR or publishes public packages; requires `NPM_TOKEN`. |
 
 ## Spec shape
 

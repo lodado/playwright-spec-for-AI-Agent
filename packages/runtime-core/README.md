@@ -141,7 +141,7 @@ console.log(matrix[0].sessionId.startsWith("session-"));
 Run the full runtime through the workspace CLI when you want browser evidence and reports:
 
 ```bash
-pnpm persona-runtime run examples/hidden-cta/study.yaml --output=.qa/hidden-cta
+pnpm personaut run examples/hidden-cta/study.yaml --output=.qa/hidden-cta
 ```
 
 ## Outputs

@@ -2,7 +2,7 @@
 
 # @persona-runtime/contracts
 
-**Versioned JSON contracts for every Persona Runtime boundary.**
+**Versioned JSON contracts for every Personaut boundary.**
 
 ![Node >=20](https://img.shields.io/badge/node-%3E%3D20-339933?style=for-the-badge&logo=node.js&logoColor=white)
 ![ESM](https://img.shields.io/badge/module-ESM-4b5563?style=for-the-badge)
@@ -71,7 +71,7 @@ console.log(canonicalHash({ b: 2, a: 1 }));
 
 ## Why this exists
 
-Persona Runtime crosses several trust boundaries: YAML or JSON study input, browser observations, action events, evidence manifests, deterministic evaluations, findings, validity warnings, and reporters.
+Personaut crosses several trust boundaries: YAML or JSON study input, browser observations, action events, evidence manifests, deterministic evaluations, findings, validity warnings, and reporters.
 
 Those boundaries need one shared rule: validate the data before another package treats it as true. This package keeps that rule in one place instead of duplicating schema checks across runtime packages.
 

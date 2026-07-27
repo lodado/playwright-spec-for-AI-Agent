@@ -1,12 +1,12 @@
 <div align="center">
 
-# Persona Runtime CLI
+# Personaut
 
 **Run behavior-policy browser sessions from StudySpec files, then judge sealed evidence without a browser.**
 
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
 [![Playwright](https://img.shields.io/badge/Playwright-1.60-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)](https://playwright.dev)
-[![Workspace](https://img.shields.io/badge/workspace-private-0f766e?style=for-the-badge)](../../README.md)
+[![npm](https://img.shields.io/npm/v/@lodado/personaut?style=for-the-badge&logo=npm)](https://www.npmjs.com/package/@lodado/personaut)
 [![StudySpec](https://img.shields.io/badge/StudySpec-0.1-6E40C9?style=for-the-badge)](../../packages/contracts/README.md)
 
 <br />
@@ -25,9 +25,9 @@
 ---
 
 > [!NOTE]
-> `persona-runtime` is a private workspace CLI. It is separate from the published [`playwright-spec-for-ai-agent`](../../apps/playwright-spec-for-ai-agent/README.md) package, which keeps the original Hermes live staging QA commands.
+> `@lodado/personaut` is published separately from [`playwright-spec-for-ai-agent`](../../apps/playwright-spec-for-ai-agent/README.md), which keeps the original Hermes live staging QA commands.
 
-`persona-runtime` runs real Playwright browser sessions, stores sealed evidence, closes the browser, then evaluates functional and behavioral outcomes from saved evidence.
+`personaut` runs real Playwright browser sessions, stores sealed evidence, closes the browser, then evaluates functional and behavioral outcomes from saved evidence.
 
 ```text
 StudySpec
@@ -90,7 +90,14 @@ import-playwright → StudySpec → validate/run
 
 ## Quick start
 
-From the workspace root:
+Install the public CLI:
+
+```bash
+pnpm add -D @lodado/personaut
+pnpm exec personaut --help
+```
+
+To run the repository examples from the workspace root:
 
 ```bash
 corepack enable
@@ -100,7 +107,7 @@ pnpm install --frozen-lockfile
 Validate the included hidden-CTA study:
 
 ```bash
-pnpm persona-runtime validate examples/hidden-cta/study.yaml
+pnpm personaut validate examples/hidden-cta/study.yaml
 ```
 
 Run it against the fixture:
@@ -112,7 +119,7 @@ pnpm fixture:hidden-cta
 In another terminal:
 
 ```bash
-pnpm persona-runtime run examples/hidden-cta/study.yaml --output=.qa/hidden-cta
+pnpm personaut run examples/hidden-cta/study.yaml --output=.qa/hidden-cta
 ```
 
 Open:
@@ -124,24 +131,24 @@ Open:
 ## Commands
 
 ```text
-persona-runtime validate <study.yaml>
-persona-runtime run <study.yaml> [--output=.qa/run]
-persona-runtime compare <study.yaml> --baseline=<url> --candidate=<url> [--output=.qa/run]
-persona-runtime import-playwright --spec-dir=<dir> --base-url=<url> --output=<study.yaml>
+personaut validate <study.yaml>
+personaut run <study.yaml> [--output=.qa/run]
+personaut compare <study.yaml> --baseline=<url> --candidate=<url> [--output=.qa/run]
+personaut import-playwright --spec-dir=<dir> --base-url=<url> --output=<study.yaml>
 ```
 
 Workspace script examples:
 
 ```bash
-pnpm persona-runtime validate examples/hidden-cta/study.yaml
+pnpm personaut validate examples/hidden-cta/study.yaml
 ```
 
 ```bash
-pnpm persona-runtime run examples/hidden-cta/study.yaml --output=.qa/hidden-cta
+pnpm personaut run examples/hidden-cta/study.yaml --output=.qa/hidden-cta
 ```
 
 ```bash
-pnpm persona-runtime compare examples/hidden-cta/study.yaml --baseline=http://127.0.0.1:4179 --candidate=http://127.0.0.1:4179 --output=.qa/hidden-cta-compare
+pnpm personaut compare examples/hidden-cta/study.yaml --baseline=http://127.0.0.1:4179 --candidate=http://127.0.0.1:4179 --output=.qa/hidden-cta-compare
 ```
 
 ## End-to-end example
@@ -181,7 +188,7 @@ runtime:
 Run:
 
 ```bash
-pnpm persona-runtime run examples/hidden-cta/study.yaml --output=.qa/hidden-cta
+pnpm personaut run examples/hidden-cta/study.yaml --output=.qa/hidden-cta
 ```
 
 Output excerpt:
@@ -201,7 +208,7 @@ The validity report marks the run as uncalibrated unless a human reference datas
 Use the adapter when existing Playwright specs are the source of QA intent:
 
 ```bash
-pnpm persona-runtime import-playwright --spec-dir=path/to/specs --base-url=https://staging.example.com --output=.qa/imported-study.yaml
+pnpm personaut import-playwright --spec-dir=path/to/specs --base-url=https://staging.example.com --output=.qa/imported-study.yaml
 ```
 
 The adapter preserves legacy annotation/live-policy semantics, then writes a canonical StudySpec. See the shared [Playwright annotations](../../packages/playwright-spec-adapter/README.md#playwright-annotations) reference for placement, supported policies, fixtures, and safety mapping.
@@ -209,7 +216,7 @@ The adapter preserves legacy annotation/live-policy semantics, then writes a can
 ## Compare variants
 
 ```bash
-pnpm persona-runtime compare examples/hidden-cta/study.yaml --baseline=http://127.0.0.1:4179 --candidate=http://127.0.0.1:4179 --output=.qa/hidden-cta-compare
+pnpm personaut compare examples/hidden-cta/study.yaml --baseline=http://127.0.0.1:4179 --candidate=http://127.0.0.1:4179 --output=.qa/hidden-cta-compare
 ```
 
 Comparison uses paired policy sampling when available. The report shows relative differences only. It does not claim actual user conversion impact.
@@ -250,7 +257,7 @@ The evaluator verifies manifest membership, hashes, and artifact bytes before re
 
 ## Limits
 
-- The CLI is private to this workspace; publishable compatibility remains in `playwright-spec-for-ai-agent`.
+- The CLI and `playwright-spec-for-ai-agent` are versioned and published independently.
 - Study files are trusted operator inputs.
 - Variant comparison is relative and synthetic.
 - Reports support release decisions; they are not a replacement for deterministic tests or real-user analytics.

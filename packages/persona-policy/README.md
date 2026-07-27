@@ -62,7 +62,7 @@ study seed + task + persona + variant → sampled behavior policy → perceived 
 
 ## Why this exists
 
-Persona Runtime needs repeatable behavioral variation without pretending that prose personas are real people. This package turns persona presets and seeds into concrete policy values that runtime code can serialize, replay, and audit.
+Personaut needs repeatable behavioral variation without pretending that prose personas are real people. This package turns persona presets and seeds into concrete policy values that runtime code can serialize, replay, and audit.
 
 ## What it does
 

@@ -2,7 +2,7 @@
 
 # playwright-driver
 
-**Direct Playwright browser evidence for Persona Runtime.**
+**Direct Playwright browser evidence for Personaut.**
 
 ![Node >=20](https://img.shields.io/badge/node-%3E%3D20-339933?style=for-the-badge&logo=node.js&logoColor=white)
 ![Playwright peer](https://img.shields.io/badge/peer-Playwright_%3E%3D1.48-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)
@@ -24,7 +24,7 @@
 ---
 
 > [!NOTE]
-> This driver exposes only perceived browser observations and observation-local actions to Persona Runtime. It keeps selectors and raw Playwright control inside the driver boundary.
+> This driver exposes only perceived browser observations and observation-local actions to Personaut. It keeps selectors and raw Playwright control inside the driver boundary.
 
 `playwright-driver` creates isolated Playwright browser contexts, captures visible semantic and visual evidence, executes allowed observation-local actions, and blocks unsafe navigation or destructive interactions.
 
@@ -61,7 +61,7 @@ trusted start URL → isolated BrowserContext → observe visible UI → execute
 
 ## Why this exists
 
-Persona Runtime needs real browser evidence, but persona policy should not receive raw selectors, arbitrary JavaScript, or broad browser control. The driver is the narrow Playwright boundary: it turns the live page into perceived observations and accepts only actions that came from that observation.
+Personaut needs real browser evidence, but persona policy should not receive raw selectors, arbitrary JavaScript, or broad browser control. The driver is the narrow Playwright boundary: it turns the live page into perceived observations and accepts only actions that came from that observation.
 
 ## What it does
 
@@ -90,7 +90,7 @@ It does not own session orchestration, persona decisions, oracle evaluation, rep
 
 ## Quick start
 
-Import the driver and pass it into `@persona-runtime/runtime-core` or the `persona-runtime` CLI path:
+Import the driver and pass it into `@persona-runtime/runtime-core` or the `personaut` CLI path:
 
 ```js
 import { createPlaywrightDriver } from "playwright-driver";
@@ -106,7 +106,7 @@ console.log(typeof driver.close);
 For an end-to-end browser run with evidence sealing and evaluation gates, use the CLI:
 
 ```bash
-pnpm persona-runtime run examples/hidden-cta/study.yaml --output=.qa/hidden-cta
+pnpm personaut run examples/hidden-cta/study.yaml --output=.qa/hidden-cta
 ```
 
 ## Outputs

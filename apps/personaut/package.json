@@ -1,0 +1,68 @@
+{
+  "name": "@lodado/personaut",
+  "version": "0.1.0",
+  "description": "Evidence-first behavioral testing CLI for running persona-based Playwright sessions from StudySpec files.",
+  "type": "module",
+  "license": "MIT",
+  "author": "lodado <ycp998@naver.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lodado/playwright-spec-for-AI-Agent.git",
+    "directory": "apps/personaut"
+  },
+  "homepage": "https://github.com/lodado/playwright-spec-for-AI-Agent/tree/main/apps/personaut#readme",
+  "bugs": {
+    "url": "https://github.com/lodado/playwright-spec-for-AI-Agent/issues"
+  },
+  "keywords": [
+    "playwright",
+    "behavioral-testing",
+    "persona",
+    "e2e",
+    "qa",
+    "ai-agent",
+    "study-spec",
+    "test-automation",
+    "cli"
+  ],
+  "bin": {
+    "personaut": "./bin/personaut.mjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "node bin/personaut.mjs",
+    "build": "pnpm --filter @persona-runtime/persona-policy build && esbuild src/index.mjs --bundle --platform=node --format=esm --outfile=dist/index.mjs --external:@playwright/test --external:yaml",
+    "typecheck": "node --check src/index.mjs && node --check bin/personaut.mjs",
+    "test": "node --test test/*.test.mjs",
+    "prepack": "pnpm build",
+    "prepublishOnly": "pnpm test"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.60.0",
+    "yaml": "^2.8.1"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "exports": {
+    ".": "./dist/index.mjs"
+  },
+  "devDependencies": {
+    "@persona-runtime/contracts": "workspace:*",
+    "@persona-runtime/evaluator": "workspace:*",
+    "@persona-runtime/persona-policy": "workspace:*",
+    "@persona-runtime/reporter-html": "workspace:*",
+    "@persona-runtime/runtime-core": "workspace:*",
+    "esbuild": "^0.28.1",
+    "playwright-driver": "workspace:*",
+    "playwright-spec-adapter": "workspace:*"
+  }
+}

@@ -2,7 +2,7 @@
 
 # playwright-spec-adapter
 
-**Turn existing Playwright QA intent into Persona Runtime StudySpecs.**
+**Turn existing Playwright QA intent into Personaut StudySpecs.**
 
 ![Node.js](https://img.shields.io/badge/node-%3E%3D20-339933?style=for-the-badge&logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/Playwright-specs-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)
@@ -85,7 +85,7 @@ study-spec/0.1
 
 ## Why this exists
 
-Teams already encode useful QA intent in Playwright specs. The adapter lets Persona Runtime reuse that intent without running brittle mocked selectors directly against staging.
+Teams already encode useful QA intent in Playwright specs. The adapter lets Personaut reuse that intent without running brittle mocked selectors directly against staging.
 
 ## What it does
 
@@ -120,10 +120,10 @@ import { filterSpecForLiveJson } from "playwright-spec-adapter/policy";
 ## Playwright annotations
 
 These are Playwright source comments, not TypeScript decorators. They are the
-shared input contract for both the legacy live-QA CLI and Persona Runtime's
+shared input contract for both the legacy live-QA CLI and Personaut's
 `import-playwright` command.
 
-| Annotation | Scope | Persona Runtime meaning |
+| Annotation | Scope | Personaut meaning |
 | --- | --- | --- |
 | `// @qa-page: pricing` | File | Optional page/task target metadata. |
 | `// @qa-scenario: ACTIVE` | File | Required scenario identity and task intent. |

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Persona Runtime session state machine and orchestration core.",
+  "description": "Personaut session state machine and orchestration core.",
   "exports": {
     ".": "./src/index.mjs"
   },

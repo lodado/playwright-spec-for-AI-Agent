@@ -38,13 +38,13 @@ import {
   parsePlaywrightSpecs,
 } from "playwright-spec-adapter";
 
-const HELP = `Persona Runtime — behavioral release intelligence
+const HELP = `Personaut — persona-driven browser exploration
 
 Usage:
-  persona-runtime validate <study.yaml>
-  persona-runtime run <study.yaml> [--output=.qa/run]
-  persona-runtime compare <study.yaml> --baseline=<url> --candidate=<url> [--output=.qa/run]
-  persona-runtime import-playwright --spec-dir=<dir> --base-url=<url> --output=<study.yaml>
+  personaut validate <study.yaml>
+  personaut run <study.yaml> [--output=.qa/run]
+  personaut compare <study.yaml> --baseline=<url> --candidate=<url> [--output=.qa/run]
+  personaut import-playwright --spec-dir=<dir> --base-url=<url> --output=<study.yaml>
 `;
 const MAX_ORACLE_REGEX_PATTERN_LENGTH = 256;
 const MAX_ORACLE_REGEX_INPUT_LENGTH = 10_000;
