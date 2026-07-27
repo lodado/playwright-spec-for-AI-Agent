@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0
+
+### Minor Changes
+
+- faf85a2: Parse Playwright specs with the TypeScript AST, preserve structured actions and assertions in live plans, and fail closed on unresolved executable syntax.
+
 ## 1.0.0
 
 ### Major Changes

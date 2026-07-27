@@ -1,5 +1,15 @@
 # @lodado/personaut
 
+## 0.3.0
+
+### Minor Changes
+
+- 9497444: Add an opt-in bounded Hermes action policy with digest-only attempt provenance and no deterministic fallback.
+
+### Patch Changes
+
+- Capture settled failure screenshots and preserve explicit progress signals while inferring successful URL changes.
+
 ## 0.2.0
 
 ### Minor Changes
