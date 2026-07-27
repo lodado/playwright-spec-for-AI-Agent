@@ -34,4 +34,14 @@ export default {
       authRequired: false,
     },
   },
+
+  remediation: {
+    patch: {
+      minimumConfidence: 0.5,
+      maxFiles: 5,
+      maxChangedLines: 200,
+      allowedPaths: ["src", "tests"],
+      deniedPaths: ["src/secrets"],
+    },
+  },
 };

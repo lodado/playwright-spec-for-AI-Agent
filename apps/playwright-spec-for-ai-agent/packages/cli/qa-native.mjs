@@ -8,7 +8,7 @@ const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 const MAX_PRIVATE_JSON_BYTES = 4 * 1024 * 1024;
 const REPORT_OPTIONS = new Set(["run-dir", "repository-root", "revision", "judgment"]);
-const REPORT_COMMANDS = new Set(["diagnose", "suggest-fix", "report"]);
+const REPORT_COMMANDS = new Set(["diagnose", "suggest-fix", "report", "propose-patch"]);
 const PUBLISH_ISSUE_OPTIONS = new Set([...REPORT_OPTIONS, "repository"]);
 const COMMAND_OPTIONS = Object.freeze({
   execute: new Set(["spec", "base-url", "run-dir", "provider", "mode"]),
@@ -17,6 +17,7 @@ const COMMAND_OPTIONS = Object.freeze({
   diagnose: REPORT_OPTIONS,
   "suggest-fix": REPORT_OPTIONS,
   report: REPORT_OPTIONS,
+  "propose-patch": REPORT_OPTIONS,
   "publish-issue": PUBLISH_ISSUE_OPTIONS,
 });
 const COMMAND_USAGE = Object.freeze({
@@ -26,6 +27,7 @@ const COMMAND_USAGE = Object.freeze({
   diagnose: "qa-native diagnose --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
   "suggest-fix": "qa-native suggest-fix --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
   report: "qa-native report --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
+  "propose-patch": "qa-native propose-patch --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
   "publish-issue": "qa-native publish-issue --run-dir=.qa/runs/<id> --repository-root=. --repository=<owner/repository> [--revision=<commit>] [--judgment=<result.json>]",
 });
 

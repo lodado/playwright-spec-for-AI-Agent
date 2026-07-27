@@ -152,6 +152,7 @@ function normalizeFileConfig(raw) {
   }
 
   const fixtures = isPlainObject(raw.fixtures) ? raw.fixtures : {};
+  const remediation = isPlainObject(raw.remediation) ? raw.remediation : {};
 
   return {
     root: raw.root ? resolve(raw.root) : null,
@@ -160,6 +161,7 @@ function normalizeFileConfig(raw) {
     targetPaths,
     staging,
     fixtures,
+    remediation,
   };
 }
 

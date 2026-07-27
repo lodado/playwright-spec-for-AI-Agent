@@ -231,6 +231,19 @@ npx qa-native report \
 
 The report pins `HEAD` to an exact Git commit before locating likely files and line ranges. If a run contains multiple completed judgment sets, select one result explicitly with `--judgment=judgments/<set>/judge-result-<id>.json`.
 
+Generate a private, reviewable patch proposal without applying it:
+
+```bash
+npx qa-native propose-patch \
+  --run-dir=.qa/runs/dashboard-1 \
+  --repository-root=. \
+  --revision=HEAD
+```
+
+Hermes receives only the bounded Diagnosis, Code Context, and Repair Recommendation and returns structured `REPLACE_RANGE` or `CREATE_FILE` operations. The runtime revalidates every reference against the pinned commit, rejects stale hashes, ambiguous candidates, symlinks, binary or sensitive paths, overlapping ranges, and size-limit violations, then writes `patch-proposal/0.1` under the private run directory. This command does not edit files, create a branch or worktree, run verification, publish GitHub content, or claim the failure is fixed.
+
+Projects may narrow patch eligibility with `remediation.patch` in `playwright-spec-for-ai-agent.config.mjs`: `minimumConfidence`, `maxFiles`, `maxChangedLines`, `allowedPaths`, and `deniedPaths`. These settings cannot override the built-in sensitive-path deny rules.
+
 Publish one failed or manual-review result as an evidence-backed GitHub Issue after authenticating `gh`:
 
 ```bash

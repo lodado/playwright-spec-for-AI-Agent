@@ -22,6 +22,7 @@ export const SEMANTIC_JUDGE_DECISION_VERSION = "semantic-judge-decision/0.1";
 export const FAILURE_DIAGNOSIS_VERSION = "failure-diagnosis/0.1";
 export const CODE_CONTEXT_VERSION = "code-context/0.1";
 export const REPAIR_RECOMMENDATION_VERSION = "repair-recommendation/0.1";
+export const PATCH_PROPOSAL_VERSION = "patch-proposal/0.1";
 export const GITHUB_PUBLICATION_RESULT_VERSION = "github-publication-result/0.2";
 
 export const VERDICTS = Object.freeze(["PASS", "FAIL", "SKIP", "MANUAL_REVIEW"]);
@@ -50,7 +51,7 @@ export const RUNTIME_ERROR_CODES = Object.freeze([
   "UNKNOWN_RUNTIME_ERROR",
 ]);
 
-const runtimeStages = ["compile", "plan", "execute", "evidence", "evaluate", "judge", "diagnose", "report"];
+const runtimeStages = ["compile", "plan", "execute", "evidence", "evaluate", "judge", "diagnose", "report", "propose-patch"];
 const failureOrigins = ["PRODUCT_CODE", "TEST_CODE", "QA_SPEC", "API_CONTRACT", "FIXTURE_OR_MOCK", "TEST_DATA", "ENVIRONMENT", "THIRD_PARTY", "UNKNOWN"];
 const codeMatchReasons = ["TEST_ID_MATCH", "VISIBLE_TEXT_MATCH", "ROUTE_MATCH", "NETWORK_ENDPOINT_MATCH", "STACK_TRACE_MATCH", "RECENTLY_CHANGED", "DEPENDENCY_MATCH"];
 const payloadHashNoise = new Set([
@@ -92,6 +93,7 @@ const schemas = {
   FailureDiagnosis: validateFailureDiagnosis,
   CodeContextBundle: validateCodeContextBundle,
   RepairRecommendation: validateRepairRecommendation,
+  PatchProposal: validatePatchProposal,
   GitHubPublicationResult: validateGitHubPublicationResult,
 };
 
@@ -1002,6 +1004,109 @@ function validateRepairRecommendation(value, path, context = {}) {
   }
 }
 
+function validatePatchProposal(value, path, context = {}) {
+  const contract = "PatchProposal";
+  object(value, path, contract);
+  allowedKeys(value, ["schemaVersion", "proposalId", "diagnosisId", "codeContextBundleId", "repairRecommendationId", "baseRevision", "intent", "expectedEffect", "risks", "files", "operations", "verificationPlan"], path, contract);
+  exact(value.schemaVersion, PATCH_PROPOSAL_VERSION, `${path}.schemaVersion`, contract);
+  for (const key of ["proposalId", "diagnosisId", "codeContextBundleId", "repairRecommendationId"]) boundedString(value[key], 512, `${path}.${key}`, contract);
+  boundedString(value.baseRevision, 128, `${path}.baseRevision`, contract);
+  boundedString(value.intent, 4_096, `${path}.intent`, contract);
+  boundedString(value.expectedEffect, 4_096, `${path}.expectedEffect`, contract);
+  uniqueStringArray(value.risks, `${path}.risks`, contract);
+  if (value.risks.length > 20) fail(contract, `${path}.risks`, "must contain at most 20 risks");
+  value.risks.forEach((risk, index) => boundedString(risk, 2_000, `${path}.risks[${index}]`, contract));
+
+  array(value.files, `${path}.files`, contract);
+  if (value.files.length === 0 || value.files.length > 10) fail(contract, `${path}.files`, "must contain 1 to 10 files");
+  value.files.forEach((file, index) => {
+    const filePath = `${path}.files[${index}]`;
+    object(file, filePath, contract);
+    allowedKeys(file, ["path", "action", "originalContentHash"], filePath, contract);
+    repositoryPath(file.path, `${filePath}.path`, contract);
+    oneOf(file.action, ["MODIFY", "CREATE"], `${filePath}.action`, contract);
+    if (file.action === "MODIFY") sha256Hash(file.originalContentHash, `${filePath}.originalContentHash`, contract);
+    else if (file.originalContentHash !== undefined) fail(contract, `${filePath}.originalContentHash`, "is not allowed for a created file");
+  });
+  const filePaths = value.files.map((file) => file.path);
+  if (new Set(filePaths).size !== filePaths.length) fail(contract, `${path}.files`, "must contain unique paths");
+
+  array(value.operations, `${path}.operations`, contract);
+  if (value.operations.length === 0 || value.operations.length > 20) fail(contract, `${path}.operations`, "must contain 1 to 20 operations");
+  value.operations.forEach((operation, index) => {
+    const operationPath = `${path}.operations[${index}]`;
+    object(operation, operationPath, contract);
+    if (operation.type === "REPLACE_RANGE") {
+      allowedKeys(operation, ["type", "path", "startLine", "endLine", "replacement"], operationPath, contract);
+      repositoryPath(operation.path, `${operationPath}.path`, contract);
+      boundedInteger(operation.startLine, 1, 1_000_000, `${operationPath}.startLine`, contract);
+      boundedInteger(operation.endLine, operation.startLine, 1_000_000, `${operationPath}.endLine`, contract);
+      utf8Text(operation.replacement, 131_072, true, `${operationPath}.replacement`, contract);
+    } else if (operation.type === "CREATE_FILE") {
+      allowedKeys(operation, ["type", "path", "content"], operationPath, contract);
+      repositoryPath(operation.path, `${operationPath}.path`, contract);
+      utf8Text(operation.content, 131_072, false, `${operationPath}.content`, contract);
+    } else {
+      fail(contract, `${operationPath}.type`, "must be one of: REPLACE_RANGE, CREATE_FILE");
+    }
+  });
+  for (const operation of value.operations) {
+    const file = value.files.find((candidate) => candidate.path === operation.path);
+    if (!file) fail(contract, `${path}.operations`, `unknown file ${operation.path}`);
+    if ((operation.type === "REPLACE_RANGE") !== (file.action === "MODIFY")) fail(contract, `${path}.operations`, `operation does not match file action for ${operation.path}`);
+  }
+  for (const file of value.files) if (!value.operations.some((operation) => operation.path === file.path)) fail(contract, `${path}.operations`, `missing operation for ${file.path}`);
+  for (const file of value.files.filter((candidate) => candidate.action === "CREATE")) {
+    if (value.operations.filter((operation) => operation.path === file.path).length !== 1) fail(contract, `${path}.operations`, `created file ${file.path} requires exactly one operation`);
+  }
+  const replacements = value.operations.filter((operation) => operation.type === "REPLACE_RANGE");
+  for (let index = 0; index < replacements.length; index += 1) {
+    for (let next = index + 1; next < replacements.length; next += 1) {
+      if (replacements[index].path === replacements[next].path && replacements[index].startLine <= replacements[next].endLine && replacements[next].startLine <= replacements[index].endLine) {
+        fail(contract, `${path}.operations`, `replacement ranges overlap for ${replacements[index].path}`);
+      }
+    }
+  }
+
+  array(value.verificationPlan, `${path}.verificationPlan`, contract);
+  if (value.verificationPlan.length === 0 || value.verificationPlan.length > 20) fail(contract, `${path}.verificationPlan`, "must contain 1 to 20 commands");
+  value.verificationPlan.forEach((step, index) => {
+    const stepPath = `${path}.verificationPlan[${index}]`;
+    object(step, stepPath, contract);
+    allowedKeys(step, ["command", "purpose"], stepPath, contract);
+    boundedString(step.command, 1_000, `${stepPath}.command`, contract);
+    boundedString(step.purpose, 2_000, `${stepPath}.purpose`, contract);
+  });
+
+  if (context.diagnosis) {
+    validateFailureDiagnosis(context.diagnosis, "$.diagnosis");
+    exact(value.diagnosisId, context.diagnosis.diagnosisId, `${path}.diagnosisId`, contract);
+  }
+  if (context.codeContext) {
+    validateCodeContextBundle(context.codeContext, "$.codeContext");
+    exact(value.codeContextBundleId, context.codeContext.bundleId, `${path}.codeContextBundleId`, contract);
+    exact(value.baseRevision, context.codeContext.revision, `${path}.baseRevision`, contract);
+    if (context.diagnosis) exact(context.codeContext.failureDiagnosisId, context.diagnosis.diagnosisId, "$.codeContext.failureDiagnosisId", contract);
+    for (const file of value.files.filter((candidate) => candidate.action === "MODIFY")) {
+      const candidate = context.codeContext.candidates.find((item) => item.path === file.path);
+      const snippet = context.codeContext.snippets.find((item) => item.path === file.path);
+      if (!candidate || !snippet) fail(contract, `${path}.files`, `modified file ${file.path} is not bound to CodeContext`);
+      exact(file.originalContentHash, snippet.contentHash, `${path}.files.${file.path}.originalContentHash`, contract);
+      for (const operation of value.operations.filter((item) => item.path === file.path)) {
+        const startLine = Math.max(candidate.range?.start.line ?? 1, snippet.range.start.line);
+        const endLine = Math.min(candidate.range?.end.line ?? Number.MAX_SAFE_INTEGER, snippet.range.end.line);
+        if (operation.startLine < startLine || operation.endLine > endLine) fail(contract, `${path}.operations`, `replacement range for ${file.path} is outside CodeContext`);
+      }
+    }
+  }
+  if (context.recommendation) {
+    validateRepairRecommendation(context.recommendation, "$.recommendation", { diagnosis: context.diagnosis, codeContext: context.codeContext });
+    exact(value.repairRecommendationId, context.recommendation.recommendationId, `${path}.repairRecommendationId`, contract);
+    exact(value.baseRevision, context.recommendation.repositoryRevision, `${path}.baseRevision`, contract);
+    if (canonicalHash(value.verificationPlan) !== canonicalHash(context.recommendation.verificationPlan)) fail(contract, `${path}.verificationPlan`, "must use the trusted RepairRecommendation verification plan");
+  }
+}
+
 function validateGitHubPublicationResult(value, path) {
   const contract = "GitHubPublicationResult";
   object(value, path, contract);
@@ -1221,6 +1326,7 @@ function stringArray(value, path, contract) { array(value, path, contract); valu
 function uniqueStringArray(value, path, contract) { stringArray(value, path, contract); if (new Set(value).size !== value.length) fail(contract, path, "must contain unique strings"); }
 function string(value, path, contract) { if (typeof value !== "string" || value.length === 0) fail(contract, path, "must be a non-empty string"); }
 function boundedString(value, maxLength, path, contract) { string(value, path, contract); if (value.length > maxLength) fail(contract, path, `must contain at most ${maxLength} characters`); }
+function utf8Text(value, maxBytes, allowEmpty, path, contract) { if (typeof value !== "string" || (!allowEmpty && value.length === 0) || value.includes("\0")) fail(contract, path, "must be bounded UTF-8 text"); const encoded = new TextEncoder().encode(value); if (encoded.length > maxBytes || new TextDecoder("utf-8", { fatal: true }).decode(encoded) !== value) fail(contract, path, "must be bounded UTF-8 text"); }
 function sha256Hash(value, path, contract) { if (typeof value !== "string" || !/^sha256:[0-9a-f]{64}$/.test(value)) fail(contract, path, "must be a SHA-256 hash"); }
 function boundedInteger(value, min, max, path, contract) { number(value, path, contract); if (!Number.isInteger(value) || value < min || value > max) fail(contract, path, `must be an integer between ${min} and ${max}`); }
 function repositoryPath(value, path, contract) { boundedString(value, 4_096, path, contract); if (/^(?:[a-z]:[\\/]|[\\/])|(?:^|[\\/])\.\.(?:[\\/]|$)|[\0\r\n]/i.test(value)) fail(contract, path, "must be a safe repository-relative path"); }
