@@ -3,7 +3,7 @@ import { QA_IR_VERSION } from "../../contracts/index.mjs";
 import { createExecutionPlan } from "../../core/index.mjs";
 import { verifyStoredEvidence } from "../../evidence/index.mjs";
 import { evaluateDeterministically } from "../../judge/index.mjs";
-import { executeWithPlaywright, playwrightExecutionCapabilities } from "../index.mjs";
+import { executeWithPlaywright, normalizeAuthBootstrap, playwrightExecutionCapabilities } from "../index.mjs";
 
 const policy = {
   navigation: "ALLOWED",
@@ -59,12 +59,12 @@ function clickableQaIr(action = "CLICK") {
   return input;
 }
 
-function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccessCode=short-secret#short-secret", text = "Dashboard SESSION-SECRET", dom = "<main>Dashboard SESSION-SECRET</main>", clickError, onClick, closeDelayMs = 0, elementCount = 1 } = {}) {
+function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccessCode=short-secret#short-secret", text = "Dashboard SESSION-SECRET", dom = "<main>Dashboard SESSION-SECRET</main>", clickError, onClick, onGoto, closeDelayMs = 0, elementCount = 1 } = {}) {
   const calls = [];
   let routeHandler;
   let webSocketHandler;
   const page = {
-    async goto(url) { calls.push(["goto", url]); },
+    async goto(url) { calls.push(["goto", url]); await onGoto?.({ url, routeHandler }); },
     locator(selector) {
       return {
         async evaluate(_callback, maxChars) {
@@ -119,6 +119,37 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
 }
 
 describe("readonly Playwright execution provider", () => {
+  it("uses session state and confines bootstrap mutations to declared endpoints", async () => {
+    const input = qaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    let bootstrapPost;
+    const fixture = fakeBrowser({
+      onGoto: async ({ url, routeHandler }) => {
+        if (url !== "https://example.test/login") return;
+        bootstrapPost = { request: () => ({ method: () => "POST", url: () => "https://example.test/api/auth/session" }), abort: vi.fn(), continue: vi.fn() };
+        await routeHandler(bootstrapPost);
+      },
+    });
+    const authBootstrap = {
+      url: "https://example.test/login",
+      allowedEndpoints: [{ origin: "https://example.test", path: "/api/auth/session", methods: ["POST"] }],
+    };
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-bootstrap", browserType: fixture.browserType, storageStatePath: "/private/session.json", authBootstrap });
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    expect(fixture.calls).toContainEqual(["newContext", expect.objectContaining({ storageState: "/private/session.json" })]);
+    expect(fixture.calls.map(([name, value]) => name === "goto" && value)).toContain("https://example.test/login");
+    expect(bootstrapPost.continue).toHaveBeenCalledOnce();
+    const postBootstrapMutation = { request: () => ({ method: () => "POST", url: () => "https://example.test/api/auth/session" }), abort: vi.fn(), continue: vi.fn() };
+    await fixture.routeHandler(postBootstrapMutation);
+    expect(postBootstrapMutation.abort).toHaveBeenCalledWith("blockedbyclient");
+    expect(postBootstrapMutation.continue).not.toHaveBeenCalled();
+  });
+
+  it("rejects broad or credential-bearing auth bootstrap configurations", () => {
+    expect(() => normalizeAuthBootstrap({ url: "https://example.test/login?token=secret" }, "https://example.test")).toThrow("auth bootstrap is invalid");
+    expect(() => normalizeAuthBootstrap({ url: "https://example.test/login", allowedEndpoints: [{ origin: "https://example.test", path: "/api/auth", methods: ["GET"] }] }, "https://example.test")).toThrow("auth bootstrap is invalid");
+  });
+
   it("executes a plan and seals redacted browser evidence before returning", async () => {
     const input = qaIr();
     const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });

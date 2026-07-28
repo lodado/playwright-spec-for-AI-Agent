@@ -13,7 +13,7 @@ const PUBLISH_ISSUE_OPTIONS = new Set([...REPORT_OPTIONS, "repository"]);
 const REMEDIATION_OPTIONS = new Set([...PUBLISH_ISSUE_OPTIONS, "publish"]);
 const PUBLICATION_COMMANDS = new Set(["publish-issue", "publish", "remediate"]);
 const COMMAND_OPTIONS = Object.freeze({
-  execute: new Set(["spec", "base-url", "run-dir", "provider", "mode"]),
+  execute: new Set(["spec", "base-url", "run-dir", "provider", "mode", "storage-state", "auth-bootstrap"]),
   judge: new Set(["run-dir"]),
   replay: new Set(["run-dir"]),
   diagnose: REPORT_OPTIONS,
@@ -26,7 +26,7 @@ const COMMAND_OPTIONS = Object.freeze({
   remediate: REMEDIATION_OPTIONS,
 });
 const COMMAND_USAGE = Object.freeze({
-  execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> [--provider=playwright --mode=strict | --provider=hermes --mode=adaptive]",
+  execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> [--storage-state=.private/session.json --auth-bootstrap=.private/auth-bootstrap.json --provider=playwright --mode=strict | --provider=hermes --mode=adaptive]",
   judge: "qa-native judge --run-dir=.qa/runs/<id>",
   replay: "qa-native replay --run-dir=.qa/runs/<id>",
   diagnose: "qa-native diagnose --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
@@ -211,6 +211,8 @@ function parseRequest(argv) {
         publish: { type: "string" },
         provider: { type: "string" },
         mode: { type: "string" },
+        "storage-state": { type: "string" },
+        "auth-bootstrap": { type: "string" },
       },
     });
   } catch {
@@ -233,6 +235,12 @@ function normalizeRequest(request, cwd) {
     const provider = request.options.provider ?? "playwright";
     const mode = request.options.mode ?? "strict";
     if (!((provider === "playwright" && mode === "strict") || (provider === "hermes" && mode === "adaptive"))) throw new CliError("execution provider and mode combination is unsupported");
+    const storageStatePath = request.options["storage-state"] === undefined
+      ? undefined
+      : resolvePrivateRegularInput(request.options["storage-state"], { root: cwd, label: "storage state" });
+    const authBootstrapPath = request.options["auth-bootstrap"] === undefined
+      ? undefined
+      : resolveRegularInput(request.options["auth-bootstrap"], { root: cwd, label: "auth bootstrap" });
     return Object.freeze({
       command: request.command,
       cwd,
@@ -241,6 +249,8 @@ function normalizeRequest(request, cwd) {
       baseUrl: safeBaseUrl(request.options["base-url"]),
       provider,
       mode,
+      ...(storageStatePath === undefined ? {} : { storageStatePath }),
+      ...(authBootstrapPath === undefined ? {} : { authBootstrapPath }),
     });
   }
 
@@ -287,6 +297,12 @@ function resolveRegularInput(value, { root, label }) {
   assertSafeExistingComponents(canonicalRoot, target);
   const stat = lstatIfExists(target);
   if (!stat?.isFile()) throw new CliError(`${label} path is invalid`);
+  return target;
+}
+
+function resolvePrivateRegularInput(value, { root, label }) {
+  const target = resolveRegularInput(value, { root, label });
+  if ((lstatSync(target).mode & 0o077) !== 0) throw new CliError(`${label} must be private`);
   return target;
 }
 

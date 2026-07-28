@@ -1,7 +1,7 @@
 import { chromium } from "@playwright/test";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import path from "node:path";
+import path, { relative } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createServer } from "node:http";
 import { createPlaywrightDriver } from "../src/index.mjs";
@@ -24,6 +24,56 @@ afterEach(async () => {
 });
 
 describe("playwright behavioral driver", () => {
+  it("reuses storage state and limits auth bootstrap to its declared phase", async () => {
+    if (!browserAvailable) return;
+    const requests = [];
+    const server = createServer((request, response) => {
+      requests.push(request.url);
+      if (request.url === "/login") {
+        response.writeHead(200, { "content-type": "text/html" });
+        response.end("<!doctype html><h1>Login</h1>");
+        return;
+      }
+      if (request.url === "/app") {
+        response.writeHead(200, { "content-type": "text/html" });
+        response.end(`<!doctype html><h1>${request.headers.cookie?.includes("qa_session=active") ? "Authenticated" : "Guest"}</h1><script>fetch('/mutation', { method: 'POST' }).catch(() => {})</script>`);
+        return;
+      }
+      response.writeHead(204).end();
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address();
+    const origin = `http://127.0.0.1:${port}`;
+    const root = await mkdtemp(path.join(process.cwd(), ".personaut-auth-test-"));
+    const statePath = path.join(root, "session.json");
+    await writeFile(statePath, JSON.stringify({ cookies: [{ name: "qa_session", value: "active", domain: "127.0.0.1", path: "/", expires: -1, httpOnly: false, secure: false, sameSite: "Lax" }], origins: [] }), { mode: 0o600 });
+    const driver = createPlaywrightDriver({ browserType: chromium });
+    try {
+      const handle = await driver.start({
+        sessionId: "authenticated",
+        evidenceDir: path.join(root, "evidence"),
+        environment: {
+          baseUrl: `${origin}/app`,
+          startPath: "/app",
+          allowedOrigins: [origin],
+          viewport: { width: 390, height: 844 },
+          storageStatePath: relative(process.cwd(), statePath),
+          auth: { bootstrap: { url: `${origin}/login`, allowedEndpoints: [{ origin, path: "/api/auth/session", methods: ["POST"] }] } },
+        },
+        safetyPolicy: { allowRead: true, allowNavigation: false, allowClick: false, allowTyping: false, allowStateMutation: false },
+      });
+      const observation = await driver.observe(handle);
+      expect(observation.semantic.visibleText).toContain("Authenticated");
+      expect(requests).toContain("/login");
+      await driver.close(handle);
+      expect(requests).not.toContain("/mutation");
+    } finally {
+      await driver.closeAll();
+      await new Promise((resolve) => server.close(resolve));
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("isolates BrowserContexts per session and writes traces", async () => {
     if (!browserAvailable) return;
     const app = await serve(`<button id="set" onclick="localStorage.setItem('seen','yes')">Set</button><button id="read" onclick="document.body.dataset.seen=localStorage.getItem('seen')||'no'">Read</button>`);

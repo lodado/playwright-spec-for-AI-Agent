@@ -134,6 +134,7 @@ download
 - Forged or stale element IDs are blocked.
 - Destructive confirmation/payment-like controls are blocked when `stopBeforeConfirmation` is enabled.
 - `storageStatePath` must resolve within the workspace.
+- `environment.auth.bootstrap` may temporarily allow only explicit auth origins and non-GET endpoints; after its page loads, normal mutation policy resumes.
 - If `valueRefs` contain secrets, screenshot, trace, and video evidence are disabled for that session.
 
 ## Test

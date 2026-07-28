@@ -108,6 +108,55 @@ describe("qa-native CLI security foundation", () => {
     expect(JSON.stringify({ stdout: stdout.mock.calls, stderr: stderr.mock.calls })).not.toContain("provider-secret");
   });
 
+  it("passes workspace-local session and bootstrap inputs without reading them into CLI output", async () => {
+    const cwd = temporaryRoot();
+    writeFileSync(join(cwd, "dashboard.spec.ts"), "test('dashboard', () => {})");
+    writeFileSync(join(cwd, "session.json"), "{}", { mode: 0o600 });
+    writeFileSync(join(cwd, "bootstrap.json"), "{}", { mode: 0o600 });
+    const execute = vi.fn(async () => 0);
+    const status = await runQaNative([
+      "execute",
+      "--spec=dashboard.spec.ts",
+      "--base-url=https://example.test",
+      "--run-dir=.qa/runs/session",
+      "--storage-state=session.json",
+      "--auth-bootstrap=bootstrap.json",
+    ], {
+      cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: Buffer.alloc(32, 0x51).toString("base64") },
+      handlers: { execute },
+      stdout: vi.fn(),
+      stderr: vi.fn(),
+    });
+    expect(status).toBe(0);
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      storageStatePath: realpathSync(join(cwd, "session.json")),
+      authBootstrapPath: realpathSync(join(cwd, "bootstrap.json")),
+    }));
+  });
+
+  it("rejects a storage state that other users can read", async () => {
+    const cwd = temporaryRoot();
+    writeFileSync(join(cwd, "dashboard.spec.ts"), "test('dashboard', () => {})");
+    writeFileSync(join(cwd, "session.json"), "{}", { mode: 0o644 });
+    const execute = vi.fn();
+    const status = await runQaNative([
+      "execute",
+      "--spec=dashboard.spec.ts",
+      "--base-url=https://example.test",
+      "--run-dir=.qa/runs/session-public",
+      "--storage-state=session.json",
+    ], {
+      cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: Buffer.alloc(32, 0x51).toString("base64") },
+      handlers: { execute },
+      stdout: vi.fn(),
+      stderr: vi.fn(),
+    });
+    expect(status).toBe(1);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("shows help without a key and rejects secret-bearing or unknown arguments", async () => {
     const stdout = vi.fn();
     const stderr = vi.fn();

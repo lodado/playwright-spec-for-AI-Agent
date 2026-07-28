@@ -263,6 +263,18 @@ npx qa-native execute \
 npx qa-native judge --run-dir=.qa/runs/pricing-1
 ```
 
+For authenticated dashboards, pass a private Playwright storage state:
+
+```bash
+npx qa-native execute \
+  --spec=tests/e2e/dashboard/dashboard.spec.ts \
+  --base-url=https://staging.example.com \
+  --storage-state=.private/enterprise-session.json \
+  --run-dir=.qa/runs/dashboard-1
+```
+
+`--storage-state` files must be workspace-local and owner-only (`chmod 600`). `--auth-bootstrap=.private/auth-bootstrap.json` can additionally open an SSO/session-refresh page with explicit origin and endpoint allowlists. Bootstrap-only mutations are blocked again before the QA spec runs; see the [QA Native guide](docs/qa-native.md#authenticated-pages) for its JSON format and secret-handling constraints.
+
 ### Publish a code-backed GitHub Issue
 
 After `judge` produces one `FAIL` or `MANUAL_REVIEW` result, `report` can connect the browser evidence to tracked source at an exact Git commit. Commit the code you want to inspect first; uncommitted working-tree changes are not searched.

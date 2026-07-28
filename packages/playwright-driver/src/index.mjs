@@ -28,6 +28,50 @@ const FORBIDDEN_ACTION_PATTERNS = Object.freeze({
   confirm_destructive: DESTRUCTIVE_PATTERN,
 });
 
+function normalizeAuthBootstrap(value, baseUrl) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some((key) => !["url", "allowedOrigins", "allowedEndpoints"].includes(key)) || typeof value.url !== "string") throw new TypeError("environment.auth.bootstrap is invalid");
+  const base = new URL(baseUrl);
+  const url = bootstrapUrl(value.url);
+  if (value.allowedOrigins !== undefined && !Array.isArray(value.allowedOrigins)) throw new TypeError("environment.auth.bootstrap is invalid");
+  if (value.allowedEndpoints !== undefined && !Array.isArray(value.allowedEndpoints)) throw new TypeError("environment.auth.bootstrap is invalid");
+  const allowedOrigins = [...new Set([base.origin, url.origin, ...(value.allowedOrigins ?? [])].map(bootstrapOrigin))];
+  const allowedEndpoints = (value.allowedEndpoints ?? []).map((endpoint) => normalizeBootstrapEndpoint(endpoint, allowedOrigins));
+  return Object.freeze({ url: url.href, allowedOrigins: Object.freeze(allowedOrigins), allowedEndpoints: Object.freeze(allowedEndpoints) });
+}
+
+function bootstrapAllowsRequest(bootstrap, requestUrl, method) {
+  if (!["http:", "https:"].includes(requestUrl.protocol) || requestUrl.username || requestUrl.password) return false;
+  if (["GET", "HEAD"].includes(method)) return bootstrap.allowedOrigins.includes(requestUrl.origin);
+  return bootstrap.allowedEndpoints.some((endpoint) => endpoint.origin === requestUrl.origin && endpoint.path === requestUrl.pathname && endpoint.methods.includes(method));
+}
+
+function bootstrapUrl(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new TypeError("environment.auth.bootstrap is invalid");
+  }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new TypeError("environment.auth.bootstrap is invalid");
+  return url;
+}
+
+function bootstrapOrigin(value) {
+  const url = bootstrapUrl(value);
+  if (url.pathname !== "/") throw new TypeError("environment.auth.bootstrap is invalid");
+  return url.origin;
+}
+
+function normalizeBootstrapEndpoint(value, allowedOrigins) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some((key) => !["origin", "path", "methods"].includes(key))) throw new TypeError("environment.auth.bootstrap is invalid");
+  const origin = bootstrapOrigin(value.origin);
+  if (!allowedOrigins.includes(origin) || typeof value.path !== "string" || !/^\/[^?#]*$/.test(value.path) || !Array.isArray(value.methods) || value.methods.length === 0) throw new TypeError("environment.auth.bootstrap is invalid");
+  const methods = [...new Set(value.methods)];
+  if (methods.some((method) => !["POST", "PUT", "PATCH", "DELETE"].includes(method))) throw new TypeError("environment.auth.bootstrap is invalid");
+  return Object.freeze({ origin, path: value.path, methods: Object.freeze(methods) });
+}
+
 /**
  * Creates a behavioral BrowserDriver backed by direct Playwright. Runtime callers only receive opaque
  * handles and observation-local element IDs; selectors and arbitrary JavaScript are never action inputs.
@@ -71,6 +115,7 @@ async function startSession({ input, browserType, launchOptions, now }) {
   const allowedOrigins = normalizeOrigins(environment.allowedOrigins?.length ? environment.allowedOrigins : [new URL(baseUrl).origin]);
   assertAllowedOrigin(startUrl, allowedOrigins);
   const baseOrigin = new URL(baseUrl).origin;
+  const authBootstrap = normalizeAuthBootstrap(environment.auth?.bootstrap, baseUrl);
   const safetyPolicy = normalizeSafetyPolicy(input.safetyPolicy);
   const navigationOrigins = safetyPolicy.allowExternalOrigin ? allowedOrigins : [baseOrigin];
   assertAllowedOrigin(startUrl, navigationOrigins);
@@ -107,6 +152,7 @@ async function startSession({ input, browserType, launchOptions, now }) {
     let policyViolation;
     let actionInProgress = false;
     let initialNavigationComplete = false;
+    let bootstrapActive = authBootstrap !== undefined;
     await context.route("**/*", async (route) => {
       const request = route.request();
       const url = request.url();
@@ -114,7 +160,11 @@ async function startSession({ input, browserType, launchOptions, now }) {
       const isNavigation = request.isNavigationRequest?.() === true;
       const contentType = request.headers?.()["content-type"] ?? "";
       let violation;
-      if (!isAllowedOrigin(url, allowedOrigins) || hasCredentials(url)) {
+      if (bootstrapActive) {
+        if (bootstrapAllowsRequest(authBootstrap, new URL(url), method.toUpperCase())) await route.continue();
+        else await route.abort("blockedbyclient");
+        return;
+      } else if (!isAllowedOrigin(url, allowedOrigins) || hasCredentials(url)) {
         violation = { code: "ORIGIN_BLOCKED", message: "Blocked request outside allowedOrigins" };
       } else if (initialNavigationComplete && isNavigation && !safetyPolicy.allowNavigation) {
         violation = { code: "ACTION_NOT_ALLOWED", message: "Navigation is blocked by policy" };
@@ -168,6 +218,10 @@ async function startSession({ input, browserType, launchOptions, now }) {
     runtimeIssues.push(makeIssue("dialog", "DIALOG", truncate(dialog.message(), 2_000)));
       await dialog.dismiss().catch(() => undefined);
     });
+    if (authBootstrap !== undefined) {
+      await page.goto(authBootstrap.url, { waitUntil: "domcontentloaded", timeout: input.navigationTimeoutMs ?? 30_000 });
+      bootstrapActive = false;
+    }
     await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: input.navigationTimeoutMs ?? 30_000 });
     initialNavigationComplete = true;
     assertCurrentOrigin(page, navigationOrigins);
@@ -670,6 +724,8 @@ async function resolveStorageStatePath(value) {
   if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw policyError("ACTION_NOT_ALLOWED", "storageStatePath must resolve within the workspace");
   }
+  const details = await stat(resolved);
+  if (!details.isFile() || (details.mode & 0o077) !== 0) throw policyError("ACTION_NOT_ALLOWED", "storageStatePath must be private");
   return resolved;
 }
 

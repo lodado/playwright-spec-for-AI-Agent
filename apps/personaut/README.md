@@ -136,6 +136,14 @@ environment:
   baseUrl: https://staging.example.test
   allowedOrigins:
     - https://staging.example.test
+  storageStatePath: .private/enterprise-session.json
+  auth:
+    bootstrap:
+      url: https://staging.example.test/login
+      allowedEndpoints:
+        - origin: https://staging.example.test
+          path: /api/auth/session
+          methods: [POST]
 
 tasks:
   - id: open-pricing
@@ -149,6 +157,8 @@ tasks:
 ```
 
 Keep `allowedOrigins` exact. Personaut blocks navigation outside this list unless the study explicitly permits external origins.
+
+`storageStatePath` is a workspace-local, owner-only (`chmod 600`) Playwright storage-state file. `auth.bootstrap` is optional: while it loads, only `GET`/`HEAD` requests to its URL origin plus `auth.bootstrap.allowedOrigins`, and exact non-GET `allowedEndpoints`, may run. Personaut then navigates to `baseUrl` under the task's normal safety policy; bootstrap endpoints do not stay allowed. Keep credentials, cookies, tokens, and query strings out of the study file. Hermes keeps its current loopback/no-auth preflight restriction.
 
 ### Success oracles
 

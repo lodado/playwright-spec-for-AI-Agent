@@ -1,5 +1,11 @@
 # @lodado/personaut
 
+## 0.3.1
+
+### Patch Changes
+
+- Add private storage-state injection and bounded auth-bootstrap support for authenticated QA sessions.
+
 ## 0.3.0
 
 ### Minor Changes

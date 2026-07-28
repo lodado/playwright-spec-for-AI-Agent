@@ -30,6 +30,33 @@ npx qa-native judge --run-dir=.qa/runs/dashboard-1
 
 `execute` writes an authenticated evidence archive. `judge` runs deterministic checks first and sends only unresolved semantic expectations to Hermes in text-only mode.
 
+## Authenticated pages
+
+Prefer a Playwright `storageState` file created outside QA Native. It is passed only to the browser context and is never copied into the run directory, evidence archive, or run envelope.
+The file must remain inside the workspace and be owner-only (`chmod 600 .private/enterprise-session.json`).
+
+```bash
+npx qa-native execute \
+  --spec=tests/e2e/dashboard.spec.ts \
+  --base-url=https://staging.example.com \
+  --storage-state=.private/enterprise-session.json \
+  --run-dir=.qa/runs/dashboard-1
+```
+
+For an automatic SSO or session-refresh page, add an opt-in bootstrap file instead of weakening normal runtime policy:
+
+```json
+{
+  "url": "https://staging.example.com/login",
+  "allowedOrigins": ["https://login.example-idp.com"],
+  "allowedEndpoints": [
+    { "origin": "https://staging.example.com", "path": "/api/auth/session", "methods": ["POST"] }
+  ]
+}
+```
+
+Pass it with `--auth-bootstrap=.private/auth-bootstrap.json`. During bootstrap, only `GET`/`HEAD` requests to the listed origins and the exact non-GET endpoints above are allowed. Once its page finishes loading, the runtime returns to its ordinary same-origin, mutation-blocking policy—even for those bootstrap endpoints. Do not put credentials, cookies, tokens, or query strings in this file.
+
 ## Create a repository-aware report
 
 ```bash

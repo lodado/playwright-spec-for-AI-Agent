@@ -38,6 +38,52 @@ const GATEWAY_CLEANUP_TIMEOUT_MS = 1_000;
 const GATEWAY_ACTIONS = Object.freeze(["get_current_url", "observe_dom", "observe_aria", "navigate", "go_back", "reload_page", "click_observed_element", "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state"]);
 const adaptiveExecutions = new WeakSet();
 
+export function normalizeAuthBootstrap(value, baseUrl) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("auth bootstrap is invalid");
+  const keys = Object.keys(value).sort();
+  if (keys.some((key) => !["url", "allowedOrigins", "allowedEndpoints"].includes(key)) || typeof value.url !== "string") throw new Error("auth bootstrap is invalid");
+  const base = runtimeUrl(baseUrl);
+  const url = bootstrapUrl(value.url, "auth bootstrap URL");
+  const allowedOrigins = [...new Set([base.origin, url.origin, ...(Array.isArray(value.allowedOrigins) ? value.allowedOrigins : [])].map((origin) => bootstrapOrigin(origin)))];
+  if (value.allowedOrigins !== undefined && !Array.isArray(value.allowedOrigins)) throw new Error("auth bootstrap is invalid");
+  if (value.allowedEndpoints !== undefined && !Array.isArray(value.allowedEndpoints)) throw new Error("auth bootstrap is invalid");
+  const allowedEndpoints = (value.allowedEndpoints ?? []).map((endpoint) => normalizeBootstrapEndpoint(endpoint, allowedOrigins));
+  return Object.freeze({ url: url.href, allowedOrigins: Object.freeze(allowedOrigins), allowedEndpoints: Object.freeze(allowedEndpoints) });
+}
+
+function bootstrapAllowsRequest(bootstrap, requestUrl, method) {
+  if (!["http:", "https:"].includes(requestUrl.protocol) || requestUrl.username || requestUrl.password) return false;
+  if (["GET", "HEAD"].includes(method)) return bootstrap.allowedOrigins.includes(requestUrl.origin);
+  return bootstrap.allowedEndpoints.some((endpoint) => endpoint.origin === requestUrl.origin && endpoint.path === requestUrl.pathname && endpoint.methods.includes(method));
+}
+
+function bootstrapUrl(value, label) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("auth bootstrap is invalid");
+  }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("auth bootstrap is invalid");
+  return url;
+}
+
+function bootstrapOrigin(value) {
+  const url = bootstrapUrl(value, "auth bootstrap origin");
+  if (url.pathname !== "/") throw new Error("auth bootstrap is invalid");
+  return url.origin;
+}
+
+function normalizeBootstrapEndpoint(value, allowedOrigins) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some((key) => !["origin", "path", "methods"].includes(key))) throw new Error("auth bootstrap is invalid");
+  const origin = bootstrapOrigin(value.origin);
+  if (!allowedOrigins.includes(origin) || typeof value.path !== "string" || !/^\/[^?#]*$/.test(value.path) || !Array.isArray(value.methods) || value.methods.length === 0) throw new Error("auth bootstrap is invalid");
+  const methods = [...new Set(value.methods)];
+  if (methods.some((method) => !["POST", "PUT", "PATCH", "DELETE"].includes(method))) throw new Error("auth bootstrap is invalid");
+  return Object.freeze({ origin, path: value.path, methods: Object.freeze(methods) });
+}
+
 export function playwrightExecutionCapabilities() {
   return providerCapabilities({
     providerId: PROVIDER_ID,
@@ -60,12 +106,16 @@ export async function openPlaywrightBrowserToolGateway({
   browserType,
   viewport = { width: 1280, height: 720 },
   secrets = [],
+  storageStatePath,
+  authBootstrap,
   clock = Date.now,
   now = () => new Date().toISOString(),
 } = {}) {
   if (typeof clock !== "function" || typeof now !== "function") throw new TypeError("clock and now must be functions");
   if (!Array.isArray(secrets)) throw new TypeError("secrets must be an array");
   const initialInput = snapshotContract("ExecutionAgentInput", redactGatewayValue(snapshotContract("ExecutionAgentInput", input), secrets));
+  if (storageStatePath !== undefined && (typeof storageStatePath !== "string" || storageStatePath.length === 0)) throw new TypeError("storageStatePath must be a non-empty string");
+  const bootstrap = normalizeAuthBootstrap(authBootstrap, initialInput.currentPage.url);
   const deadline = readFiniteClock(clock) + initialInput.remainingBudget.timeMs;
   const capabilities = playwrightBrowserToolCapabilities();
   const store = createInMemoryEvidenceStore({ providerCapabilities: capabilities, producer: { name: GATEWAY_PROVIDER_ID, version: GATEWAY_PROVIDER_VERSION }, secrets });
@@ -88,13 +138,19 @@ export async function openPlaywrightBrowserToolGateway({
   let executing = false;
   let interactionStarted = false;
   let policyViolation = false;
+  let bootstrapActive = bootstrap !== undefined;
   try {
-    context = await runGatewayBrowserOperation({ deadline, clock }, () => browser.newContext({ viewport: { ...viewport }, serviceWorkers: "block" }));
+    context = await runGatewayBrowserOperation({ deadline, clock }, () => browser.newContext({ viewport: { ...viewport }, serviceWorkers: "block", ...(storageStatePath === undefined ? {} : { storageState: storageStatePath }) }));
     if (typeof context.route !== "function" || typeof context.routeWebSocket !== "function") throw new Error("browser context cannot enforce gateway policy");
     await runGatewayBrowserOperation({ deadline, clock }, () => context.route("**/*", async (route) => {
       try {
         const request = route.request();
         const url = new URL(request.url());
+        if (bootstrapActive) {
+          if (bootstrapAllowsRequest(bootstrap, url, request.method())) await route.continue();
+          else await route.abort("blockedbyclient");
+          return;
+        }
         if (interactionStarted || !["GET", "HEAD"].includes(request.method()) || !initialInput.capabilityLease.allowedOrigins.includes(url.origin) || url.username || url.password) {
           policyViolation = true;
           await route.abort("blockedbyclient");
@@ -111,6 +167,10 @@ export async function openPlaywrightBrowserToolGateway({
       socket.close();
     }));
     const page = await runGatewayBrowserOperation({ deadline, clock }, () => context.newPage());
+    if (bootstrap !== undefined) {
+      await runGatewayBrowserOperation({ deadline, clock }, (timeout) => page.goto(bootstrap.url, { waitUntil: "domcontentloaded", timeout }));
+      bootstrapActive = false;
+    }
     await runGatewayBrowserOperation({ deadline, clock }, (timeout) => page.goto(initialInput.currentPage.url, { waitUntil: "domcontentloaded", timeout }));
     assertGatewayOrigin(page, initialInput.capabilityLease.allowedOrigins);
     policyViolation = false;
@@ -519,11 +579,13 @@ export async function runAdaptiveWithPlaywright({
   browserType,
   viewport,
   secrets = [],
+  storageStatePath,
+  authBootstrap,
   now = () => new Date().toISOString(),
   clock = Date.now,
 } = {}) {
   if (typeof proposeAction !== "function") throw new Error("proposeAction must be a function");
-  const gateway = await openPlaywrightBrowserToolGateway({ input, browserName, browserType, viewport, secrets, now, clock });
+  const gateway = await openPlaywrightBrowserToolGateway({ input, browserName, browserType, viewport, secrets, storageStatePath, authBootstrap, now, clock });
   const bundles = [];
   let manifest;
   let outcome;
@@ -562,6 +624,8 @@ export async function executeWithPlaywright({
   locale,
   timezoneId,
   secrets = [],
+  storageStatePath,
+  authBootstrap,
   now = () => new Date().toISOString(),
 } = {}) {
   let runtime;
@@ -574,7 +638,7 @@ export async function executeWithPlaywright({
     validateExecutionPlanBinding({ qaIr, plan, providerCapabilities: capabilities });
     if (plan.nodes.length > MAX_PLAN_NODES || plan.retryPolicy.maxAttempts !== 1) throw new Error("execution plan exceeds readonly provider limits");
     if (plan.timeoutPolicy.perNodeMs > MAX_NODE_TIMEOUT_MS || plan.timeoutPolicy.runMs > MAX_RUN_TIMEOUT_MS) throw new Error("execution timeout exceeds readonly provider limits");
-    runtime = createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, now, capabilities, nodeTimeoutMs: plan.timeoutPolicy.perNodeMs });
+    runtime = createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, storageStatePath, authBootstrap, now, capabilities, nodeTimeoutMs: plan.timeoutPolicy.perNodeMs });
   } catch {
     return executionResult(runtimeError("CONTRACT_VIOLATION", "Execution provider input is invalid"));
   }
@@ -598,13 +662,15 @@ export async function executeWithPlaywright({
   return executionResult(outcome, runtime);
 }
 
-function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, now, capabilities, nodeTimeoutMs }) {
+function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, storageStatePath, authBootstrap, now, capabilities, nodeTimeoutMs }) {
   const base = runtimeUrl(baseUrl);
+  const bootstrap = normalizeAuthBootstrap(authBootstrap, base.href);
   if (typeof runId !== "string" || runId.length === 0) throw new Error("runId must be a non-empty string");
   if (!Array.isArray(secrets)) throw new Error("secrets must be an array");
   if (!["chromium", "firefox", "webkit"].includes(browserName)) throw new Error("browserName is unsupported");
   if (locale !== undefined && (typeof locale !== "string" || locale.length === 0)) throw new Error("locale must be a non-empty string");
   if (timezoneId !== undefined && (typeof timezoneId !== "string" || timezoneId.length === 0)) throw new Error("timezoneId must be a non-empty string");
+  if (storageStatePath !== undefined && (typeof storageStatePath !== "string" || storageStatePath.length === 0)) throw new Error("storageStatePath must be a non-empty string");
   if (!Number.isInteger(viewport?.width) || viewport.width <= 0 || viewport.width > MAX_VIEWPORT_DIMENSION || !Number.isInteger(viewport?.height) || viewport.height <= 0 || viewport.height > MAX_VIEWPORT_DIMENSION || viewport.width * viewport.height > MAX_VIEWPORT_AREA) throw new Error("viewport is outside readonly provider limits");
   if (typeof now !== "function") throw new Error("now must be a function");
   const store = createInMemoryEvidenceStore({
@@ -627,6 +693,7 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
   let artifactCount = 0;
   let interactionStarted = false;
   let interactionPolicyViolation = false;
+  let bootstrapActive = bootstrap !== undefined;
 
   async function openPage() {
     if (session) return session.page;
@@ -645,12 +712,18 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       const contextOptions = { viewport: { ...viewport }, serviceWorkers: "block" };
       if (locale !== undefined) contextOptions.locale = locale;
       if (timezoneId !== undefined) contextOptions.timezoneId = timezoneId;
+      if (storageStatePath !== undefined) contextOptions.storageState = storageStatePath;
       const context = await browser.newContext(contextOptions);
       if (typeof context.route !== "function" || typeof context.routeWebSocket !== "function") throw new Error("browser context cannot enforce request policy");
       await context.route("**/*", async (route) => {
         try {
           const request = route.request();
           const requestUrl = new URL(request.url());
+          if (bootstrapActive) {
+            if (bootstrapAllowsRequest(bootstrap, requestUrl, request.method())) await route.continue();
+            else await route.abort("blockedbyclient");
+            return;
+          }
           if (interactionStarted) {
             interactionPolicyViolation = true;
             await route.abort("blockedbyclient");
@@ -670,6 +743,10 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
         webSocket.close();
       });
       const page = await context.newPage();
+      if (bootstrap !== undefined) {
+        await page.goto(bootstrap.url, { waitUntil: "domcontentloaded", timeout: nodeTimeoutMs });
+        bootstrapActive = false;
+      }
       session = { browser, page };
       return page;
     } catch {
