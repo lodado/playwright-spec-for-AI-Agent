@@ -66,6 +66,16 @@ The following Playwright web-first matchers are parsed, including `.not` and
 Unknown matchers and unresolved expected values are errors rather than silently
 dropped expectations.
 
+### Hermes adaptive execution
+
+Adaptive execution is deliberately narrower than source parsing. It supports
+`toBeVisible`, `.not.toBeVisible`, `toBeDisabled`, `toContainText`, and the role/name/presence
+forms represented as `VISIBLE`, `NOT_VISIBLE`, `CONTAINS_TEXT`, `ROLE`, `NAME`,
+or `PRESENT` in QA IR. The Playwright gateway evaluates these predicates from
+trusted compiled targets and sealed DOM/ARIA evidence; Hermes only proposes a
+leased observation action. Other parsed matchers fail closed when adaptive input
+is created rather than being silently weakened.
+
 ## Actions
 
 The live spec preserves these statically targeted actions:

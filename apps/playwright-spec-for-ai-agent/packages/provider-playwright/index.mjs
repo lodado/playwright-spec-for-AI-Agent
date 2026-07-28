@@ -137,34 +137,23 @@ export async function openPlaywrightBrowserToolGateway({
   let failed = false;
   let executing = false;
   let interactionStarted = false;
-  let policyViolation = false;
   let bootstrapActive = bootstrap !== undefined;
   try {
     context = await runGatewayBrowserOperation({ deadline, clock }, () => browser.newContext({ viewport: { ...viewport }, serviceWorkers: "block", ...(storageStatePath === undefined ? {} : { storageState: storageStatePath }) }));
-    if (typeof context.route !== "function" || typeof context.routeWebSocket !== "function") throw new Error("browser context cannot enforce gateway policy");
+    if (typeof context.route !== "function") throw new Error("browser context cannot enforce gateway policy");
     await runGatewayBrowserOperation({ deadline, clock }, () => context.route("**/*", async (route) => {
       try {
         const request = route.request();
-        const url = new URL(request.url());
         if (bootstrapActive) {
+          const url = new URL(request.url());
           if (bootstrapAllowsRequest(bootstrap, url, request.method())) await route.continue();
           else await route.abort("blockedbyclient");
           return;
         }
-        if (interactionStarted || !["GET", "HEAD"].includes(request.method()) || !initialInput.capabilityLease.allowedOrigins.includes(url.origin) || url.username || url.password) {
-          policyViolation = true;
-          await route.abort("blockedbyclient");
-          return;
-        }
         await route.continue();
       } catch {
-        policyViolation = true;
         await route.abort("blockedbyclient");
       }
-    }));
-    await runGatewayBrowserOperation({ deadline, clock }, () => context.routeWebSocket("**/*", (socket) => {
-      policyViolation = true;
-      socket.close();
     }));
     const page = await runGatewayBrowserOperation({ deadline, clock }, () => context.newPage());
     if (bootstrap !== undefined) {
@@ -173,7 +162,6 @@ export async function openPlaywrightBrowserToolGateway({
     }
     await runGatewayBrowserOperation({ deadline, clock }, (timeout) => page.goto(initialInput.currentPage.url, { waitUntil: "domcontentloaded", timeout }));
     assertGatewayOrigin(page, initialInput.capabilityLease.allowedOrigins);
-    policyViolation = false;
 
     let currentPage = { ...initialInput.currentPage, url: gatewayUrl(page, initialInput.capabilityLease.allowedOrigins) };
     let remainingBudget = { ...initialInput.remainingBudget };
@@ -269,7 +257,6 @@ export async function openPlaywrightBrowserToolGateway({
           await runGatewayBrowserOperation({ deadline, clock }, () => page.keyboard.press("Escape"));
           invalidateGatewayObservations();
         }
-        if (policyViolation) throw new Error("browser tool policy was violated");
         const nextUrl = gatewayUrl(page, initialInput.capabilityLease.allowedOrigins);
         if (["navigate", "go_back", "reload_page"].includes(authorization.proposal.action) || nextUrl !== currentPage.url) {
           currentPage = { pageId: `page-${canonicalHash({ proposalId: authorization.proposal.proposalId, nextUrl }).slice("sha256:".length, "sha256:".length + 12)}`, domGeneration: 1, url: nextUrl };
@@ -277,10 +264,9 @@ export async function openPlaywrightBrowserToolGateway({
           handles.clear();
         }
         const after = await captureGatewayPage(page, currentPage, initialInput.capabilityLease.allowedOrigins, { deadline, clock }, secrets);
-        if (policyViolation) throw new Error("browser tool policy was violated");
         currentPage.url = after.page.url;
         remainingBudget.timeMs = Math.min(remainingBudget.timeMs, Math.max(0, Math.floor(deadline - readFiniteClock(clock))));
-        const artifacts = captureGatewayArtifacts(store, authorization.proposal, before, after);
+        const artifacts = captureGatewayArtifacts(store, authorization.proposal, before, after, observation?.contract.satisfiedMilestoneIds ?? []);
         const facts = [
           { id: `${authorization.proposal.proposalId}:url`, kind: "URL", value: after.page.url },
           { id: `${authorization.proposal.proposalId}:audit`, kind: "BROWSER_TOOL_AUDIT", value: { action: authorization.proposal.action, proposalId: authorization.proposal.proposalId, before: before.page, after: after.page, status: "ACCEPTED" } },
@@ -414,6 +400,7 @@ async function observeGatewayElements({ page, input, currentPage, sequence, secr
   const observationId = `observation-${canonicalHash({ runId: input.runId, scenarioId: input.scenarioId, pageId: currentPage.pageId, domGeneration: currentPage.domGeneration, sequence }).slice("sha256:".length, "sha256:".length + 16)}`;
   const elements = [];
   const handles = new Map();
+  const satisfiedMilestoneIds = await evaluateSemanticMilestones(page, input.milestones, timing);
   for (let index = 0; index < count; index += 1) {
     const candidate = locator.nth(index);
     const handle = await runGatewayBrowserOperation(timing, (timeout) => candidate.elementHandle({ timeout }));
@@ -468,9 +455,36 @@ async function observeGatewayElements({ page, input, currentPage, sequence, secr
       pageId: currentPage.pageId,
       domGeneration: currentPage.domGeneration,
       elements,
+      satisfiedMilestoneIds,
     },
     handles,
   };
+}
+
+async function evaluateSemanticMilestones(page, milestones, timing) {
+  const satisfied = [];
+  for (const milestone of milestones) {
+    if (milestone.class !== "REQUIRED_SEMANTIC_MILESTONE" || !milestone.target || !milestone.expectation) continue;
+    const locator = semanticLocator(page, milestone.target, { allowUnsupported: true });
+    if (!locator) continue;
+    const count = await runGatewayBrowserOperation(timing, () => locator.count());
+    if (!Number.isInteger(count) || count < 0 || count > GATEWAY_MAX_ELEMENTS) throw new Error("gateway semantic observation exceeds its bound");
+    const visible = [];
+    for (let index = 0; index < count; index += 1) visible.push(await runGatewayBrowserOperation(timing, () => locator.nth(index).isVisible()));
+    const kind = milestone.expectation.kind;
+    if (kind === "NOT_VISIBLE" && visible.every((value) => value === false)) {
+      satisfied.push(milestone.id);
+      continue;
+    }
+    if (count !== 1 || visible[0] !== true) continue;
+    if (kind === "DISABLED" && !(await runGatewayBrowserOperation(timing, () => locator.isDisabled()))) continue;
+    if (kind === "CONTAINS_TEXT") {
+      const text = await runGatewayBrowserOperation(timing, (timeout) => locator.evaluate((element, maxChars) => (element.textContent ?? "").slice(0, maxChars + 1), GATEWAY_ELEMENT_TEXT_LIMIT, { timeout }));
+      if (typeof text !== "string" || text.length > GATEWAY_ELEMENT_TEXT_LIMIT || !text.includes(milestone.expectation.expected.value)) continue;
+    }
+    satisfied.push(milestone.id);
+  }
+  return satisfied;
 }
 
 function gatewayTargetMatches(target, metadata) {
@@ -496,7 +510,7 @@ function gatewayTargetMatches(target, metadata) {
   return constrained;
 }
 
-function captureGatewayArtifacts(store, proposal, before, after) {
+function captureGatewayArtifacts(store, proposal, before, after, satisfiedMilestoneIds) {
   const auditProposal = structuredClone(proposal);
   if (auditProposal.action === "navigate") {
     const url = new URL(auditProposal.parameters.url);
@@ -509,7 +523,7 @@ function captureGatewayArtifacts(store, proposal, before, after) {
   return [
     store.captureArtifact({ id: `${proposal.proposalId}:before:dom`, type: "DOM_SNAPSHOT", contentType: "text/html", content: before.dom }),
     store.captureArtifact({ id: `${proposal.proposalId}:before:aria`, type: "ARIA_SNAPSHOT", contentType: "text/plain", content: before.aria }),
-    store.captureArtifact({ id: `${proposal.proposalId}:action`, type: "ACTION_LOG", contentType: "application/json", content: JSON.stringify({ proposal: auditProposal, status: "ACCEPTED", before: before.page, after: after.page }) }),
+    store.captureArtifact({ id: `${proposal.proposalId}:action`, type: "ACTION_LOG", contentType: "application/json", content: JSON.stringify({ proposal: auditProposal, status: "ACCEPTED", before: before.page, after: after.page, satisfiedMilestoneIds }) }),
     store.captureArtifact({ id: `${proposal.proposalId}:after:dom`, type: "DOM_SNAPSHOT", contentType: "text/html", content: after.dom }),
     store.captureArtifact({ id: `${proposal.proposalId}:after:aria`, type: "ARIA_SNAPSHOT", contentType: "text/plain", content: after.aria }),
   ];

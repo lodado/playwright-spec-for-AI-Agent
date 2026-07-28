@@ -158,6 +158,7 @@ function expectationFromLegacy(legacy, test, discriminator, expectation, index, 
 function expectationKind(expectation) {
   if (expectation.type === "notVisible") return "NOT_VISIBLE";
   if (expectation.type === "visible") return "VISIBLE";
+  if (expectation.type === "disabled") return "DISABLED";
   if (expectation.type === "containText") return "CONTAINS_TEXT";
   if (expectation.type === "url") return expectation.expected?.kind === "regex" ? "URL_MATCH" : "URL";
   if (expectation.type === "accessibleName") return "NAME";

@@ -302,8 +302,8 @@ function createDefaultPolicy(entry) {
   };
 }
 
-async function evaluateLiveOracles({ task, observation, events }) {
-  const satisfiedSuccess = task.successOracles.filter(oracle => liveOracleSatisfied(oracle, observation, events));
+async function evaluateLiveOracles({ task, observation, observations, events }) {
+  const satisfiedSuccess = task.successOracles.filter(oracle => observations.some(item => liveOracleSatisfied(oracle, item, events)));
   const satisfiedFailure = (task.failureOracles ?? []).filter(oracle => liveOracleSatisfied(oracle, observation, events));
   if (satisfiedFailure.length) return { definitiveFailure: true, reason: `failure oracle ${satisfiedFailure[0].id}` };
   if (task.successOracles.length && satisfiedSuccess.length === task.successOracles.length) {

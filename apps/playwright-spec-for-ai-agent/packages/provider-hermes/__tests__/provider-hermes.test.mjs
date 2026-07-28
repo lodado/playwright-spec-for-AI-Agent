@@ -148,6 +148,20 @@ describe("Hermes judge provider", () => {
     expect(result.proposal.proposalId).not.toBe(modelProposal.proposalId);
   });
 
+  it("accepts action-only model output and supplies adapter-owned proposal metadata", async () => {
+    const { schemaVersion: _schemaVersion, proposalId: _proposalId, ...actionOnly } = executionProposal();
+    const transport = vi.fn(async () => actionOnly);
+
+    const result = await createHermesExecutionProposer({ transport })(executionAgentInput());
+
+    expect(result.proposal).toMatchObject({
+      ...actionOnly,
+      schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION,
+      proposalId: expect.stringMatching(/^proposal-[0-9a-f]{16}$/),
+    });
+    expect(transport.mock.calls[0][2].requiredKeys).toEqual(["runId", "scenarioId", "milestoneId", "leaseId", "action", "parameters"]);
+  });
+
   it("rejects verdict-bearing or selector-expanding Hermes action output", async () => {
     const withVerdict = { ...executionProposal(), verdict: "PASS" };
     await expect(createHermesExecutionProposer({ transport: async () => withVerdict })(executionAgentInput())).rejects.toThrow(/verdict/);
@@ -162,7 +176,7 @@ describe("Hermes judge provider", () => {
     const escapedSecret = "quote\"slash\\line\nsecret";
     input.milestones[0].target.hints = [{ adapter: "fixture", data: { password: "hunter2", "secret-key-name": "marker", [escapedSecret]: "dynamic-key", opaque: "a".repeat(64), escaped: `prefix ${escapedSecret} suffix` } }];
     const query = buildHermesExecutionQuery(input, { secrets: ["SESSION-SECRET", "secret-key-name", escapedSecret] });
-    expect(query).toContain("ExecutionActionProposal");
+    expect(query).toContain("The runtime owns schemaVersion and proposalId");
     const promptInput = JSON.parse(query.split("\n\n").at(-1));
     expect(JSON.stringify(promptInput)).not.toMatch(/SESSION-SECRET|secret-key-name|hunter2|marker|a{64}/);
     expect(JSON.stringify(promptInput)).not.toContain(JSON.stringify(escapedSecret).slice(1, -1));

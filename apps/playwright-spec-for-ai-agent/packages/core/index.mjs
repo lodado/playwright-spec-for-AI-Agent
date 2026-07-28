@@ -13,7 +13,7 @@ import {
 
 export const DEFAULT_RETRY_POLICY = Object.freeze({ maxAttempts: 1 });
 export const DEFAULT_TIMEOUT_POLICY = Object.freeze({ perNodeMs: 30000, runMs: 120000 });
-export const DEFAULT_ADAPTIVE_BUDGET = Object.freeze({ actions: 32, turns: 32, timeMs: 120_000, tokens: 100_000 });
+export const DEFAULT_ADAPTIVE_BUDGET = Object.freeze({ actions: 32, turns: 32, timeMs: 300_000, tokens: 100_000 });
 
 const INTERNAL_ERROR = Symbol("core.internalError");
 const REQUIRED_ACTIONS = Object.freeze({
@@ -141,7 +141,7 @@ export function createAdaptiveActionAuthorizer({ input, now = Date.now } = {}) {
   return Object.freeze({ authorize, remainingBudget });
 }
 
-export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId, budget = DEFAULT_ADAPTIVE_BUDGET } = {}) {
+export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId, budget = DEFAULT_ADAPTIVE_BUDGET, allowedOrigins = [] } = {}) {
   const qaIrSnapshot = snapshotContract("QaIrDocument", qaIr);
   if (typeof runId !== "string" || runId.length === 0) throw contractError("execute", "runId must be a non-empty string");
   const scenario = qaIrSnapshot.suites.flatMap((suite) => suite.scenarios).find((item) => item.id === scenarioId);
@@ -154,6 +154,7 @@ export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId,
   const unsupportedExpectations = scenario.expectations.filter((expectation) => !adaptiveSemanticExpectation(expectation));
   if (unsupportedExpectations.length > 0) throw contractError("execute", `adaptive execution does not support expectation ${unsupportedExpectations[0].kind}`);
   const startUrl = adaptiveStartUrl(baseUrl, navigationStep);
+  const leaseOrigins = adaptiveAllowedOrigins(startUrl, allowedOrigins);
   const milestones = [
     ...interactionSteps.map((step) => {
       if (step.action !== "CLICK") throw contractError("execute", `${step.action} is not supported by adaptive execution`);
@@ -165,6 +166,10 @@ export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId,
       status: "PENDING",
       description: `Observe required ${expectation.kind.toLowerCase()} target.`,
       target: structuredClone(expectation.target),
+      expectation: {
+        kind: expectation.kind,
+        ...(expectation.expected === undefined ? {} : { expected: structuredClone(expectation.expected) }),
+      },
     })),
   ];
   if (milestones.length === 0) throw contractError("execute", "scenario has no adaptive milestones");
@@ -180,9 +185,25 @@ export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId,
     currentMilestoneId: milestones[0].id,
     currentPage: { pageId: `page-${canonicalHash({ runId, scenarioId: scenario.id, startUrl }).slice("sha256:".length, "sha256:".length + 12)}`, domGeneration: 1, url: startUrl },
     recentObservations: [],
-    capabilityLease: { leaseId: `lease-${canonicalHash({ runId, scenarioId: scenario.id, actions, origin: new URL(startUrl).origin }).slice("sha256:".length, "sha256:".length + 16)}`, actions, allowedOrigins: [new URL(startUrl).origin] },
+    capabilityLease: { leaseId: `lease-${canonicalHash({ runId, scenarioId: scenario.id, actions, origins: leaseOrigins }).slice("sha256:".length, "sha256:".length + 16)}`, actions, allowedOrigins: leaseOrigins },
     remainingBudget: { ...budget },
   });
+}
+
+function adaptiveAllowedOrigins(startUrl, allowedOrigins) {
+  if (!Array.isArray(allowedOrigins) || allowedOrigins.length > 7) throw contractError("execute", "allowedOrigins must contain at most seven explicit HTTP(S) origins");
+  const origins = [new URL(startUrl).origin];
+  for (const value of allowedOrigins) {
+    let url;
+    try {
+      url = new URL(value);
+    } catch {
+      throw contractError("execute", "allowedOrigins must contain HTTP(S) origins");
+    }
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.pathname !== "/" || url.search || url.hash) throw contractError("execute", "allowedOrigins must contain HTTP(S) origins");
+    if (!origins.includes(url.origin)) origins.push(url.origin);
+  }
+  return origins;
 }
 
 function adaptiveStartUrl(baseUrl, navigationStep) {
@@ -199,7 +220,8 @@ function adaptiveStartUrl(baseUrl, navigationStep) {
 }
 
 function adaptiveSemanticExpectation(expectation) {
-  if (!["VISIBLE", "PRESENT", "ROLE", "NAME"].includes(expectation.kind) || expectation.target === undefined) return false;
+  if (!["CONTAINS_TEXT", "VISIBLE", "NOT_VISIBLE", "PRESENT", "DISABLED", "ROLE", "NAME"].includes(expectation.kind) || expectation.target === undefined) return false;
+  if (expectation.kind === "CONTAINS_TEXT" && expectation.expected?.kind !== "literal") return false;
   return [expectation.target.accessibleName, expectation.target.text].every((match) => match === undefined || match.kind === "literal");
 }
 
@@ -216,7 +238,9 @@ export function advanceAdaptiveMilestone({ input, proposal, result, observation 
   const matchedObservation = ["observe_dom", "observe_aria"].includes(proposalSnapshot.action)
     && observationSnapshot?.pageId === inputSnapshot.currentPage.pageId
     && observationSnapshot.domGeneration === inputSnapshot.currentPage.domGeneration
-    && observationSnapshot.elements.some((element) => element.milestoneIds.includes(milestone.id));
+    && (milestone.expectation === undefined
+      ? observationSnapshot.elements.some((element) => element.milestoneIds.includes(milestone.id))
+      : observationSnapshot.satisfiedMilestoneIds?.includes(milestone.id) === true);
   const acceptedBoundAction = ["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposalSnapshot.action) && boundElement !== undefined;
   const satisfied = resultSnapshot.accepted && (
     (milestone.class === "REQUIRED_EXACT_ACTION" && proposalSnapshot.action === milestone.requiredAction && (!["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposalSnapshot.action) || boundElement !== undefined))
@@ -225,7 +249,13 @@ export function advanceAdaptiveMilestone({ input, proposal, result, observation 
   );
   if (!satisfied) return undefined;
 
-  const milestones = inputSnapshot.milestones.map((item) => item.id === milestone.id ? { ...item, status: "COMPLETED" } : item);
+  let completeSemanticMilestones = milestone.class === "REQUIRED_SEMANTIC_MILESTONE";
+  const milestones = inputSnapshot.milestones.map((item) => {
+    if (item.id === milestone.id) return { ...item, status: "COMPLETED" };
+    if (completeSemanticMilestones && item.status === "PENDING" && item.class === "REQUIRED_SEMANTIC_MILESTONE" && observationSnapshot?.satisfiedMilestoneIds?.includes(item.id)) return { ...item, status: "COMPLETED" };
+    if (item.status === "PENDING" && item.class !== "OPTIONAL_HINT") completeSemanticMilestones = false;
+    return item;
+  });
   const next = milestones.find((item) => item.status === "PENDING" && item.class !== "OPTIONAL_HINT");
   if (next === undefined) {
     return Object.freeze({

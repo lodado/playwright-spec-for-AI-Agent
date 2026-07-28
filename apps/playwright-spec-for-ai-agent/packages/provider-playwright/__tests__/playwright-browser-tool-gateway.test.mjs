@@ -62,7 +62,7 @@ function fakeBrowser({
   aria = '- button "Settings"',
   elementText = "Settings",
   protectedElement = false,
-  requestAfterClick = false,
+  requestAfterClick,
   routeNavigationRequests = false,
   historyMissing = false,
 } = {}) {
@@ -96,9 +96,9 @@ function fakeBrowser({
     })),
     click: vi.fn(async () => {
       calls.push(["click", "settings"]);
-      if (requestAfterClick) {
+      if (requestAfterClick !== undefined) {
         await routeHandler({
-          request: () => ({ method: () => "GET", url: () => "https://example.test/api/state" }),
+          request: () => ({ method: () => requestAfterClick, url: () => "https://api.example.test/state" }),
           abort: vi.fn(async () => calls.push(["abort", "blockedbyclient"])),
           continue: vi.fn(async () => calls.push(["continue"])),
         });
@@ -177,6 +177,7 @@ function fakeBrowser({
   return {
     browserType: { launch: vi.fn(async () => browser) },
     browser,
+    context,
     calls,
     screenshots,
     candidate,
@@ -850,8 +851,8 @@ describe("Playwright browser tool gateway", () => {
     }
   });
 
-  it("blocks network requests triggered by a read-only click", async () => {
-    const fixture = fakeBrowser({ requestAfterClick: true });
+  it("allows every page API request triggered by a click", async () => {
+    const fixture = fakeBrowser({ requestAfterClick: "POST" });
     const gateway = await openGateway({ browserType: fixture.browserType });
     const observed = await gateway.execute({
       proposal: proposal(gateway.agentInput(), "observe_dom"),
@@ -859,18 +860,17 @@ describe("Playwright browser tool gateway", () => {
     });
     const element = observed.observation.elements[0];
 
-    await expect(
-      gateway.execute({
-        proposal: proposal(gateway.agentInput(), "click_observed_element", {
-          observationId: observed.observation.observationId,
-          elementId: element.elementId,
-        }),
-        tokensUsed: 1,
+    await expect(gateway.execute({
+      proposal: proposal(gateway.agentInput(), "click_observed_element", {
+        observationId: observed.observation.observationId,
+        elementId: element.elementId,
       }),
-    ).rejects.toThrow(/policy/i);
+      tokensUsed: 1,
+    })).resolves.toMatchObject({ result: { accepted: true } });
 
-    expect(fixture.calls).toContainEqual(["abort", "blockedbyclient"]);
-    expect(fixture.calls).not.toContainEqual(["continue"]);
+    expect(fixture.calls).toContainEqual(["continue"]);
+    expect(fixture.calls).not.toContainEqual(["abort", "blockedbyclient"]);
+    expect(fixture.context.routeWebSocket).not.toHaveBeenCalled();
     expect(fixture.screenshots).toEqual([]);
   });
 

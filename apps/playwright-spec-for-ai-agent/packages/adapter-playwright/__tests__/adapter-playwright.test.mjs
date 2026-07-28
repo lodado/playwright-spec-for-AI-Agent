@@ -74,6 +74,12 @@ describe("compilePlaywrightSpec", () => {
     expect(expectation.expected).toEqual({ kind: "literal", value: "Ready" });
   });
 
+  it("preserves disabled assertions for adaptive execution", () => {
+    const disabledSource = `// @qa-scenario: DISABLED\n// @qa-live-policy: readonly\ntest("disabled", async ({ page }) => {\n  await expect(page.getByTestId("payment")).toBeDisabled();\n});\n`;
+    const expectation = compilePlaywrightSpec({ source: disabledSource, sourcePath: "disabled.spec.ts" }).qaIr.suites[0].scenarios[0].expectations[0];
+    expect(expectation).toMatchObject({ kind: "DISABLED", target: { testId: "payment" } });
+  });
+
   it("omits navigate steps when no qa page is present", () => {
     const noPage = source.replace("// @qa-page: /dashboard\n", "");
     const scenario = compilePlaywrightSpec({ source: noPage, sourcePath: "dashboard.spec.ts" }).qaIr.suites[0].scenarios[0];

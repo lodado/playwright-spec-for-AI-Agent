@@ -99,6 +99,82 @@ function boundClick(agentInput, milestoneId) {
 }
 
 describe("adaptive Playwright runner", () => {
+  it("keeps external read APIs available after a safe browser interaction", async () => {
+    const reads = [];
+    const api = createServer((request, response) => {
+      reads.push(`${request.method} ${request.url}`);
+      response.writeHead(200, { "access-control-allow-origin": "*" });
+      response.end("ok");
+    });
+    await new Promise((resolve) => api.listen(0, "127.0.0.1", resolve));
+    const apiUrl = `http://127.0.0.1:${api.address().port}/dashboard-data`;
+    const pageServer = createServer((_request, response) => response.end(`<!doctype html><button data-testid="refresh">Refresh</button><script>document.querySelector('button').onclick=()=>fetch(${JSON.stringify(apiUrl)})</script>`));
+    await new Promise((resolve) => pageServer.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${pageServer.address().port}/`;
+    const agentInput = {
+      schemaVersion: EXECUTION_AGENT_INPUT_VERSION,
+      runId: "run-external-read",
+      scenarioId: "scenario-external-read",
+      goal: { id: "goal-external-read", description: "Refresh dashboard data." },
+      milestones: [{ id: "refresh", class: "REQUIRED_EXACT_ACTION", status: "PENDING", description: "Refresh the dashboard data.", requiredAction: "click_observed_element", target: { testId: "refresh" } }],
+      currentMilestoneId: "refresh",
+      currentPage: { pageId: "page-external-read", domGeneration: 1, url },
+      recentObservations: [],
+      capabilityLease: { leaseId: "lease-external-read", actions: ["observe_dom", "click_observed_element"], allowedOrigins: [new URL(url).origin] },
+      remainingBudget: { actions: 2, turns: 2, timeMs: 30_000, tokens: 2 },
+    };
+    let proposalId = 0;
+    try {
+      const execution = await runAdaptiveWithPlaywright({
+        input: agentInput,
+        browserType: chromium,
+        proposeAction: async (currentInput) => {
+          const element = currentInput.recentObservations[0]?.elements.find((item) => item.milestoneIds.includes("refresh"));
+          const action = element ? "click_observed_element" : "observe_dom";
+          return { tokensUsed: 0, proposal: { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: `proposal-external-read-${++proposalId}`, runId: currentInput.runId, scenarioId: currentInput.scenarioId, milestoneId: currentInput.currentMilestoneId, leaseId: currentInput.capabilityLease.leaseId, action, parameters: element ? { observationId: currentInput.recentObservations[0].observationId, elementId: element.elementId } : {} } };
+        },
+      });
+      expect(execution.outcome).toMatchObject({ type: "COMPLETED" });
+      await expect.poll(() => reads).toContain("GET /dashboard-data");
+    } finally {
+      await new Promise((resolve) => pageServer.close(resolve));
+      await new Promise((resolve) => api.close(resolve));
+    }
+  }, 30_000);
+
+  it("proves contains-text and not-visible milestones from trusted Playwright locators", async () => {
+    const server = createServer((_request, response) => response.end('<!doctype html><main data-testid="dashboard">Enterprise Dashboard</main>'));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${server.address().port}/`;
+    let proposalId = 0;
+    const input = {
+      schemaVersion: EXECUTION_AGENT_INPUT_VERSION,
+      runId: "run-assertions",
+      scenarioId: "scenario-assertions",
+      goal: { id: "goal-assertions", description: "Observe dashboard assertions." },
+      milestones: [
+        { id: "contains", class: "REQUIRED_SEMANTIC_MILESTONE", status: "PENDING", description: "Dashboard text is present.", target: { testId: "dashboard" }, expectation: { kind: "CONTAINS_TEXT", expected: { kind: "literal", value: "Dashboard" } } },
+        { id: "login-hidden", class: "REQUIRED_SEMANTIC_MILESTONE", status: "PENDING", description: "Login form is hidden.", target: { testId: "login" }, expectation: { kind: "NOT_VISIBLE" } },
+      ],
+      currentMilestoneId: "contains",
+      currentPage: { pageId: "page-assertions", domGeneration: 1, url },
+      recentObservations: [],
+      capabilityLease: { leaseId: "lease-assertions", actions: ["observe_dom"], allowedOrigins: [new URL(url).origin] },
+      remainingBudget: { actions: 2, turns: 2, timeMs: 30_000, tokens: 2 },
+    };
+    try {
+      const execution = await runAdaptiveWithPlaywright({
+        input,
+        browserType: chromium,
+        proposeAction: async (agentInput) => ({ tokensUsed: 0, proposal: { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: `proposal-assertions-${++proposalId}`, runId: agentInput.runId, scenarioId: agentInput.scenarioId, milestoneId: agentInput.currentMilestoneId, leaseId: agentInput.capabilityLease.leaseId, action: "observe_dom", parameters: {} } }),
+      });
+      expect(execution.outcome).toMatchObject({ type: "COMPLETED", completedMilestoneIds: ["contains", "login-hidden"] });
+      expect(execution.bundles).toHaveLength(1);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }, 30_000);
+
   it("completes the cookie, scroll, hidden menu, exact settings, and dialog flow in Chromium", async () => {
     const server = createServer((request, response) => {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });

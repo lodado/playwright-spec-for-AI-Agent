@@ -64,14 +64,40 @@ describe("adaptive execution authorization", () => {
     expect(createAdaptiveExecutionInput({ qaIr, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-compiled" })).toEqual(input);
   });
 
+  it("keeps supported text and negative-visibility predicates in adaptive milestones", () => {
+    const qaIr = adaptiveQaIr();
+    qaIr.suites[0].scenarios[0].expectations = [
+      { id: "contains-dashboard", kind: "CONTAINS_TEXT", target: { testId: "dashboard" }, expected: { kind: "literal", value: "Dashboard" }, provenance: [] },
+      { id: "login-hidden", kind: "NOT_VISIBLE", target: { testId: "login-form" }, provenance: [] },
+    ];
+
+    const input = createAdaptiveExecutionInput({ qaIr, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-predicates" });
+
+    expect(input.milestones).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "contains-dashboard", expectation: { kind: "CONTAINS_TEXT", expected: { kind: "literal", value: "Dashboard" } } }),
+      expect.objectContaining({ id: "login-hidden", expectation: { kind: "NOT_VISIBLE" } }),
+    ]));
+  });
+
+  it("adds explicit read origins to the adaptive capability lease", () => {
+    const input = createAdaptiveExecutionInput({
+      qaIr: adaptiveQaIr(),
+      scenarioId: "scenario-settings",
+      baseUrl: "https://example.test",
+      runId: "run-read-origin",
+      allowedOrigins: ["https://api.example.test"],
+    });
+    expect(input.capabilityLease.allowedOrigins).toEqual(["https://example.test", "https://api.example.test"]);
+  });
+
   it("rejects cross-origin startup and scenarios without executable adaptive milestones", () => {
     const crossOrigin = adaptiveQaIr();
     crossOrigin.suites[0].scenarios[0].steps[0].target = { type: "URL", value: "https://attacker.test/collect" };
     expect(() => createAdaptiveExecutionInput({ qaIr: crossOrigin, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-cross-origin" })).toThrow(/base origin/);
 
     const unsupported = adaptiveQaIr();
-    unsupported.suites[0].scenarios[0].expectations[0].kind = "NOT_VISIBLE";
-    expect(() => createAdaptiveExecutionInput({ qaIr: unsupported, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-unsupported" })).toThrow(/does not support expectation NOT_VISIBLE/);
+    unsupported.suites[0].scenarios[0].expectations[0].kind = "ATTRIBUTE";
+    expect(() => createAdaptiveExecutionInput({ qaIr: unsupported, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-unsupported" })).toThrow(/does not support expectation ATTRIBUTE/);
 
     const empty = adaptiveQaIr();
     empty.suites[0].scenarios[0].steps = empty.suites[0].scenarios[0].steps.filter((step) => step.kind !== "INTERACT");

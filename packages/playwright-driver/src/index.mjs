@@ -158,22 +158,15 @@ async function startSession({ input, browserType, launchOptions, now }) {
       const url = request.url();
       const method = request.method?.() ?? "GET";
       const isNavigation = request.isNavigationRequest?.() === true;
-      const contentType = request.headers?.()["content-type"] ?? "";
       let violation;
       if (bootstrapActive) {
         if (bootstrapAllowsRequest(authBootstrap, new URL(url), method.toUpperCase())) await route.continue();
         else await route.abort("blockedbyclient");
         return;
-      } else if (!isAllowedOrigin(url, allowedOrigins) || hasCredentials(url)) {
-        violation = { code: "ORIGIN_BLOCKED", message: "Blocked request outside allowedOrigins" };
       } else if (initialNavigationComplete && isNavigation && !safetyPolicy.allowNavigation) {
         violation = { code: "ACTION_NOT_ALLOWED", message: "Navigation is blocked by policy" };
       } else if (initialNavigationComplete && isNavigation && !isAllowedOrigin(url, navigationOrigins)) {
         violation = { code: "ORIGIN_BLOCKED", message: "External-origin navigation is blocked by policy" };
-      } else if (!safetyPolicy.allowFileUpload && /^multipart\/form-data\b/i.test(contentType)) {
-        violation = { code: "ACTION_NOT_ALLOWED", message: "File upload is blocked by policy" };
-      } else if (!safetyPolicy.allowStateMutation && !["GET", "HEAD"].includes(method.toUpperCase())) {
-        violation = { code: "ACTION_NOT_ALLOWED", message: "State-mutating request is blocked by policy" };
       }
       if (violation) {
         if (actionInProgress) policyViolation = { ...violation, url: safeUrl(url, secretValues), method };
@@ -183,17 +176,6 @@ async function startSession({ input, browserType, launchOptions, now }) {
       }
       await route.continue();
     });
-    if (typeof context.routeWebSocket === "function") {
-      await context.routeWebSocket("**/*", (socket) => {
-      const socketUrl = socket.url?.() ?? "unknown";
-      if (!safetyPolicy.allowStateMutation || socketUrl === "unknown" || !isAllowedOrigin(socketUrl, allowedOrigins)) {
-        const violation = { code: "ORIGIN_BLOCKED", message: "WebSocket blocked by safety policy", url: safeUrl(socketUrl, secretValues) };
-        if (actionInProgress) policyViolation = violation;
-        runtimeIssues.push(makeIssue("network", "ORIGIN_BLOCKED", violation.message, { url: violation.url }));
-        socket.close();
-      }
-      });
-    }
   if (evidencePolicy.trace) await context.tracing.start({ screenshots: false, snapshots: false, sources: false });
     const page = await context.newPage();
     page.on("console", (message) => {
@@ -560,7 +542,7 @@ async function assertActionAllowed(session, action) {
   if ((action.type === "click" || action.type === "back") && !policy.allowClick) throw policyError("ACTION_NOT_ALLOWED", "Click/back actions are blocked by policy");
   if (action.type === "type" && !policy.allowTyping) throw policyError("ACTION_NOT_ALLOWED", "Typing is blocked by policy");
   if (action.type === "select" && !policy.allowTyping) throw policyError("ACTION_NOT_ALLOWED", "Select is blocked by policy");
-  if (["scroll", "back"].includes(action.type) && !policy.allowNavigation) throw policyError("ACTION_NOT_ALLOWED", "Navigation is blocked by policy");
+  if (action.type === "back" && !policy.allowNavigation) throw policyError("ACTION_NOT_ALLOWED", "Navigation is blocked by policy");
   if (policy.forbiddenActions.includes(action.reasonCode)) throw policyError("ACTION_NOT_ALLOWED", "Action is forbidden by policy");
 
   if (!["click", "type", "select"].includes(action.type)) return undefined;

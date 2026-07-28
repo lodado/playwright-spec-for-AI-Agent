@@ -13,7 +13,7 @@ const PUBLISH_ISSUE_OPTIONS = new Set([...REPORT_OPTIONS, "repository"]);
 const REMEDIATION_OPTIONS = new Set([...PUBLISH_ISSUE_OPTIONS, "publish"]);
 const PUBLICATION_COMMANDS = new Set(["publish-issue", "publish", "remediate"]);
 const COMMAND_OPTIONS = Object.freeze({
-  execute: new Set(["spec", "base-url", "run-dir", "provider", "mode", "storage-state", "auth-bootstrap"]),
+  execute: new Set(["spec", "base-url", "run-dir", "provider", "mode", "storage-state", "auth-bootstrap", "allowed-origin"]),
   judge: new Set(["run-dir"]),
   replay: new Set(["run-dir"]),
   diagnose: REPORT_OPTIONS,
@@ -26,7 +26,7 @@ const COMMAND_OPTIONS = Object.freeze({
   remediate: REMEDIATION_OPTIONS,
 });
 const COMMAND_USAGE = Object.freeze({
-  execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> [--storage-state=.private/session.json --auth-bootstrap=.private/auth-bootstrap.json --provider=playwright --mode=strict | --provider=hermes --mode=adaptive]",
+  execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> [--storage-state=.private/session.json --auth-bootstrap=.private/auth-bootstrap.json --allowed-origin=https://api.example.com --provider=playwright --mode=strict | --provider=hermes --mode=adaptive]",
   judge: "qa-native judge --run-dir=.qa/runs/<id>",
   replay: "qa-native replay --run-dir=.qa/runs/<id>",
   diagnose: "qa-native diagnose --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
@@ -213,6 +213,7 @@ function parseRequest(argv) {
         mode: { type: "string" },
         "storage-state": { type: "string" },
         "auth-bootstrap": { type: "string" },
+        "allowed-origin": { type: "string" },
       },
     });
   } catch {
@@ -251,6 +252,7 @@ function normalizeRequest(request, cwd) {
       mode,
       ...(storageStatePath === undefined ? {} : { storageStatePath }),
       ...(authBootstrapPath === undefined ? {} : { authBootstrapPath }),
+      ...(request.options["allowed-origin"] === undefined ? {} : { allowedOrigins: parseAllowedOrigins(request.options["allowed-origin"]) }),
     });
   }
 
@@ -268,6 +270,21 @@ function normalizeRequest(request, cwd) {
     revision: safeRevision(request.options.revision ?? "HEAD"),
     ...(judgmentPath === undefined ? {} : { judgmentPath }),
   });
+}
+
+function parseAllowedOrigins(value) {
+  const origins = value.split(",").filter(Boolean);
+  if (origins.length === 0 || origins.length > 7) throw new CliError("allowed origin is invalid");
+  for (const origin of origins) {
+    let url;
+    try {
+      url = new URL(origin);
+    } catch {
+      throw new CliError("allowed origin is invalid");
+    }
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.pathname !== "/" || url.search || url.hash) throw new CliError("allowed origin is invalid");
+  }
+  return Object.freeze(origins);
 }
 
 function safePublishMode(value) {

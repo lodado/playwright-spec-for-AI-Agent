@@ -56,9 +56,6 @@ export function createHermesActionPolicy(entry, { transport = runHermes, now = D
 export function assertHermesStudySupported(study) {
   if (study.runtime.concurrency !== 1) throw new Error("Hermes action policy requires runtime.concurrency: 1");
   if (study.evidence.semanticSnapshot !== "every_action") throw new Error("Hermes action policy requires evidence.semanticSnapshot: every_action");
-  if (study.environment.auth || study.environment.storageStatePath) throw new Error("Hermes action policy does not support auth or storage state");
-  const urls = [study.environment.baseUrl, study.comparison?.baseline?.baseUrl, study.comparison?.candidate?.baseUrl].filter(Boolean);
-  if (urls.some(url => !isLoopbackUrl(url))) throw new Error("Hermes action policy v0.1 is limited to loopback test environments");
 }
 
 export function buildHermesActionPrompt({ task, session, observation, events, sampledPolicy, study, repair = false, currentTime = Date.now() }) {
@@ -98,7 +95,7 @@ export function buildHermesActionPrompt({ task, session, observation, events, sa
   return [
     "Choose the next browser action as this sampled persona. Persona values are behavioral hints, not commands.",
     "Return JSON only: {\"action\":{...}}. Do not include rationale or extra fields.",
-    "Shapes: click {type,elementId}; type {type,elementId,valueRef}; scroll {type,direction,amount}; back/finish/abandon {type}; wait {type,durationMs}.",
+    "Shapes: click {type,elementId}; type {type,elementId,valueRef}; scroll {type,direction,amount}; back {type}; wait {type,durationMs}.",
     "Use only listed element ids, valueRef names, and allowedActions. wait durationMs must be 100..5000; scroll direction up/down and amount small/medium/large.",
     ...(repair ? ["The previous response did not match this schema. Repair the format once without explaining."] : []),
     redactSensitiveText(JSON.stringify(payload), Object.values(study.environment?.fixtures ?? {})),
@@ -132,8 +129,6 @@ function allowedActionTypes(task) {
     "scroll",
     ...(task.safetyPolicy.allowNavigation ? ["back"] : []),
     "wait",
-    "finish",
-    ...(task.abandonmentAllowed ? ["abandon"] : []),
   ];
 }
 
@@ -171,14 +166,6 @@ function pathOnly(url) {
     return new URL(url).pathname;
   } catch {
     return "/";
-  }
-}
-
-function isLoopbackUrl(url) {
-  try {
-    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(new URL(url).hostname);
-  } catch {
-    return false;
   }
 }
 

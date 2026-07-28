@@ -17,6 +17,7 @@ test.describe("dashboard", () => {
   // @qa-live-policy: readonly
   test("shows dashboard", async ({ page }) => {
     await expect(page.getByText("Dashboard")).toBeVisible();
+    await expect(page.getByText("Sign in")).not.toBeVisible();
   });
 });
 `;

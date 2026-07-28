@@ -13,7 +13,7 @@ import { createExclusiveQaDirectory, writePrivateJsonExclusive } from "./qa-nati
 const MAX_SPEC_BYTES = 4 * 1024 * 1024;
 const MAX_AUTH_BOOTSTRAP_BYTES = 64 * 1024;
 
-export async function executeQaNative({ specPath, baseUrl, runDirectory, integrityKey, cwd, provider = "playwright", mode = "strict", storageStatePath, authBootstrapPath }, overrides = {}) {
+export async function executeQaNative({ specPath, baseUrl, runDirectory, integrityKey, cwd, provider = "playwright", mode = "strict", storageStatePath, authBootstrapPath, allowedOrigins, allowExternalRead }, overrides = {}) {
   const compile = overrides.compile ?? compilePlaywrightSpec;
   const plan = overrides.plan ?? createExecutionPlan;
   const execute = overrides.execute ?? executeWithPlaywright;
@@ -39,7 +39,7 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
     if (provider === "hermes" && mode === "adaptive") {
       const scenarios = qaIr.suites.flatMap((suite) => suite.scenarios);
       if (scenarios.length !== 1) throw new Error("adaptive execution currently requires exactly one scenario");
-      agentInput = createAdaptiveInput({ qaIr, scenarioId: scenarios[0].id, baseUrl, runId: basename(runDirectory) });
+      agentInput = createAdaptiveInput({ qaIr, scenarioId: scenarios[0].id, baseUrl, runId: basename(runDirectory), ...(allowedOrigins === undefined ? {} : { allowedOrigins }), ...(allowExternalRead === true ? { allowExternalRead: true } : {}) });
       execution = await executeAdaptive({ input: agentInput, proposeAction: createProposer(), storageStatePath, authBootstrap });
       assertPlaywrightAdaptiveExecution(execution);
       agentOutcome = validateContract("ExecutionAgentOutcome", execution.outcome, { input: agentInput });

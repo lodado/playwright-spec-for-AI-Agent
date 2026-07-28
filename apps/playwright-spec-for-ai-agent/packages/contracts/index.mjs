@@ -247,7 +247,7 @@ function validateQaScenario(value, path) {
     object(expectation, expectationPath, "QaIrDocument");
     allowedKeys(expectation, ["id", "kind", "target", "expected", "url", "value", "text", "attribute", "provenance"], expectationPath, "QaIrDocument");
     string(expectation.id, `${expectationPath}.id`, "QaIrDocument");
-    oneOf(expectation.kind, ["CONTAINS_TEXT", "VISIBLE", "NOT_VISIBLE", "PRESENT", "ROLE", "NAME", "ATTRIBUTE", "URL", "URL_MATCH", "VISIBLE_TEXT", "VISUAL_CONSISTENCY", "VISUAL_STABILITY"], `${expectationPath}.kind`, "QaIrDocument");
+    oneOf(expectation.kind, ["CONTAINS_TEXT", "VISIBLE", "NOT_VISIBLE", "PRESENT", "DISABLED", "ROLE", "NAME", "ATTRIBUTE", "URL", "URL_MATCH", "VISIBLE_TEXT", "VISUAL_CONSISTENCY", "VISUAL_STABILITY"], `${expectationPath}.kind`, "QaIrDocument");
     if (expectation.target !== undefined) validateSemanticTarget(expectation.target, `${expectationPath}.target`);
     if (expectation.provenance !== undefined) {
       array(expectation.provenance, `${expectationPath}.provenance`, "QaIrDocument");
@@ -423,12 +423,19 @@ function validateExecutionAgentInput(value, path) {
   value.milestones.forEach((milestone, index) => {
     const milestonePath = `${path}.milestones[${index}]`;
     object(milestone, milestonePath, contract);
-    allowedKeys(milestone, ["id", "class", "status", "description", "requiredAction", "target"], milestonePath, contract);
+    allowedKeys(milestone, ["id", "class", "status", "description", "requiredAction", "target", "expectation"], milestonePath, contract);
     boundedString(milestone.id, 256, `${milestonePath}.id`, contract);
     oneOf(milestone.class, MILESTONE_CLASSES, `${milestonePath}.class`, contract);
     oneOf(milestone.status, ["PENDING", "COMPLETED", "BLOCKED"], `${milestonePath}.status`, contract);
     boundedString(milestone.description, 4_096, `${milestonePath}.description`, contract);
     if (milestone.target !== undefined) validateSemanticTarget(milestone.target, `${milestonePath}.target`, contract);
+    if (milestone.expectation !== undefined) {
+      object(milestone.expectation, `${milestonePath}.expectation`, contract);
+      allowedKeys(milestone.expectation, ["kind", "expected"], `${milestonePath}.expectation`, contract);
+      oneOf(milestone.expectation.kind, ["CONTAINS_TEXT", "VISIBLE", "NOT_VISIBLE", "PRESENT", "DISABLED", "ROLE", "NAME"], `${milestonePath}.expectation.kind`, contract);
+      if (milestone.expectation.expected !== undefined) validateSemanticMatch(milestone.expectation.expected, `${milestonePath}.expectation.expected`, contract);
+      if (milestone.expectation.kind === "CONTAINS_TEXT" && milestone.expectation.expected?.kind !== "literal") fail(contract, `${milestonePath}.expectation.expected`, "must be a literal for CONTAINS_TEXT");
+    }
     if (milestone.class === "REQUIRED_EXACT_ACTION") {
       oneOf(milestone.requiredAction, ADAPTIVE_ACTIONS, `${milestonePath}.requiredAction`, contract);
       if (milestone.target === undefined) fail(contract, `${milestonePath}.target`, "is required for REQUIRED_EXACT_ACTION");
@@ -1529,7 +1536,7 @@ function validateAdaptivePage(value, path, contract) {
 
 function validateAdaptiveObservation(value, path, contract) {
   object(value, path, contract);
-  allowedKeys(value, ["observationId", "pageId", "domGeneration", "elements"], path, contract);
+  allowedKeys(value, ["observationId", "pageId", "domGeneration", "elements", "satisfiedMilestoneIds"], path, contract);
   boundedString(value.observationId, 256, `${path}.observationId`, contract);
   boundedString(value.pageId, 256, `${path}.pageId`, contract);
   boundedInteger(value.domGeneration, 1, Number.MAX_SAFE_INTEGER, `${path}.domGeneration`, contract);
@@ -1551,6 +1558,10 @@ function validateAdaptiveObservation(value, path, contract) {
   });
   const elementIds = value.elements.map((element) => element.elementId);
   if (new Set(elementIds).size !== elementIds.length) fail(contract, `${path}.elements`, "element ids must be unique");
+  if (value.satisfiedMilestoneIds !== undefined) {
+    uniqueStringArray(value.satisfiedMilestoneIds, `${path}.satisfiedMilestoneIds`, contract);
+    if (value.satisfiedMilestoneIds.length > 64) fail(contract, `${path}.satisfiedMilestoneIds`, "must contain at most 64 milestones");
+  }
 }
 
 function validateAdaptiveBudget(value, path, contract) {

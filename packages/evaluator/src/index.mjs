@@ -106,7 +106,7 @@ export async function evaluateOracle(oracle, context, customEvaluators = {}) {
     case "url":
       return statefulResult(oracle, matchText(context.latestObservation?.page?.url ?? "", oracle.operation, oracle.value), context.latestEvidenceIds);
     case "visible_text":
-      return statefulResult(oracle, matchVisibleText(context.visibleText, oracle), context.latestEvidenceIds);
+      return statefulResult(oracle, matchVisibleText(context.visibleText, oracle), context.visibleTextEvidenceIds);
     case "element":
       return evaluateElementOracle(oracle, context);
     case "network":
@@ -230,7 +230,8 @@ function buildEvaluationContext({ observations, events, manifest }) {
     manifest,
     latestObservation,
     latestEvidenceIds: latestObservation ? entriesByObservation.get(latestObservation.id) ?? [latestObservation.visual?.screenshotEvidenceId].filter(Boolean) : [],
-    visibleText: collectVisibleText(latestObservation),
+    visibleText: unique(sortedObservations.flatMap(collectVisibleText)),
+    visibleTextEvidenceIds: unique(sortedObservations.flatMap(observation => entriesByObservation.get(observation.id) ?? [observation.visual?.screenshotEvidenceId].filter(Boolean))),
     elements: collectElements(latestObservation),
     networkRecords,
     eventRecords,

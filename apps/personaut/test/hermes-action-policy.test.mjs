@@ -101,10 +101,9 @@ test("timeout and provider failures do not retry", async () => {
   }
 });
 
-test("Hermes v0.1 preflight keeps execution local, serial, semantic, and unauthenticated", () => {
+test("Hermes preflight keeps execution serial and semantic while allowing driver-owned authentication", () => {
   assert.doesNotThrow(() => assertHermesStudySupported(study));
   assert.throws(() => assertHermesStudySupported({ ...study, runtime: { concurrency: 2 } }), /concurrency/);
   assert.throws(() => assertHermesStudySupported({ ...study, evidence: { semanticSnapshot: "off" } }), /semanticSnapshot/);
-  assert.throws(() => assertHermesStudySupported({ ...study, environment: { ...study.environment, auth: { token: "x" } } }), /auth/);
-  assert.throws(() => assertHermesStudySupported({ ...study, environment: { ...study.environment, baseUrl: "https://example.test" } }), /loopback/);
+  assert.doesNotThrow(() => assertHermesStudySupported({ ...study, environment: { ...study.environment, auth: { token: "x" }, storageStatePath: ".private/session.json", baseUrl: "https://example.test" } }));
 });

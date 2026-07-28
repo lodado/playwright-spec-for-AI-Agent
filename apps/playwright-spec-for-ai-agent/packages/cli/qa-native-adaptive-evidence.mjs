@@ -24,14 +24,16 @@ export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, man
     } catch {
       throw new Error("adaptive action evidence is invalid");
     }
-    if (!isExactObject(audit, ["proposal", "status", "before", "after"]) || audit.status !== "ACCEPTED") throw new Error("adaptive action evidence is invalid");
+    if (!isExactObject(audit, ["proposal", "status", "before", "after"]) && !isExactObject(audit, ["proposal", "status", "before", "after", "satisfiedMilestoneIds"])) throw new Error("adaptive action evidence is invalid");
+    const invalidSatisfiedMilestones = audit.satisfiedMilestoneIds !== undefined && (!Array.isArray(audit.satisfiedMilestoneIds) || audit.satisfiedMilestoneIds.some((id) => !input.milestones.some((milestone) => milestone.id === id)));
+    if (audit.status !== "ACCEPTED" || invalidSatisfiedMilestones) throw new Error("adaptive action evidence is invalid");
     const proposal = validateContract("ExecutionActionProposal", audit.proposal);
     if (proposal.runId !== input.runId || proposal.scenarioId !== input.scenarioId || proposal.leaseId !== input.capabilityLease.leaseId || !input.capabilityLease.actions.includes(proposal.action)) throw new Error("adaptive action evidence is bound to a different execution");
     if (!input.milestones.some((milestone) => milestone.id === proposal.milestoneId) || verified.bundle.checkpointId !== proposal.proposalId) throw new Error("adaptive action evidence is bound to an unknown milestone");
     validateAuditPage(audit.before, input.capabilityLease.allowedOrigins);
     validateAuditPage(audit.after, input.capabilityLease.allowedOrigins);
     if (verified.bundle.environment.targetUrl !== audit.after.url) throw new Error("adaptive action evidence does not match its checkpoint");
-    return { proposal, before: audit.before, after: audit.after };
+    return { proposal, before: audit.before, after: audit.after, satisfiedMilestoneIds: audit.satisfiedMilestoneIds };
   });
 
   const requiredMilestones = input.milestones.filter((milestone) => milestone.class !== "OPTIONAL_HINT");
@@ -41,7 +43,10 @@ export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, man
     const milestone = requiredMilestones[milestoneIndex];
     if (milestone === undefined || audit.proposal.milestoneId !== milestone.id || !sameAuditPage(audit.before, expectedPage)) throw new Error("adaptive action evidence is out of sequence");
     expectedPage = audit.after;
-    if (provesMilestone(audit.proposal, milestone)) milestoneIndex += 1;
+    if (provesMilestone(audit, milestone)) {
+      milestoneIndex += 1;
+      while (milestone.class === "REQUIRED_SEMANTIC_MILESTONE" && requiredMilestones[milestoneIndex]?.class === "REQUIRED_SEMANTIC_MILESTONE" && audit.satisfiedMilestoneIds?.includes(requiredMilestones[milestoneIndex].id)) milestoneIndex += 1;
+    }
   }
   if (milestoneIndex !== requiredMilestones.length || requiredMilestones.some((milestone) => !outcome.completedMilestoneIds.includes(milestone.id))) throw new Error("adaptive milestone completion lacks accepted evidence");
 }
@@ -65,7 +70,7 @@ function sameAuditPage(left, right) {
   return left.pageId === right.pageId && left.domGeneration === right.domGeneration && left.url === right.url;
 }
 
-function provesMilestone(proposal, milestone) {
-  if (milestone.class === "REQUIRED_EXACT_ACTION") return proposal.action === milestone.requiredAction;
-  return ["observe_dom", "observe_aria"].includes(proposal.action) || (proposal.action === "wait_for_element_state" && ["present", "visible"].includes(proposal.parameters.state));
+function provesMilestone(audit, milestone) {
+  if (milestone.class === "REQUIRED_EXACT_ACTION") return audit.proposal.action === milestone.requiredAction;
+  return (audit.satisfiedMilestoneIds === undefined || audit.satisfiedMilestoneIds.includes(milestone.id)) && (["observe_dom", "observe_aria"].includes(audit.proposal.action) || (audit.proposal.action === "wait_for_element_state" && ["present", "visible"].includes(audit.proposal.parameters.state)));
 }

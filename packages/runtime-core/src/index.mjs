@@ -279,7 +279,7 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
       observations.push(observation);
     if ((study.evidence?.semanticSnapshot ?? "every_action") === "every_action") await store.appendObservation?.(observation);
 
-      const oracleResult = await oracle.evaluate({ study, task, persona, session, observation, events, signal });
+      const oracleResult = await oracle.evaluate({ study, task, persona, session, observation, observations, events, signal });
       const terminal = terminalFromOracle(oracleResult);
       if (terminal) {
         await setPhase(terminal.phase, { terminalReason: terminal.reason });

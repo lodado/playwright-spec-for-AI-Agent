@@ -81,6 +81,37 @@ test("fake sessions generate sealed JSON and HTML without a model", async () => 
   await rm(root, { recursive: true, force: true });
 });
 
+test("one-shot success accumulates sealed oracle evidence across scroll positions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "persona-temporal-oracle-"));
+  const temporalStudy = structuredClone(study);
+  temporalStudy.personas = [{ preset: "careful_business_buyer" }];
+  temporalStudy.tasks[0] = {
+    ...temporalStudy.tasks[0],
+    successOracles: [
+      { id: "free", type: "visible_text", operation: "contains", value: "Free plan" },
+      { id: "upgrade", type: "visible_text", operation: "contains", value: "Upgrade" },
+    ],
+    maxActions: 1,
+  };
+  let observationCount = 0;
+  const completed = await runPersonaStudy({
+    study: temporalStudy,
+    outputDir: root,
+    driverFactory: () => ({
+      ...fakeDriver(),
+      async observe() {
+        const visibleText = observationCount++ === 0 ? ["Free plan"] : ["Upgrade"];
+        return { ...(await fakeDriver().observe()), semantic: { visibleText, headings: [], landmarks: [], interactiveElements: [] } };
+      },
+    }),
+    policyFactory: () => ({ sampledPolicy: { seed: 1 }, decide: () => ({ type: "scroll", direction: "down", amount: "medium", reasonCode: "inspect_below_fold" }) }),
+  });
+  assert.equal(completed.sessions[0].session.status, "success");
+  assert.equal(completed.sessions[0].functionalEvaluation.status, "success");
+  assert.equal(completed.sessions[0].observations.length, 2);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("variant comparison computes recurrence within each variant", async () => {
   const root = await mkdtemp(join(tmpdir(), "persona-variant-"));
   const variantStudy = structuredClone(study);

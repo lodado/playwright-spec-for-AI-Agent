@@ -1,6 +1,6 @@
 # QA Native
 
-QA Native is the evidence-driven runtime shipped with `playwright-spec-for-ai-agent`. It compiles annotated Playwright intent, runs a bounded read-only browser session, seals the evidence, judges it later without a browser, and can prepare reviewable remediation artifacts.
+QA Native is the evidence-driven runtime shipped with `playwright-spec-for-ai-agent`. It compiles annotated Playwright intent, runs a bounded browser session, seals the evidence, judges it later without a browser, and can prepare reviewable remediation artifacts.
 
 > QA Native currently supports macOS and Linux. Windows is not supported because private run artifacts rely on POSIX file and directory modes.
 
@@ -28,7 +28,7 @@ npx qa-native execute \
 npx qa-native judge --run-dir=.qa/runs/dashboard-1
 ```
 
-`execute` writes an authenticated evidence archive. `judge` runs deterministic checks first and sends only unresolved semantic expectations to Hermes in text-only mode.
+`execute` writes an authenticated evidence archive. `judge` runs deterministic checks first and sends only unresolved semantic expectations to Hermes in text-only mode. Hermes adaptive runs allow every page-initiated API request and WebSocket connection. Direct browser navigation remains limited to the configured target origin.
 
 ## Authenticated pages
 
@@ -55,7 +55,7 @@ For an automatic SSO or session-refresh page, add an opt-in bootstrap file inste
 }
 ```
 
-Pass it with `--auth-bootstrap=.private/auth-bootstrap.json`. During bootstrap, only `GET`/`HEAD` requests to the listed origins and the exact non-GET endpoints above are allowed. Once its page finishes loading, the runtime returns to its ordinary same-origin, mutation-blocking policy—even for those bootstrap endpoints. Do not put credentials, cookies, tokens, or query strings in this file.
+Pass it with `--auth-bootstrap=.private/auth-bootstrap.json`. During bootstrap, only `GET`/`HEAD` requests to the listed origins and the exact non-GET endpoints above are allowed. Once its page finishes loading, page-initiated API traffic is unrestricted. Do not put credentials, cookies, tokens, or query strings in this file.
 
 ## Create a repository-aware report
 

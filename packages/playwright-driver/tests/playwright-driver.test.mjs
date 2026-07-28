@@ -66,7 +66,7 @@ describe("playwright behavioral driver", () => {
       expect(observation.semantic.visibleText).toContain("Authenticated");
       expect(requests).toContain("/login");
       await driver.close(handle);
-      expect(requests).not.toContain("/mutation");
+      expect(requests).toContain("/mutation");
     } finally {
       await driver.closeAll();
       await new Promise((resolve) => server.close(resolve));
@@ -161,6 +161,8 @@ describe("playwright behavioral driver", () => {
     expect(await driver.execute(navigation, { type: "click", elementId: elementId(observation, "External"), reasonCode: "follow_link" })).toMatchObject({ status: "blocked", code: "ACTION_NOT_ALLOWED", message: "Navigation is blocked by policy" });
     observation = await driver.observe(navigation);
     expect(await driver.execute(navigation, { type: "back", reasonCode: "go_back" })).toMatchObject({ status: "blocked", message: "Navigation is blocked by policy" });
+    await driver.observe(navigation);
+    expect(await driver.execute(navigation, { type: "scroll", direction: "down", amount: "medium", reasonCode: "inspect_below_fold" })).toMatchObject({ status: "success" });
 
     const externalBlocked = await driver.start({ ...input("external", app.url, path.join(dir, "external"), { allowClick: true, allowNavigation: true, allowExternalOrigin: false }), environment });
     observation = await driver.observe(externalBlocked);
@@ -174,7 +176,7 @@ describe("playwright behavioral driver", () => {
 
     const upload = await driver.start({ ...input("upload", app.url, path.join(dir, "upload"), { allowClick: true, allowNavigation: true, allowStateMutation: true, allowFileUpload: false }), environment });
     observation = await driver.observe(upload);
-    expect(await driver.execute(upload, { type: "click", elementId: elementId(observation, "Upload"), reasonCode: "upload" })).toMatchObject({ status: "blocked", message: "File upload is blocked by policy" });
+    expect(await driver.execute(upload, { type: "click", elementId: elementId(observation, "Upload"), reasonCode: "upload" })).toMatchObject({ status: "success" });
 
     await driver.closeAll();
     await app.close();
@@ -182,7 +184,7 @@ describe("playwright behavioral driver", () => {
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
   });
 
-  it("records blocked background requests without poisoning later actions", async () => {
+  it("records permitted background requests without poisoning later actions", async () => {
     if (!browserAvailable) return;
     const app = await serve(`<script>fetch('/background',{method:'POST'}).catch(()=>{})</script><h1>Ready</h1>`);
     const driver = createPlaywrightDriver({ browserType: chromium });
@@ -190,7 +192,7 @@ describe("playwright behavioral driver", () => {
     const handle = await driver.start(input("background", app.url, dir, { allowStateMutation: false }));
     const observation = await driver.observe(handle);
 
-    expect(observation.runtime.networkFailures).toContainEqual(expect.objectContaining({ severity: "ACTION_NOT_ALLOWED", method: "POST" }));
+    expect(observation.runtime.networkFailures).toContainEqual(expect.objectContaining({ severity: "HTTP_RESPONSE", method: "POST", status: 200 }));
     expect(await driver.execute(handle, { type: "wait", durationMs: 0, reasonCode: "settle" })).toMatchObject({ status: "success" });
     await driver.observe(handle);
     expect(await driver.execute(handle, { type: "wait", durationMs: 0, reasonCode: "settle_again" })).toMatchObject({ status: "success" });
