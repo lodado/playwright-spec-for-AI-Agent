@@ -90,6 +90,34 @@ export function buildHermesChildEnv(mode, hermesHome, source = process.env) {
   return { ...env, HOME: hermesHome, USERPROFILE: hermesHome, HERMES_HOME: hermesHome };
 }
 
+let hermesProtocolVerified = false;
+
+/**
+ * QA Native calls the Hermes Agent through the legacy `--query`/`--max_turns`
+ * contract. A Hermes install whose CLI does not speak that contract must fail
+ * loudly with a fix path, never silently produce empty output.
+ */
+export function assertHermesRunnerProtocol(helpText) {
+  if (!/--query\b/.test(helpText) || !/--max_turns\b/.test(helpText)) {
+    throw new Error(
+      "hermes-agent CLI does not support --query/--max_turns. Install the pinned compatible Hermes Agent version (see docs/qa-native-one-shot-runbook.md) or update scripts/hermes-runner.mjs to the new CLI contract."
+    );
+  }
+}
+
+export function probeHermesRunnerProtocol({ spawn = spawnSync } = {}) {
+  if (hermesProtocolVerified) return;
+  const invocation = resolveHermesAgentInvocation();
+  const result = spawn(invocation.command, [...invocation.baseArgs, "--help"], {
+    shell: false,
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  if (result.error) throw result.error;
+  assertHermesRunnerProtocol(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
+  hermesProtocolVerified = true;
+}
+
 export function resolveHermesAgentInvocation() {
   const installRoot = join(homedir(), ".hermes", "hermes-agent");
   const localPython = join(installRoot, "venv", "bin", "python");
@@ -354,6 +382,8 @@ export function runHermes(
       `Hermes command must be exactly ${REQUIRED_HERMES_AGENT_BIN}. Got: ${JSON.stringify(HERMES_QA_COMMAND)}`
     );
   }
+
+  probeHermesRunnerProtocol();
 
   const disabledToolsets = [
     mode === "text-only" ? HERMES_QA_TEXT_ONLY_DISABLED_TOOLSETS : null,
