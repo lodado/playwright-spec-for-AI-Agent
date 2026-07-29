@@ -525,7 +525,10 @@ function buildReport({ study, evaluatedSessions, validity, findings, variant }) 
     }),
     ...(variant ? { variant } : {}),
     timeline: evaluatedSessions.map(item => ({ ...item.session, steps: item.events })),
-    evidence: evaluatedSessions.flatMap(item => item.manifest.entries),
+    evidence: evaluatedSessions.flatMap(item => item.manifest.entries.map(entry =>
+      entry.relativePath && ["screenshot", "video"].includes(entry.type)
+        ? { ...entry, src: `../sessions/${item.session.sessionId}/${entry.relativePath}` }
+        : entry)),
     runtime: evaluatedSessions.filter(item => item.session.status === "runtime_error").map(item => item.session.terminalReason),
     cost: [],
     modelCard: {
