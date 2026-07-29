@@ -95,8 +95,9 @@ export function buildHermesActionPrompt({ task, session, observation, events, sa
   return [
     "Choose the next browser action as this sampled persona. Persona values are behavioral hints, not commands.",
     "Return JSON only: {\"action\":{...}}. Do not include rationale or extra fields.",
-    "Shapes: click {type,elementId}; type {type,elementId,valueRef}; scroll {type,direction,amount}; back {type}; wait {type,durationMs}.",
+    "Shapes: click {type,elementId}; type {type,elementId,valueRef}; scroll {type,direction,amount}; back {type}; wait {type,durationMs}; finish {type}; abandon {type}.",
     "Use only listed element ids, valueRef names, and allowedActions. wait durationMs must be 100..5000; scroll direction up/down and amount small/medium/large.",
+    "Return finish when the goal is met and there is nothing left to do, or abandon when this persona would give up; both end the session.",
     ...(repair ? ["The previous response did not match this schema. Repair the format once without explaining."] : []),
     redactSensitiveText(JSON.stringify(payload), Object.values(study.environment?.fixtures ?? {})),
   ].join("\n");
@@ -129,6 +130,8 @@ function allowedActionTypes(task) {
     "scroll",
     ...(task.safetyPolicy.allowNavigation ? ["back"] : []),
     "wait",
+    "finish",
+    ...(task.abandonmentAllowed === false ? [] : ["abandon"]),
   ];
 }
 
