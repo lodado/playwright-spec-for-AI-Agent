@@ -169,6 +169,18 @@ describe("compilePlaywrightSpec", () => {
     }]);
   });
 
+  it("omits accessibleName for role-only locators so role alone identifies the target", () => {
+    const source = `// @qa-scenario: DIALOG\n// @qa-page: /settings\n// @qa-live-policy: safe-interaction\ntest("dialog", async ({ page }) => {\n  await page.getByTestId("settings").click();\n  await expect(page.getByRole("dialog")).toBeVisible();\n});\n`;
+
+    const result = compilePlaywrightSpec({ source, sourcePath: "dialog.spec.ts" });
+
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toEqual([]);
+    const [expectation] = result.qaIr.suites[0].scenarios[0].expectations;
+    expect(expectation).toMatchObject({ kind: "VISIBLE", target: { role: "dialog" } });
+    expect(expectation.target.accessibleName).toBeUndefined();
+  });
+
   it("compiles locator, fill, and count patterns while rejecting opaque helpers atomically", () => {
     const interaction = `// @qa-scenario: MIXED\n// @qa-live-policy: safe-interaction\ntest("mixed", async ({ page }) => {\n  // await page.getByTestId("comment-only").click();\n  await page.getByTestId("menu").click();\n  await page.locator(".unsafe").click();\n  await page.getByTestId("name").fill("value");\n  await expect(page.locator(".result")).toHaveCount(1);\n});\n`;
     const result = compilePlaywrightSpec({ source: interaction, sourcePath: "mixed.spec.ts" });

@@ -174,11 +174,16 @@ function semanticTargetFromLocator(locator = {}) {
   const base = { hints: [{ adapter: "playwright", data: hintData }] };
   if (locator.kind === "testId") return { ...base, testId: String(locator.value) };
   if (locator.kind === "text") return { ...base, text: { kind: "literal", value: String(locator.value) } };
-  if (locator.kind === "role") return {
-    ...base,
-    role: String(locator.role ?? locator.value),
-    accessibleName: { kind: "literal", value: String(locator.name ?? locator.value ?? "") },
-  };
+  if (locator.kind === "role") {
+    // Role alone is a valid identity (contract). Only attach accessibleName when the
+    // locator carries an explicit name — never fall back to the role string.
+    const name = typeof locator.name === "string" ? locator.name : undefined;
+    return {
+      ...base,
+      role: String(locator.role ?? locator.value),
+      ...(name === undefined || name === "" ? {} : { accessibleName: { kind: "literal", value: name } }),
+    };
+  }
   if (locator.kind === "chain") {
     const operations = locator.operations ?? [];
     const lastSemantic = [...operations].reverse().find(operation => ["getByRole", "getByTestId", "getByText"].includes(operation.method));
