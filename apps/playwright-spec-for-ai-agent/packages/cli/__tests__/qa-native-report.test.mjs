@@ -335,9 +335,9 @@ function persistedFailedRun({ adaptive = false, strictFailureCount = 1 } = {}) {
   writePrivateJsonExclusive(".qa/runs/run-1/run.json", runtimeOutcome, { cwd });
   if (adaptive) {
     const outcome = { schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION, runId: input.runId, scenarioId: input.scenarioId, type: "COMPLETED", completedMilestoneIds: input.milestones.map((milestone) => milestone.id) };
-    writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-input.json", input, { cwd });
-    writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-outcome.json", outcome, { cwd });
-    writeAuthenticatedRunEnvelope({ runDirectory, cwd, integrityKey, runId: "run-1", mode: "adaptive", qaIr, runtimeOutcome, evidenceManifest: manifest, executionAgentInput: input, executionAgentOutcome: outcome });
+    writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-inputs.json", [input], { cwd });
+    writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-outcomes.json", [outcome], { cwd });
+    writeAuthenticatedRunEnvelope({ runDirectory, cwd, integrityKey, runId: "run-1", mode: "adaptive", qaIr, runtimeOutcome, evidenceManifest: manifest, executionAgentInputs: [input], executionAgentOutcomes: [outcome] });
   } else {
     const executionPlan = createExecutionPlan({ qaIr, providerCapabilities: playwrightExecutionCapabilities() });
     writePrivateJsonExclusive(".qa/runs/run-1/execution-plan.json", executionPlan, { cwd });

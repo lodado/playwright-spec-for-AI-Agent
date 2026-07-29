@@ -21,6 +21,7 @@ const DOM_LIMIT = 4 * 1024 * 1024;
 const ACTION_LOG_LIMIT = 16 * 1024;
 const ELEMENT_TEXT_LIMIT = 4 * 1024;
 const MAX_ELEMENT_OBSERVATIONS = 128;
+const MAX_POST_INTERACTION_REQUESTS = 100;
 const MAX_PLAN_NODES = 128;
 const MAX_RUN_ARTIFACTS = 256;
 const MAX_RUN_EVIDENCE_BYTES = 16 * 1024 * 1024;
@@ -108,6 +109,8 @@ export async function openPlaywrightBrowserToolGateway({
   secrets = [],
   storageStatePath,
   authBootstrap,
+  store: sharedStore,
+  priorManifest,
   clock = Date.now,
   now = () => new Date().toISOString(),
 } = {}) {
@@ -118,7 +121,7 @@ export async function openPlaywrightBrowserToolGateway({
   const bootstrap = normalizeAuthBootstrap(authBootstrap, initialInput.currentPage.url);
   const deadline = readFiniteClock(clock) + initialInput.remainingBudget.timeMs;
   const capabilities = playwrightBrowserToolCapabilities();
-  const store = createInMemoryEvidenceStore({ providerCapabilities: capabilities, producer: { name: GATEWAY_PROVIDER_ID, version: GATEWAY_PROVIDER_VERSION }, secrets });
+  const store = sharedStore ?? createInMemoryEvidenceStore({ providerCapabilities: capabilities, producer: { name: GATEWAY_PROVIDER_ID, version: GATEWAY_PROVIDER_VERSION }, secrets });
   const selectedBrowserType = browserType ?? await loadBrowserType(browserName);
   if (typeof selectedBrowserType?.launch !== "function") throw new TypeError("browser type cannot launch");
   let launchPromise;
@@ -169,7 +172,7 @@ export async function openPlaywrightBrowserToolGateway({
     let currentMilestoneId = initialInput.currentMilestoneId;
     let outcome;
     let recentObservations = [];
-    let manifest;
+    let manifest = priorManifest;
     let observationSequence = 0;
     const handles = new Map();
     const usedProposalIds = new Set();
@@ -595,11 +598,13 @@ export async function runAdaptiveWithPlaywright({
   secrets = [],
   storageStatePath,
   authBootstrap,
+  store,
+  priorManifest,
   now = () => new Date().toISOString(),
   clock = Date.now,
 } = {}) {
   if (typeof proposeAction !== "function") throw new Error("proposeAction must be a function");
-  const gateway = await openPlaywrightBrowserToolGateway({ input, browserName, browserType, viewport, secrets, storageStatePath, authBootstrap, now, clock });
+  const gateway = await openPlaywrightBrowserToolGateway({ input, browserName, browserType, viewport, secrets, storageStatePath, authBootstrap, store, priorManifest, now, clock });
   const bundles = [];
   let manifest;
   let outcome;
@@ -620,6 +625,30 @@ export async function runAdaptiveWithPlaywright({
   } finally {
     await gateway.close();
   }
+}
+
+export async function runAdaptiveSuiteWithPlaywright({ inputs, proposeAction, ...options } = {}) {
+  if (!Array.isArray(inputs) || inputs.length === 0) throw new Error("adaptive suite requires at least one scenario input");
+  if (new Set(inputs.map((input) => input?.runId)).size !== 1) throw new Error("adaptive suite inputs must share one runId");
+  const store = createInMemoryEvidenceStore({ providerCapabilities: playwrightBrowserToolCapabilities(), producer: { name: GATEWAY_PROVIDER_ID, version: GATEWAY_PROVIDER_VERSION }, secrets: options.secrets ?? [] });
+  const bundles = [];
+  const executions = [];
+  let manifest;
+  for (const input of inputs) {
+    let execution;
+    try {
+      execution = await runAdaptiveWithPlaywright({ input, proposeAction, store, priorManifest: manifest, ...options });
+    } catch (error) {
+      throw new Error(`adaptive scenario ${input.scenarioId} failed: ${error.message}`, { cause: error });
+    }
+    if (execution.outcome.type !== "COMPLETED") throw new Error(`adaptive scenario ${input.scenarioId} did not complete`);
+    bundles.push(...execution.bundles);
+    manifest = execution.manifest;
+    executions.push(Object.freeze({ scenarioId: input.scenarioId, input, outcome: execution.outcome, bundleIds: Object.freeze(execution.bundles.map((bundle) => bundle.bundleId)) }));
+  }
+  const suite = Object.freeze({ outcome: executions[executions.length - 1].outcome, bundles: Object.freeze(bundles), manifest, readBlob: store.readBlob, executions: Object.freeze(executions) });
+  adaptiveExecutions.add(suite);
+  return suite;
 }
 
 export function assertPlaywrightAdaptiveExecution(execution) {
@@ -708,6 +737,14 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
   let interactionStarted = false;
   let interactionPolicyViolation = false;
   let bootstrapActive = bootstrap !== undefined;
+  let postInteractionRequests = [];
+
+  function isReadOnlySameOriginRequest(requestUrl, method) {
+    return ["GET", "HEAD"].includes(method)
+      && ["http:", "https:"].includes(requestUrl.protocol)
+      && requestUrl.origin === base.origin
+      && !requestUrl.username && !requestUrl.password;
+  }
 
   async function openPage() {
     if (session) return session.page;
@@ -739,11 +776,18 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
             return;
           }
           if (interactionStarted) {
+            if (isReadOnlySameOriginRequest(requestUrl, request.method())) {
+              if (postInteractionRequests.length < MAX_POST_INTERACTION_REQUESTS) {
+                postInteractionRequests.push({ method: request.method(), origin: requestUrl.origin, path: requestUrl.pathname });
+              }
+              await route.continue();
+              return;
+            }
             interactionPolicyViolation = true;
             await route.abort("blockedbyclient");
             return;
           }
-          if (!["GET", "HEAD"].includes(request.method()) || !["http:", "https:"].includes(requestUrl.protocol) || requestUrl.origin !== base.origin || requestUrl.username || requestUrl.password) {
+          if (!isReadOnlySameOriginRequest(requestUrl, request.method())) {
             await route.abort("blockedbyclient");
             return;
           }
@@ -813,7 +857,8 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       await locator.click({ timeout: nodeTimeoutMs });
       if (interactionPolicyViolation) throw providerError("POLICY_VIOLATION");
       const afterUrl = evidenceUrl(page, base);
-      const content = boundedText(JSON.stringify({ action: "CLICK", target: actionLogTarget(step.target), beforeUrl, afterUrl, status: "SUCCEEDED" }), ACTION_LOG_LIMIT, "ACTION_LOG");
+      const content = boundedText(JSON.stringify({ action: "CLICK", target: actionLogTarget(step.target), beforeUrl, afterUrl, status: "SUCCEEDED", allowedRequests: postInteractionRequests }), ACTION_LOG_LIMIT, "ACTION_LOG");
+      postInteractionRequests = [];
       observationState(observations, node.scenarioId).artifacts.push(captureArtifact(`${node.nodeId}:action_log`, "ACTION_LOG", "application/json", content));
       return;
     }

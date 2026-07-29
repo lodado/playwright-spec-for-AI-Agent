@@ -1,14 +1,22 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  assertHermesRunnerProtocol,
   buildHermesAgentArgs,
   buildHermesChildEnv,
   extractHermesFinalResponseText,
   extractJsonFromHermesOutput,
   prepareEphemeralHermesHome,
   prepareHermesJsonParseSurface,
+  probeHermesRunnerProtocol,
   resolveTextOnlyDisabledToolsets,
   unwrapHermesEnvelope,
 } from "../hermes-runner.mjs";
@@ -29,11 +37,49 @@ describe("buildHermesAgentArgs", () => {
   });
 
   it("cannot remove mandatory text-only tool restrictions", () => {
-    expect(resolveTextOnlyDisabledToolsets("browser,custom").split(",")).toEqual([
-      "*",
-      "browser",
-      "custom",
-    ]);
+    expect(
+      resolveTextOnlyDisabledToolsets("browser,custom").split(","),
+    ).toEqual(["*", "browser", "custom"]);
+  });
+});
+
+describe("assertHermesRunnerProtocol", () => {
+  it("accepts help text that documents --query and --max_turns", () => {
+    expect(() =>
+      assertHermesRunnerProtocol(
+        "usage: hermes-agent --query=Q --max_turns=N --model=M",
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects help text without the legacy flags and names the fix", () => {
+    expect(() =>
+      assertHermesRunnerProtocol("usage: hermes run <task.json>"),
+    ).toThrow(/hermes-agent CLI does not support --query\/--max_turns/);
+  });
+});
+
+describe("probeHermesRunnerProtocol", () => {
+  // The probe caches success in module state, so the failing case must run
+  // before any test that verifies the CLI and sets that cache.
+  it("surfaces the incompatible-CLI error from help output", () => {
+    const spawn = vi.fn(() => ({
+      stdout: "usage: hermes run <task.json>",
+      stderr: "",
+    }));
+    expect(() => probeHermesRunnerProtocol({ spawn })).toThrow(
+      /hermes-agent CLI does not support --query\/--max_turns/,
+    );
+  });
+
+  it("passes when the CLI help advertises the required flags", () => {
+    const spawn = vi.fn(() => ({
+      stdout: "--query --max_turns --model",
+      stderr: "",
+    }));
+    expect(() => probeHermesRunnerProtocol({ spawn })).not.toThrow();
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(spawn.mock.calls[0][1]).toContain("--help");
   });
 });
 
@@ -74,14 +120,16 @@ describe("prepareEphemeralHermesHome", () => {
     try {
       mkdirSync(sourceHome);
       mkdirSync(join(sourceHome, "auth.json"));
-      expect(() => prepareEphemeralHermesHome({
-        mode: "text-only",
-        sourceHome,
-        makeTemporaryHome: () => {
-          mkdirSync(destination);
-          return destination;
-        },
-      })).toThrow();
+      expect(() =>
+        prepareEphemeralHermesHome({
+          mode: "text-only",
+          sourceHome,
+          makeTemporaryHome: () => {
+            mkdirSync(destination);
+            return destination;
+          },
+        }),
+      ).toThrow();
       expect(existsSync(destination)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -106,7 +154,10 @@ describe("buildHermesChildEnv", () => {
       USERPROFILE: "/tmp/hermes",
       HERMES_HOME: "/tmp/hermes",
     });
-    expect(buildHermesChildEnv("browse", "/tmp/hermes", source)).toMatchObject({ STAGING_QA_PASSWORD: "staging-secret", HERMES_HOME: "/tmp/hermes" });
+    expect(buildHermesChildEnv("browse", "/tmp/hermes", source)).toMatchObject({
+      STAGING_QA_PASSWORD: "staging-secret",
+      HERMES_HOME: "/tmp/hermes",
+    });
   });
 });
 

@@ -69,16 +69,22 @@ function expectedJudgedBundles({ runDirectory, archive, envelope, qaIr, runtimeO
     verifyRunEnvelopeBindings({ envelope, runId: envelope.runId, mode: "strict", qaIr, runtimeOutcome, evidenceManifest: archive.manifest, executionPlan });
     return archive.bundles;
   }
-  const input = readPrivateJson(relative(cwd, join(runDirectory, "execution-agent-input.json")), { cwd });
-  const outcome = readPrivateJson(relative(cwd, join(runDirectory, "execution-agent-outcome.json")), { cwd });
-  validateContract("ExecutionAgentInput", input);
-  validateContract("ExecutionAgentOutcome", outcome, { input });
-  if (outcome.type !== "COMPLETED" || input.runId !== archive.manifest.runId) throw new Error("adaptive execution metadata does not match evidence");
-  verifyRunEnvelopeBindings({ envelope, runId: envelope.runId, mode: "adaptive", qaIr, runtimeOutcome, evidenceManifest: archive.manifest, executionAgentInput: input, executionAgentOutcome: outcome });
-  validateAdaptiveExecutionEvidence({ input, outcome, ...archive });
-  const finalBundle = archive.bundles.filter((bundle) => bundle.scenarioId === outcome.scenarioId).at(-1);
-  if (finalBundle === undefined) throw new Error("adaptive final evidence is missing");
-  return [finalBundle];
+  const inputs = readPrivateJson(relative(cwd, join(runDirectory, "execution-agent-inputs.json")), { cwd });
+  const outcomes = readPrivateJson(relative(cwd, join(runDirectory, "execution-agent-outcomes.json")), { cwd });
+  if (!Array.isArray(inputs) || !Array.isArray(outcomes) || inputs.length === 0 || inputs.length !== outcomes.length) throw new Error("adaptive execution metadata is invalid");
+  inputs.forEach((input, index) => {
+    validateContract("ExecutionAgentInput", input);
+    const outcome = validateContract("ExecutionAgentOutcome", outcomes[index], { input });
+    if (outcome.type !== "COMPLETED" || input.runId !== archive.manifest.runId) throw new Error("adaptive execution metadata does not match evidence");
+  });
+  verifyRunEnvelopeBindings({ envelope, runId: envelope.runId, mode: "adaptive", qaIr, runtimeOutcome, evidenceManifest: archive.manifest, executionAgentInputs: inputs, executionAgentOutcomes: outcomes });
+  return inputs.map((input, index) => {
+    const scenarioBundles = archive.bundles.filter((bundle) => bundle.scenarioId === input.scenarioId);
+    validateAdaptiveExecutionEvidence({ input, outcome: outcomes[index], bundles: scenarioBundles, manifest: archive.manifest, readBlob: archive.readBlob });
+    const finalBundle = scenarioBundles.at(-1);
+    if (finalBundle === undefined) throw new Error("adaptive final evidence is missing");
+    return finalBundle;
+  });
 }
 
 function readJudgeResults({ runDirectory, judgmentPath, cwd }) {

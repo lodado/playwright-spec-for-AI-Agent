@@ -12,7 +12,7 @@ export const EXECUTION_ACTION_PROPOSAL_VERSION = "execution-action-proposal/0.1"
 export const EXECUTION_ACTION_RESULT_VERSION = "execution-action-result/0.1";
 export const EXECUTION_AGENT_OUTCOME_VERSION = "execution-agent-outcome/0.1";
 export const RUNTIME_OUTCOME_VERSION = "runtime-outcome/0.1";
-export const RUN_ENVELOPE_VERSION = "run-envelope/0.1";
+export const RUN_ENVELOPE_VERSION = "run-envelope/0.2";
 export const DETERMINISTIC_EVALUATION_VERSION = "deterministic-evaluation/0.1";
 export const EVIDENCE_BUNDLE_VERSION = "evidence-bundle/0.1";
 export const EVIDENCE_MANIFEST_VERSION = "evidence-manifest/0.1";
@@ -561,13 +561,13 @@ function validateRunEnvelope(value, path) {
   object(value, path, contract);
   const adaptive = value.mode === "adaptive";
   allowedKeys(value, adaptive
-    ? ["schemaVersion", "runId", "mode", "qaIrHash", "runtimeOutcomeHash", "evidenceManifestHash", "executionAgentInputHash", "executionAgentOutcomeHash", "authentication"]
+    ? ["schemaVersion", "runId", "mode", "qaIrHash", "runtimeOutcomeHash", "evidenceManifestHash", "executionAgentInputsHash", "executionAgentOutcomesHash", "authentication"]
     : ["schemaVersion", "runId", "mode", "qaIrHash", "runtimeOutcomeHash", "evidenceManifestHash", "executionPlanHash", "authentication"], path, contract);
   exact(value.schemaVersion, RUN_ENVELOPE_VERSION, `${path}.schemaVersion`, contract);
   boundedString(value.runId, 256, `${path}.runId`, contract);
   oneOf(value.mode, ["strict", "adaptive"], `${path}.mode`, contract);
   const hashes = adaptive
-    ? ["qaIrHash", "runtimeOutcomeHash", "evidenceManifestHash", "executionAgentInputHash", "executionAgentOutcomeHash"]
+    ? ["qaIrHash", "runtimeOutcomeHash", "evidenceManifestHash", "executionAgentInputsHash", "executionAgentOutcomesHash"]
     : ["qaIrHash", "runtimeOutcomeHash", "evidenceManifestHash", "executionPlanHash"];
   for (const key of hashes) sha256Hash(value[key], `${path}.${key}`, contract);
   boundedString(value.authentication, 128, `${path}.authentication`, contract);

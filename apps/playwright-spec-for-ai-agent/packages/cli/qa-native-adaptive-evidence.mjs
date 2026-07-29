@@ -7,7 +7,8 @@ export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, man
   if (!Array.isArray(bundles) || bundles.length === 0) throw new Error("adaptive execution evidence is missing");
   const bundleIds = bundles.map((bundle) => bundle?.bundleId);
   const checkpointBundleIds = manifest.checkpoints.map((checkpoint) => checkpoint.evidenceBundleId);
-  if (manifest.runId !== input.runId || manifest.checkpoints.some((checkpoint) => checkpoint.stage !== "execute") || bundleIds.some((id, index) => id !== checkpointBundleIds[index]) || bundleIds.length !== checkpointBundleIds.length) {
+  const offset = checkpointBundleIds.indexOf(bundleIds[0]);
+  if (manifest.runId !== input.runId || manifest.checkpoints.some((checkpoint) => checkpoint.stage !== "execute") || offset < 0 || bundleIds.some((id, index) => id !== checkpointBundleIds[offset + index])) {
     throw new Error("adaptive evidence does not match its manifest");
   }
 

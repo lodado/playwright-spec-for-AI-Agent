@@ -1,12 +1,12 @@
 import { createServer } from "node:http";
-import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EXECUTION_ACTION_PROPOSAL_VERSION, RUNTIME_OUTCOME_VERSION, validateContract } from "../../contracts/index.mjs";
 import { createInMemoryEvidenceStore, readEvidenceArchive } from "../../evidence/index.mjs";
-import { playwrightExecutionCapabilities, runAdaptiveWithPlaywright } from "../../provider-playwright/index.mjs";
+import { playwrightExecutionCapabilities, runAdaptiveSuiteWithPlaywright, runAdaptiveWithPlaywright } from "../../provider-playwright/index.mjs";
 import { executeQaNative } from "../qa-native-execute.mjs";
 import { runQaNative } from "../qa-native.mjs";
 
@@ -22,14 +22,31 @@ test.describe("dashboard", () => {
 });
 `;
 
+const multiSource = `// @qa-scenario: DASHBOARD_READONLY
+test.describe("dashboard", () => {
+  // @qa-live-policy: readonly
+  test("shows dashboard", async ({ page }) => {
+    await expect(page.getByText("Dashboard")).toBeVisible();
+  });
+  // @qa-live-policy: readonly
+  test("shows metrics", async ({ page }) => {
+    await expect(page.getByText("Dashboard")).toBeVisible();
+  });
+  // @qa-live-policy: readonly
+  test("hides sign in", async ({ page }) => {
+    await expect(page.getByText("Dashboard")).toBeVisible();
+  });
+});
+`;
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
-function project() {
+function project(specSource = source) {
   const cwd = mkdtempSync(join(tmpdir(), "qa-native-execute-"));
   temporaryDirectories.push(cwd);
-  writeFileSync(join(cwd, "dashboard.spec.ts"), source);
+  writeFileSync(join(cwd, "dashboard.spec.ts"), specSource);
   return cwd;
 }
 
@@ -95,18 +112,19 @@ describe("qa-native execute persistence", () => {
     expect(replay.readBlob(replay.bundles[0].artifacts[0].storageRef).toString("utf8")).toBe("Dashboard");
   });
 
-  it("persists explicit Hermes adaptive execution separately from the runtime outcome", async () => {
-    const cwd = project();
+  it("persists every declared scenario of a multi-scenario Hermes adaptive execution", async () => {
+    const cwd = project(multiSource);
     const server = createServer((_request, response) => response.end("<!doctype html><button>Dashboard</button>"));
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
-    const createProposer = vi.fn(() => async (input) => ({ tokensUsed: 0, proposal: { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: "proposal-complete", runId: input.runId, scenarioId: input.scenarioId, milestoneId: input.currentMilestoneId, leaseId: input.capabilityLease.leaseId, action: "observe_dom", parameters: {} } }));
+    let proposalId = 0;
+    const createProposer = vi.fn(() => async (input) => ({ tokensUsed: 0, proposal: { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: `p-${++proposalId}`, runId: input.runId, scenarioId: input.scenarioId, milestoneId: input.currentMilestoneId, leaseId: input.capabilityLease.leaseId, action: "observe_dom", parameters: {} } }));
     let status;
     try {
       status = await runQaNative(["execute", "--spec=dashboard.spec.ts", `--base-url=http://127.0.0.1:${address.port}`, "--run-dir=.qa/runs/adaptive", "--provider=hermes", "--mode=adaptive"], {
         cwd,
         env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
-        handlers: { execute: (args) => executeQaNative(args, { createProposer, executeAdaptive: (options) => runAdaptiveWithPlaywright({ ...options, browserType: chromium }) }) },
+        handlers: { execute: (args) => executeQaNative(args, { createProposer, executeAdaptive: (options) => runAdaptiveSuiteWithPlaywright({ ...options, browserType: chromium }) }) },
         stdout: vi.fn(),
         stderr: vi.fn(),
       });
@@ -116,12 +134,45 @@ describe("qa-native execute persistence", () => {
 
     expect(status).toBe(0);
     const runDirectory = join(cwd, ".qa", "runs", "adaptive");
-    expect(validateContract("ExecutionAgentInput", JSON.parse(readFileSync(join(runDirectory, "execution-agent-input.json"), "utf8")))).toBeTruthy();
-    expect(validateContract("ExecutionAgentOutcome", JSON.parse(readFileSync(join(runDirectory, "execution-agent-outcome.json"), "utf8")))).toBeTruthy();
+    const inputs = JSON.parse(readFileSync(join(runDirectory, "execution-agent-inputs.json"), "utf8"));
+    const outcomes = JSON.parse(readFileSync(join(runDirectory, "execution-agent-outcomes.json"), "utf8"));
+    expect(inputs).toHaveLength(3);
+    expect(outcomes).toHaveLength(3);
+    inputs.forEach((input) => validateContract("ExecutionAgentInput", input));
+    outcomes.forEach((outcome, index) => validateContract("ExecutionAgentOutcome", outcome, { input: inputs[index] }));
+    expect(existsSync(join(runDirectory, "execution-agent-input.json"))).toBe(false);
     expect(validateContract("RuntimeOutcome", JSON.parse(readFileSync(join(runDirectory, "run.json"), "utf8"))).type).toBe("COMPLETED");
     expect(validateContract("RunEnvelope", JSON.parse(readFileSync(join(runDirectory, "run-envelope.json"), "utf8")))).toMatchObject({ runId: "adaptive", mode: "adaptive" });
     expect(existsSync(join(runDirectory, "execution-plan.json"))).toBe(false);
-    expect(createProposer).toHaveBeenCalledOnce();
+    const replay = readEvidenceArchive({ directory: join(runDirectory, "evidence"), integrityKey });
+    expect(new Set(replay.bundles.map((bundle) => bundle.scenarioId)).size).toBe(3);
+  });
+
+  it("removes the run directory when a later adaptive scenario fails", async () => {
+    const cwd = project(multiSource);
+    const server = createServer((_request, response) => response.end("<!doctype html><button>Dashboard</button>"));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    let seen = 0;
+    const createProposer = vi.fn(() => async (input) => {
+      if (++seen === 2) throw new Error("scenario-secret");
+      return { tokensUsed: 0, proposal: { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: `p-${seen}`, runId: input.runId, scenarioId: input.scenarioId, milestoneId: input.currentMilestoneId, leaseId: input.capabilityLease.leaseId, action: "observe_dom", parameters: {} } };
+    });
+    let status;
+    try {
+      status = await runQaNative(["execute", "--spec=dashboard.spec.ts", `--base-url=http://127.0.0.1:${address.port}`, "--run-dir=.qa/runs/partial", "--provider=hermes", "--mode=adaptive"], {
+        cwd,
+        env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+        handlers: { execute: (args) => executeQaNative(args, { createProposer, executeAdaptive: (options) => runAdaptiveSuiteWithPlaywright({ ...options, browserType: chromium }) }) },
+        stdout: vi.fn(),
+        stderr: vi.fn(),
+      });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+
+    expect(status).toBe(1);
+    expect(existsSync(join(cwd, ".qa", "runs", "partial"))).toBe(false);
   });
 
   it("rejects adaptive completion output that did not originate from the Playwright gateway", async () => {
@@ -168,5 +219,66 @@ describe("qa-native execute persistence", () => {
       "./cli/qa-native-execute": "./packages/cli/qa-native-execute.mjs",
     });
     expect(packageJson.files).toEqual(expect.arrayContaining(["packages/cli/qa-native.mjs", "packages/cli/qa-native-execute.mjs", "packages/cli/qa-native-adaptive-evidence.mjs", "packages/cli/qa-native-run-envelope.mjs"]));
+  });
+
+  function writeSharedStorageState(cwd, mode = 0o600) {
+    mkdirSync(join(cwd, ".private"), { recursive: true });
+    const authFile = join(cwd, ".private", "storage-state.json");
+    writeFileSync(authFile, "{}");
+    chmodSync(authFile, mode);
+    return authFile;
+  }
+
+  async function runStrictExecute(cwd, { runDir, capture, stderr = vi.fn() } = {}) {
+    return runQaNative(["execute", "--spec=dashboard.spec.ts", "--base-url=https://example.test", `--run-dir=${runDir}`], {
+      cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+      handlers: { execute: (args) => { capture?.(args); return executeQaNative(args, { execute: fixtureExecution }); } },
+      stdout: vi.fn(),
+      stderr,
+    });
+  }
+
+  it("auto-discovers a private shared storage state at .private/storage-state.json", async () => {
+    const cwd = project();
+    writeSharedStorageState(cwd);
+    let captured;
+    const status = await runStrictExecute(cwd, { runDir: ".qa/runs/run-auth", capture: (args) => { captured = args.storageStatePath; } });
+    expect(status).toBe(0);
+    expect(captured).toMatch(/\.private\/storage-state\.json$/);
+  });
+
+  it("runs unauthenticated when no shared storage state is present", async () => {
+    const cwd = project();
+    let captured = "unset";
+    const status = await runStrictExecute(cwd, { runDir: ".qa/runs/run-noauth", capture: (args) => { captured = args.storageStatePath; } });
+    expect(status).toBe(0);
+    expect(captured).toBeUndefined();
+  });
+
+  it("rejects a shared storage state that is not private", async () => {
+    const cwd = project();
+    writeSharedStorageState(cwd, 0o644);
+    const status = await runStrictExecute(cwd, { runDir: ".qa/runs/run-loose" });
+    expect(status).toBe(1);
+    expect(existsSync(join(cwd, ".qa", "runs", "run-loose"))).toBe(false);
+  });
+
+  it("prefers an explicit --storage-state over the shared default", async () => {
+    const cwd = project();
+    writeSharedStorageState(cwd);
+    const explicit = join(cwd, "explicit.storage.json");
+    writeFileSync(explicit, "{}");
+    chmodSync(explicit, 0o600);
+    let captured;
+    const status = await runQaNative(["execute", "--spec=dashboard.spec.ts", "--base-url=https://example.test", "--run-dir=.qa/runs/run-explicit", "--storage-state=explicit.storage.json"], {
+      cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+      handlers: { execute: (args) => { captured = args.storageStatePath; return executeQaNative(args, { execute: fixtureExecution }); } },
+      stdout: vi.fn(),
+      stderr: vi.fn(),
+    });
+    expect(status).toBe(0);
+    expect(captured).toMatch(/explicit\.storage\.json$/);
   });
 });

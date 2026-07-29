@@ -202,12 +202,15 @@ async function defaultLiveRerun({ options, proposal, application, verification, 
 
 function originalLiveSide(options, prepared, item) {
   const envelope = readAuthenticatedRunEnvelope({ runDirectory: options.runDirectory, cwd: options.cwd, integrityKey: options.integrityKey });
-  return { qaIr: prepared.qaIr, evidenceBundle: item.evidenceBundle, judgeResult: item.judgeResult, authenticated: true, completedMilestoneIds: completedMilestones({ cwd: options.cwd, runDirectory: options.runDirectory, qaIr: prepared.qaIr, mode: envelope.mode }) };
+  return { qaIr: prepared.qaIr, evidenceBundle: item.evidenceBundle, judgeResult: item.judgeResult, authenticated: true, completedMilestoneIds: completedMilestones({ cwd: options.cwd, runDirectory: options.runDirectory, qaIr: prepared.qaIr, mode: envelope.mode, scenarioId: item.evidenceBundle.scenarioId }) };
 }
 
-function completedMilestones({ cwd, runDirectory, qaIr, mode }) {
+function completedMilestones({ cwd, runDirectory, qaIr, mode, scenarioId }) {
   if (mode === "adaptive") {
-    const outcome = readPrivateJson(relative(cwd, join(runDirectory, "execution-agent-outcome.json")), { cwd });
+    const outcomes = readPrivateJson(relative(cwd, join(runDirectory, "execution-agent-outcomes.json")), { cwd });
+    if (!Array.isArray(outcomes)) throw new Error("adaptive execution metadata is invalid");
+    const outcome = outcomes.find((candidate) => candidate?.scenarioId === scenarioId);
+    if (outcome === undefined) throw new Error("adaptive execution metadata does not match evidence");
     validateContract("ExecutionAgentOutcome", outcome);
     return outcome.completedMilestoneIds;
   }
