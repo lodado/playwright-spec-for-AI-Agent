@@ -6,6 +6,7 @@ const INTEGRITY_KEY_ENV = "QA_NATIVE_INTEGRITY_KEY";
 const PUBLICATION_KEY_ENV = "QA_NATIVE_PUBLICATION_KEY";
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
+const DEFAULT_STORAGE_STATE_PATH = [".private", "storage-state.json"];
 const MAX_PRIVATE_JSON_BYTES = 4 * 1024 * 1024;
 const REPORT_OPTIONS = new Set(["run-dir", "repository-root", "revision", "judgment"]);
 const REPORT_COMMANDS = new Set(["diagnose", "suggest-fix", "report", "propose-patch", "verify-patch"]);
@@ -26,7 +27,7 @@ const COMMAND_OPTIONS = Object.freeze({
   remediate: REMEDIATION_OPTIONS,
 });
 const COMMAND_USAGE = Object.freeze({
-  execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> [--storage-state=.private/session.json --auth-bootstrap=.private/auth-bootstrap.json --allowed-origin=https://api.example.com --provider=playwright --mode=strict | --provider=hermes --mode=adaptive]",
+  execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> [--storage-state=<file> (default .private/storage-state.json when present) --auth-bootstrap=.private/auth-bootstrap.json --allowed-origin=https://api.example.com --provider=playwright --mode=strict | --provider=hermes --mode=adaptive]",
   judge: "qa-native judge --run-dir=.qa/runs/<id>",
   replay: "qa-native replay --run-dir=.qa/runs/<id>",
   diagnose: "qa-native diagnose --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
@@ -237,7 +238,7 @@ function normalizeRequest(request, cwd) {
     const mode = request.options.mode ?? "strict";
     if (!((provider === "playwright" && mode === "strict") || (provider === "hermes" && mode === "adaptive"))) throw new CliError("execution provider and mode combination is unsupported");
     const storageStatePath = request.options["storage-state"] === undefined
-      ? undefined
+      ? defaultStorageStatePath(cwd)
       : resolvePrivateRegularInput(request.options["storage-state"], { root: cwd, label: "storage state" });
     const authBootstrapPath = request.options["auth-bootstrap"] === undefined
       ? undefined
@@ -321,6 +322,15 @@ function resolvePrivateRegularInput(value, { root, label }) {
   const target = resolveRegularInput(value, { root, label });
   if ((lstatSync(target).mode & 0o077) !== 0) throw new CliError(`${label} must be private`);
   return target;
+}
+
+// Shared login: drop a private (0600) Playwright storageState at
+// .private/storage-state.json and every execute in this project reuses it
+// without --storage-state. Absent file keeps the unauthenticated default.
+function defaultStorageStatePath(cwd) {
+  const candidate = resolve(realpathSync(cwd), ...DEFAULT_STORAGE_STATE_PATH);
+  if (lstatIfExists(candidate) === undefined) return undefined;
+  return resolvePrivateRegularInput(DEFAULT_STORAGE_STATE_PATH.join("/"), { root: cwd, label: "storage state" });
 }
 
 function resolveRepositoryRoot(value, cwd) {

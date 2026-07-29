@@ -49,7 +49,31 @@ manager:
 
 Keys, cookies, tokens, and query strings never belong in artifacts or reports.
 
-## 4. One-shot sequence
+## 4. Login (shared storage state)
+
+The login is a Playwright `storageState` JSON file — the authenticated session
+(cookies + localStorage) that Playwright records after you sign in. Generate it
+once (for example with `playwright ... --save-storage`) and drop it at the shared
+default path so every run in this project reuses it without a flag:
+
+```
+.private/storage-state.json   # must be a private file: chmod 600
+```
+
+`execute` auto-discovers `.private/storage-state.json` when `--storage-state` is
+omitted. Requirements:
+
+- The file must be owner-only private (`chmod 600`); a world- or group-readable
+  file is rejected with `storage state must be private`.
+- `.private/` is gitignored, so the session is never committed.
+- If the file is absent, the run proceeds unauthenticated (the previous default).
+- An explicit `--storage-state=<path>` always overrides the shared default; the
+  path must be a private regular file inside the project (no absolute paths, no
+  symlinks).
+
+To refresh the login, overwrite `.private/storage-state.json` (keep it `600`).
+
+## 5. One-shot sequence
 
 The base URL must include the locale segment. `@qa-page: dashboard` resolves
 relative to the base URL, so `https://agent-dev.koreadeep.com/ko/` yields
@@ -59,11 +83,11 @@ relative to the base URL, so `https://agent-dev.koreadeep.com/ko/` yields
 export STAGING_QA_BASE_URL='https://agent-dev.koreadeep.com/ko/'
 export QA_NATIVE_RUN_DIR=".qa/runs/one-shot-dashboard-$(date +%Y%m%d-%H%M%S)"
 
+# Login picked up automatically from .private/storage-state.json.
 pnpm exec qa-native execute \
   --spec=src/page/dashboard/__tests__/dashboard.qa-native.ts \
   --base-url="$STAGING_QA_BASE_URL" \
   --run-dir="$QA_NATIVE_RUN_DIR" \
-  --storage-state=.private/staging-qa.storage.json \
   --provider=hermes \
   --mode=adaptive
 pnpm exec qa-native judge --run-dir="$QA_NATIVE_RUN_DIR"
@@ -85,7 +109,7 @@ evidence. `POST`/`PUT`/`PATCH`/`DELETE`, cross-origin requests, form submits,
 navigation to another origin, uploads, and destructive confirmations remain
 blocked.
 
-## 5. Verdict handling
+## 6. Verdict handling
 
 `MANUAL_REVIEW` is a valid terminal state — never coerce it to `PASS` or `FAIL`.
 Proceed to remediation or publication only after reviewing the evidence,

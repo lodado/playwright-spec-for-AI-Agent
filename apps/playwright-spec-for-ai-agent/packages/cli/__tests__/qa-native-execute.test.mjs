@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
@@ -219,5 +219,66 @@ describe("qa-native execute persistence", () => {
       "./cli/qa-native-execute": "./packages/cli/qa-native-execute.mjs",
     });
     expect(packageJson.files).toEqual(expect.arrayContaining(["packages/cli/qa-native.mjs", "packages/cli/qa-native-execute.mjs", "packages/cli/qa-native-adaptive-evidence.mjs", "packages/cli/qa-native-run-envelope.mjs"]));
+  });
+
+  function writeSharedStorageState(cwd, mode = 0o600) {
+    mkdirSync(join(cwd, ".private"), { recursive: true });
+    const authFile = join(cwd, ".private", "storage-state.json");
+    writeFileSync(authFile, "{}");
+    chmodSync(authFile, mode);
+    return authFile;
+  }
+
+  async function runStrictExecute(cwd, { runDir, capture, stderr = vi.fn() } = {}) {
+    return runQaNative(["execute", "--spec=dashboard.spec.ts", "--base-url=https://example.test", `--run-dir=${runDir}`], {
+      cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+      handlers: { execute: (args) => { capture?.(args); return executeQaNative(args, { execute: fixtureExecution }); } },
+      stdout: vi.fn(),
+      stderr,
+    });
+  }
+
+  it("auto-discovers a private shared storage state at .private/storage-state.json", async () => {
+    const cwd = project();
+    writeSharedStorageState(cwd);
+    let captured;
+    const status = await runStrictExecute(cwd, { runDir: ".qa/runs/run-auth", capture: (args) => { captured = args.storageStatePath; } });
+    expect(status).toBe(0);
+    expect(captured).toMatch(/\.private\/storage-state\.json$/);
+  });
+
+  it("runs unauthenticated when no shared storage state is present", async () => {
+    const cwd = project();
+    let captured = "unset";
+    const status = await runStrictExecute(cwd, { runDir: ".qa/runs/run-noauth", capture: (args) => { captured = args.storageStatePath; } });
+    expect(status).toBe(0);
+    expect(captured).toBeUndefined();
+  });
+
+  it("rejects a shared storage state that is not private", async () => {
+    const cwd = project();
+    writeSharedStorageState(cwd, 0o644);
+    const status = await runStrictExecute(cwd, { runDir: ".qa/runs/run-loose" });
+    expect(status).toBe(1);
+    expect(existsSync(join(cwd, ".qa", "runs", "run-loose"))).toBe(false);
+  });
+
+  it("prefers an explicit --storage-state over the shared default", async () => {
+    const cwd = project();
+    writeSharedStorageState(cwd);
+    const explicit = join(cwd, "explicit.storage.json");
+    writeFileSync(explicit, "{}");
+    chmodSync(explicit, 0o600);
+    let captured;
+    const status = await runQaNative(["execute", "--spec=dashboard.spec.ts", "--base-url=https://example.test", "--run-dir=.qa/runs/run-explicit", "--storage-state=explicit.storage.json"], {
+      cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+      handlers: { execute: (args) => { captured = args.storageStatePath; return executeQaNative(args, { execute: fixtureExecution }); } },
+      stdout: vi.fn(),
+      stderr: vi.fn(),
+    });
+    expect(status).toBe(0);
+    expect(captured).toMatch(/explicit\.storage\.json$/);
   });
 });
