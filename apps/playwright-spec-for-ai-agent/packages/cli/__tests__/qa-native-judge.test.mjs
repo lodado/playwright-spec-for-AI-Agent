@@ -84,6 +84,17 @@ describe("qa-native offline judge", () => {
     expect(resultFiles).toHaveLength(1);
   });
 
+  it("judges the final adaptive checkpoint of every scenario in a multi-scenario run", async () => {
+    const fixture = persistedRun({ scenarioCount: 3, checkpointsPerScenario: 1, deterministic: true, adaptive: true });
+    const judge = vi.fn((args) => judgeWithHermes({ ...args, transport: vi.fn(), model: "hermes-test" }));
+
+    expect(await dispatch(fixture.cwd, { judge })).toBe(0);
+
+    expect(judge).toHaveBeenCalledTimes(3);
+    const resultFiles = readdirSync(completedJudgmentDirectory(fixture.runDirectory)).filter((file) => file.startsWith("judge-result-"));
+    expect(resultFiles).toHaveLength(3);
+  });
+
   it("rejects unauthenticated evidence and multi-bundle provider failures without partial output", async () => {
     const unauthenticated = persistedRun({ deterministic: true });
     const stderr = vi.fn();
@@ -111,9 +122,9 @@ describe("qa-native offline judge", () => {
     expect(existsSync(join(strict.runDirectory, "judgments"))).toBe(false);
 
     const adaptive = persistedRun({ deterministic: true, checkpointsPerScenario: 2, adaptive: true });
-    const input = readJson(join(adaptive.runDirectory, "execution-agent-input.json"));
-    input.goal.description = "Tampered adaptive meaning";
-    writeFileSync(join(adaptive.runDirectory, "execution-agent-input.json"), JSON.stringify(input));
+    const inputs = readJson(join(adaptive.runDirectory, "execution-agent-inputs.json"));
+    inputs[0].goal.description = "Tampered adaptive meaning";
+    writeFileSync(join(adaptive.runDirectory, "execution-agent-inputs.json"), JSON.stringify(inputs));
     expect(await dispatch(adaptive.cwd)).toBe(1);
     expect(existsSync(join(adaptive.runDirectory, "judgments"))).toBe(false);
 
@@ -150,18 +161,19 @@ function persistedRun({ scenarioCount = 1, checkpointsPerScenario = 1, determini
   temporaryDirectories.push(cwd);
   const runDirectory = createExclusiveQaDirectory(".qa/runs/run-1", { cwd });
   const qaIr = compilePlaywrightSpec({ source: sourceFor(scenarioCount), sourcePath: "dashboard.spec.ts" }).qaIr;
-  const adaptiveInput = adaptive ? createAdaptiveExecutionInput({ qaIr, scenarioId: qaIr.suites[0].scenarios[0].id, baseUrl: "https://example.test/dashboard", runId: "run-1" }) : undefined;
+  const adaptiveInputs = adaptive ? qaIr.suites[0].scenarios.map((scenario) => createAdaptiveExecutionInput({ qaIr, scenarioId: scenario.id, baseUrl: "https://example.test/dashboard", runId: "run-1" })) : undefined;
   const store = createInMemoryEvidenceStore({ providerCapabilities: adaptive ? playwrightBrowserToolCapabilities() : capabilities });
   const bundles = [];
   const expectationIds = [];
   let manifest;
   for (const [index, scenario] of qaIr.suites[0].scenarios.entries()) {
+    const adaptiveInput = adaptiveInputs?.[index];
     const expectation = scenario.expectations[0];
     expectationIds.push(expectation.id);
     for (let checkpointIndex = 0; checkpointIndex < checkpointsPerScenario; checkpointIndex += 1) {
       const proposal = adaptive ? {
         schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION,
-        proposalId: `proposal-${checkpointIndex}`,
+        proposalId: `proposal-${index}-${checkpointIndex}`,
         runId: adaptiveInput.runId,
         scenarioId: adaptiveInput.scenarioId,
         milestoneId: adaptiveInput.currentMilestoneId,
@@ -196,10 +208,10 @@ function persistedRun({ scenarioCount = 1, checkpointsPerScenario = 1, determini
   const runtimeOutcome = { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "execute", type: "COMPLETED" };
   writePrivateJsonExclusive(".qa/runs/run-1/run.json", runtimeOutcome, { cwd });
   if (adaptive) {
-    const agentOutcome = { schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION, runId: "run-1", scenarioId: adaptiveInput.scenarioId, type: "COMPLETED", completedMilestoneIds: adaptiveInput.milestones.map((milestone) => milestone.id) };
-    writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-input.json", adaptiveInput, { cwd });
-    writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-outcome.json", agentOutcome, { cwd });
-    writeAuthenticatedRunEnvelope({ runDirectory, cwd, integrityKey, runId: "run-1", mode: "adaptive", qaIr, runtimeOutcome, evidenceManifest: manifest, executionAgentInput: adaptiveInput, executionAgentOutcome: agentOutcome });
+    const agentOutcomes = adaptiveInputs.map((input) => ({ schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION, runId: "run-1", scenarioId: input.scenarioId, type: "COMPLETED", completedMilestoneIds: input.milestones.map((milestone) => milestone.id) }));
+    writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-inputs.json", adaptiveInputs, { cwd });
+    writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-outcomes.json", agentOutcomes, { cwd });
+    writeAuthenticatedRunEnvelope({ runDirectory, cwd, integrityKey, runId: "run-1", mode: "adaptive", qaIr, runtimeOutcome, evidenceManifest: manifest, executionAgentInputs: adaptiveInputs, executionAgentOutcomes: agentOutcomes });
   } else {
     const executionPlan = createExecutionPlan({ qaIr, providerCapabilities: playwrightExecutionCapabilities() });
     writePrivateJsonExclusive(".qa/runs/run-1/execution-plan.json", executionPlan, { cwd });

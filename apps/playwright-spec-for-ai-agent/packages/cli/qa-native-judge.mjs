@@ -19,17 +19,24 @@ export async function judgeQaNative({ runDirectory, integrityKey, cwd }, overrid
   const envelope = readAuthenticatedRunEnvelope({ runDirectory, cwd, integrityKey });
   let bundles = archive.bundles;
   if (envelope.mode === "adaptive") {
-    const agentInput = readPrivateJson(relative(cwd, join(runDirectory, "execution-agent-input.json")), { cwd });
-    const agentOutcome = readPrivateJson(relative(cwd, join(runDirectory, "execution-agent-outcome.json")), { cwd });
-    validateContract("ExecutionAgentInput", agentInput);
-    validateContract("ExecutionAgentOutcome", agentOutcome, { input: agentInput });
-    if (agentOutcome.type !== "COMPLETED") throw new Error("adaptive execution is incomplete");
-    if (agentInput.runId !== archive.manifest.runId) throw new Error("adaptive execution metadata does not match evidence");
-    verifyRunEnvelopeBindings({ envelope, runId: envelope.runId, mode: "adaptive", qaIr, runtimeOutcome: outcome, evidenceManifest: archive.manifest, executionAgentInput: agentInput, executionAgentOutcome: agentOutcome });
-    validateAdaptiveExecutionEvidence({ input: agentInput, outcome: agentOutcome, ...archive });
-    const finalBundle = archive.bundles.filter((bundle) => bundle.scenarioId === agentOutcome.scenarioId).at(-1);
-    if (finalBundle === undefined) throw new Error("adaptive final evidence is missing");
-    bundles = [finalBundle];
+    const agentInputs = readPrivateJson(relative(cwd, join(runDirectory, "execution-agent-inputs.json")), { cwd });
+    const agentOutcomes = readPrivateJson(relative(cwd, join(runDirectory, "execution-agent-outcomes.json")), { cwd });
+    if (!Array.isArray(agentInputs) || !Array.isArray(agentOutcomes) || agentInputs.length === 0 || agentInputs.length !== agentOutcomes.length) throw new Error("adaptive execution metadata is invalid");
+    agentInputs.forEach((agentInput, index) => {
+      validateContract("ExecutionAgentInput", agentInput);
+      const agentOutcome = validateContract("ExecutionAgentOutcome", agentOutcomes[index], { input: agentInput });
+      if (agentOutcome.type !== "COMPLETED") throw new Error("adaptive execution is incomplete");
+      if (agentInput.runId !== archive.manifest.runId) throw new Error("adaptive execution metadata does not match evidence");
+    });
+    verifyRunEnvelopeBindings({ envelope, runId: envelope.runId, mode: "adaptive", qaIr, runtimeOutcome: outcome, evidenceManifest: archive.manifest, executionAgentInputs: agentInputs, executionAgentOutcomes: agentOutcomes });
+    const finalBundles = agentInputs.map((agentInput, index) => {
+      const scenarioBundles = archive.bundles.filter((bundle) => bundle.scenarioId === agentInput.scenarioId);
+      validateAdaptiveExecutionEvidence({ input: agentInput, outcome: agentOutcomes[index], bundles: scenarioBundles, manifest: archive.manifest, readBlob: archive.readBlob });
+      const finalBundle = scenarioBundles.at(-1);
+      if (finalBundle === undefined) throw new Error("adaptive final evidence is missing");
+      return finalBundle;
+    });
+    bundles = finalBundles;
   } else {
     const executionPlan = readPrivateJson(relative(cwd, join(runDirectory, "execution-plan.json")), { cwd });
     verifyRunEnvelopeBindings({ envelope, runId: envelope.runId, mode: "strict", qaIr, runtimeOutcome: outcome, evidenceManifest: archive.manifest, executionPlan });

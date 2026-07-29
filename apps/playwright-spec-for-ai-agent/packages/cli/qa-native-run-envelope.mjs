@@ -26,7 +26,7 @@ export function verifyRunEnvelopeBindings({ envelope, ...bindings }) {
   return envelope;
 }
 
-function runEnvelopeBody({ runId, mode, qaIr, runtimeOutcome, evidenceManifest, executionPlan, executionAgentInput, executionAgentOutcome }) {
+function runEnvelopeBody({ runId, mode, qaIr, runtimeOutcome, evidenceManifest, executionPlan, executionAgentInputs, executionAgentOutcomes }) {
   validateContract("QaIrDocument", qaIr);
   validateContract("RuntimeOutcome", runtimeOutcome);
   validateContract("EvidenceManifest", evidenceManifest);
@@ -44,10 +44,13 @@ function runEnvelopeBody({ runId, mode, qaIr, runtimeOutcome, evidenceManifest, 
     return { ...common, executionPlanHash: exactHash(executionPlan) };
   }
   if (mode === "adaptive") {
-    validateContract("ExecutionAgentInput", executionAgentInput);
-    validateContract("ExecutionAgentOutcome", executionAgentOutcome, { input: executionAgentInput });
-    if (executionAgentInput.runId !== runId || executionAgentOutcome.runId !== runId) throw new Error("run envelope input is invalid");
-    return { ...common, executionAgentInputHash: exactHash(executionAgentInput), executionAgentOutcomeHash: exactHash(executionAgentOutcome) };
+    if (!Array.isArray(executionAgentInputs) || executionAgentInputs.length === 0 || !Array.isArray(executionAgentOutcomes) || executionAgentOutcomes.length !== executionAgentInputs.length) throw new Error("run envelope input is invalid");
+    executionAgentInputs.forEach((executionAgentInput, index) => {
+      validateContract("ExecutionAgentInput", executionAgentInput);
+      validateContract("ExecutionAgentOutcome", executionAgentOutcomes[index], { input: executionAgentInput });
+      if (executionAgentInput.runId !== runId || executionAgentOutcomes[index].runId !== runId) throw new Error("run envelope input is invalid");
+    });
+    return { ...common, executionAgentInputsHash: exactHash(executionAgentInputs), executionAgentOutcomesHash: exactHash(executionAgentOutcomes) };
   }
   throw new Error("run envelope mode is invalid");
 }
