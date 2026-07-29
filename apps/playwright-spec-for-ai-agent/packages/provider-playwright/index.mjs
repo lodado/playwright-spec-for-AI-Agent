@@ -21,6 +21,7 @@ const DOM_LIMIT = 4 * 1024 * 1024;
 const ACTION_LOG_LIMIT = 16 * 1024;
 const ELEMENT_TEXT_LIMIT = 4 * 1024;
 const MAX_ELEMENT_OBSERVATIONS = 128;
+const MAX_POST_INTERACTION_REQUESTS = 100;
 const MAX_PLAN_NODES = 128;
 const MAX_RUN_ARTIFACTS = 256;
 const MAX_RUN_EVIDENCE_BYTES = 16 * 1024 * 1024;
@@ -708,6 +709,14 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
   let interactionStarted = false;
   let interactionPolicyViolation = false;
   let bootstrapActive = bootstrap !== undefined;
+  let postInteractionRequests = [];
+
+  function isReadOnlySameOriginRequest(requestUrl, method) {
+    return ["GET", "HEAD"].includes(method)
+      && ["http:", "https:"].includes(requestUrl.protocol)
+      && requestUrl.origin === base.origin
+      && !requestUrl.username && !requestUrl.password;
+  }
 
   async function openPage() {
     if (session) return session.page;
@@ -739,11 +748,18 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
             return;
           }
           if (interactionStarted) {
+            if (isReadOnlySameOriginRequest(requestUrl, request.method())) {
+              if (postInteractionRequests.length < MAX_POST_INTERACTION_REQUESTS) {
+                postInteractionRequests.push({ method: request.method(), origin: requestUrl.origin, path: requestUrl.pathname });
+              }
+              await route.continue();
+              return;
+            }
             interactionPolicyViolation = true;
             await route.abort("blockedbyclient");
             return;
           }
-          if (!["GET", "HEAD"].includes(request.method()) || !["http:", "https:"].includes(requestUrl.protocol) || requestUrl.origin !== base.origin || requestUrl.username || requestUrl.password) {
+          if (!isReadOnlySameOriginRequest(requestUrl, request.method())) {
             await route.abort("blockedbyclient");
             return;
           }
@@ -813,7 +829,8 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       await locator.click({ timeout: nodeTimeoutMs });
       if (interactionPolicyViolation) throw providerError("POLICY_VIOLATION");
       const afterUrl = evidenceUrl(page, base);
-      const content = boundedText(JSON.stringify({ action: "CLICK", target: actionLogTarget(step.target), beforeUrl, afterUrl, status: "SUCCEEDED" }), ACTION_LOG_LIMIT, "ACTION_LOG");
+      const content = boundedText(JSON.stringify({ action: "CLICK", target: actionLogTarget(step.target), beforeUrl, afterUrl, status: "SUCCEEDED", allowedRequests: postInteractionRequests }), ACTION_LOG_LIMIT, "ACTION_LOG");
+      postInteractionRequests = [];
       observationState(observations, node.scenarioId).artifacts.push(captureArtifact(`${node.nodeId}:action_log`, "ACTION_LOG", "application/json", content));
       return;
     }

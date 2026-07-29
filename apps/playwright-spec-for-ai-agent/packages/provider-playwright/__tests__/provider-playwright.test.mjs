@@ -303,6 +303,22 @@ describe("readonly Playwright execution provider", () => {
     expect(verifyStoredEvidence({ bundle: result.bundles[0], manifest: result.manifest, readBlob: result.readBlob }).bundle).toEqual(result.bundles[0]);
   });
 
+  it("allows a same-origin GET started by a safe click and records it in the ACTION_LOG", async () => {
+    const input = clickableQaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    const readRoute = { request: () => ({ method: () => "GET", url: () => "https://example.test/api/subscription-history" }), abort: vi.fn(), continue: vi.fn() };
+    const fixture = fakeBrowser({ onClick: async ({ routeHandler }) => routeHandler(readRoute) });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-click-read", browserType: fixture.browserType });
+
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    expect(readRoute.continue).toHaveBeenCalledOnce();
+    expect(readRoute.abort).not.toHaveBeenCalled();
+    const action = result.bundles[0].artifacts.find(artifact => artifact.type === "ACTION_LOG");
+    expect(action).toBeDefined();
+    const log = JSON.parse(result.readBlob(action.storageRef).toString());
+    expect(log.allowedRequests).toContainEqual({ method: "GET", origin: "https://example.test", path: "/api/subscription-history" });
+  });
+
   it("starts a fresh browser session for a scenario after a click checkpoint", async () => {
     const input = clickableQaIr();
     const first = input.suites[0].scenarios[0];
