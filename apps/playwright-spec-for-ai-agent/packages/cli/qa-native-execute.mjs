@@ -13,8 +13,9 @@ import { createExclusiveQaDirectory, writePrivateJsonExclusive } from "./qa-nati
 const MAX_SPEC_BYTES = 4 * 1024 * 1024;
 const MAX_AUTH_BOOTSTRAP_BYTES = 64 * 1024;
 
-export async function executeQaNative({ specPath, baseUrl, runDirectory, integrityKey, cwd, provider = "playwright", mode = "strict", storageStatePath, authBootstrapPath, allowedOrigins, allowExternalRead }, overrides = {}) {
+export async function executeQaNative({ specPath, baseUrl, runDirectory, integrityKey, cwd, provider = "playwright", mode = "strict", storageStatePath, authBootstrapPath, allowedOrigins, allowExternalRead, allowPartial = false }, overrides = {}) {
   const compile = overrides.compile ?? compilePlaywrightSpec;
+  const reportDiagnostics = overrides.reportDiagnostics ?? defaultReportDiagnostics;
   const plan = overrides.plan ?? createExecutionPlan;
   const execute = overrides.execute ?? executeWithPlaywright;
   const createAdaptiveInput = overrides.createAdaptiveInput ?? createAdaptiveExecutionInput;
@@ -29,8 +30,10 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
     const source = readBoundedSpec(specPath);
     const authBootstrap = authBootstrapPath === undefined ? undefined : readAuthBootstrap(authBootstrapPath);
     const compileResult = compile({ source, sourcePath: relative(projectRoot, specPath) });
-    if (!compileResult.ok) throw new Error("QA spec compilation failed");
-    const qaIr = compileResult.qaIr;
+    if (compileResult.diagnostics.length > 0) reportDiagnostics(compileResult.diagnostics);
+    if (!compileResult.ok && !allowPartial) throw new Error("QA spec compilation failed");
+    const qaIr = allowPartial ? withoutBlockedScenarios(compileResult.qaIr) : compileResult.qaIr;
+    if (allowPartial && qaIr.suites.every((suite) => suite.scenarios.length === 0)) throw new Error("no statically compilable scenarios remain after skipping blocked ones");
     let execution;
     let executionPlan;
     let agentInputs;
@@ -94,6 +97,25 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
     if (created) rmSync(runDirectory, { recursive: true, force: true });
     throw error;
   }
+}
+
+function defaultReportDiagnostics(diagnostics) {
+  for (const item of diagnostics) {
+    process.stderr.write(`[${item.severity}] ${item.code}: ${item.message}\n`);
+  }
+}
+
+// Return a QA IR without the scenarios the adapter marked as statically un-runnable, so
+// `--allow-partial` executes the compilable subset instead of the whole file failing closed.
+export function withoutBlockedScenarios(qaIr) {
+  const blocked = new Set(qaIr.extensions?.blockedScenarioIds ?? []);
+  if (blocked.size === 0) return qaIr;
+  const { blockedScenarioIds, ...extensions } = qaIr.extensions;
+  return {
+    ...qaIr,
+    suites: qaIr.suites.map((suite) => ({ ...suite, scenarios: suite.scenarios.filter((scenario) => !blocked.has(scenario.id)) })),
+    extensions,
+  };
 }
 
 function readBoundedSpec(path) {

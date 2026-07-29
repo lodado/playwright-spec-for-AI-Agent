@@ -364,7 +364,7 @@ export function parsePlaywrightSource(fileName, source) {
     : ast.describes[0]?.title ?? (labelMatch ? unescapeString(labelMatch[2]) : fileName);
   const fileFixtures = parseFileFixtures(source);
 
-  const tests = ast.tests.map(block => {
+  const tests = ast.tests.map((block, testIndex) => {
     const inheritedModifier = [...block.describes]
       .reverse()
       .find(describe => ["skip", "fixme"].includes(describe.modifier))?.modifier;
@@ -398,6 +398,7 @@ export function parsePlaywrightSource(fileName, source) {
       policyError = true;
       diagnostics.push({
         code: "UNKNOWN_LIVE_POLICY",
+        testIndex,
         severity: "ERROR",
         message: error.message,
         path: fileName,
@@ -408,6 +409,7 @@ export function parsePlaywrightSource(fileName, source) {
       if (!policyError) {
         diagnostics.push({
           code: "MISSING_LIVE_POLICY",
+        testIndex,
           severity: "ERROR",
           message: `Missing // @qa-live-policy on test "${block.title}" in ${fileName}. Add it on the test or an enclosing test.describe.`,
           path: fileName,
@@ -434,6 +436,7 @@ export function parsePlaywrightSource(fileName, source) {
     if (stagingMode === "read-only" && actions.length > 0) {
       diagnostics.push({
         code: "POLICY_ACTION_CONFLICT",
+        testIndex,
         severity: "ERROR",
         message: `readonly test "${block.title}" contains browser actions.`,
         path: fileName,
@@ -442,6 +445,7 @@ export function parsePlaywrightSource(fileName, source) {
     if (liveRunPolicy === "executable-interaction" && block.opaqueCalls.length > 0) {
       diagnostics.push({
         code: "OPAQUE_INTERACTION_STEP",
+        testIndex,
         severity: "ERROR",
         message: `safe-interaction test "${block.title}" contains steps that cannot be statically compiled: ${block.opaqueCalls.join("; ")}`,
         path: fileName,
@@ -453,6 +457,7 @@ export function parsePlaywrightSource(fileName, source) {
     ) {
       diagnostics.push({
         code: "DYNAMIC_EXECUTION_VALUE",
+        testIndex,
         severity: "ERROR",
         message: `live test "${block.title}" contains a locator or action value that cannot be resolved statically.`,
         path: fileName,

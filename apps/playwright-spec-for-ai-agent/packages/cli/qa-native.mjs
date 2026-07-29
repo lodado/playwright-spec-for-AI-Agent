@@ -14,7 +14,7 @@ const PUBLISH_ISSUE_OPTIONS = new Set([...REPORT_OPTIONS, "repository"]);
 const REMEDIATION_OPTIONS = new Set([...PUBLISH_ISSUE_OPTIONS, "publish"]);
 const PUBLICATION_COMMANDS = new Set(["publish-issue", "publish", "remediate"]);
 const COMMAND_OPTIONS = Object.freeze({
-  execute: new Set(["spec", "base-url", "run-dir", "provider", "mode", "storage-state", "auth-bootstrap", "allowed-origin"]),
+  execute: new Set(["spec", "base-url", "run-dir", "provider", "mode", "storage-state", "auth-bootstrap", "allowed-origin", "allow-partial"]),
   judge: new Set(["run-dir"]),
   replay: new Set(["run-dir"]),
   diagnose: REPORT_OPTIONS,
@@ -27,7 +27,7 @@ const COMMAND_OPTIONS = Object.freeze({
   remediate: REMEDIATION_OPTIONS,
 });
 const COMMAND_USAGE = Object.freeze({
-  execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> [--storage-state=<file> (default .private/storage-state.json when present) --auth-bootstrap=.private/auth-bootstrap.json --allowed-origin=https://api.example.com --provider=playwright --mode=strict | --provider=hermes --mode=adaptive]",
+  execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> [--storage-state=<file> (default .private/storage-state.json when present) --auth-bootstrap=.private/auth-bootstrap.json --allowed-origin=https://api.example.com --provider=playwright --mode=strict | --provider=hermes --mode=adaptive --allow-partial]",
   judge: "qa-native judge --run-dir=.qa/runs/<id>",
   replay: "qa-native replay --run-dir=.qa/runs/<id>",
   diagnose: "qa-native diagnose --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
@@ -215,6 +215,7 @@ function parseRequest(argv) {
         "storage-state": { type: "string" },
         "auth-bootstrap": { type: "string" },
         "allowed-origin": { type: "string" },
+        "allow-partial": { type: "boolean" },
       },
     });
   } catch {
@@ -254,6 +255,7 @@ function normalizeRequest(request, cwd) {
       ...(storageStatePath === undefined ? {} : { storageStatePath }),
       ...(authBootstrapPath === undefined ? {} : { authBootstrapPath }),
       ...(request.options["allowed-origin"] === undefined ? {} : { allowedOrigins: parseAllowedOrigins(request.options["allowed-origin"]) }),
+      ...(request.options["allow-partial"] ? { allowPartial: true } : {}),
     });
   }
 

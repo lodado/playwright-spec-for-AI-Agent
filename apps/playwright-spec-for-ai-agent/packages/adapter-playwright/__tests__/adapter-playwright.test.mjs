@@ -169,6 +169,46 @@ describe("compilePlaywrightSpec", () => {
     }]);
   });
 
+  it("omits accessibleName for role-only locators so role alone identifies the target", () => {
+    const source = `// @qa-scenario: DIALOG\n// @qa-page: /settings\n// @qa-live-policy: safe-interaction\ntest("dialog", async ({ page }) => {\n  await page.getByTestId("settings").click();\n  await expect(page.getByRole("dialog")).toBeVisible();\n});\n`;
+
+    const result = compilePlaywrightSpec({ source, sourcePath: "dialog.spec.ts" });
+
+    expect(result.ok).toBe(true);
+    expect(result.diagnostics).toEqual([]);
+    const [expectation] = result.qaIr.suites[0].scenarios[0].expectations;
+    expect(expectation).toMatchObject({ kind: "VISIBLE", target: { role: "dialog" } });
+    expect(expectation.target.accessibleName).toBeUndefined();
+  });
+
+  it("blocks only the scenario that owns an opaque step and compiles its clean siblings", () => {
+    const source = [
+      "// @qa-scenario: PARTIAL",
+      "// @qa-page: /dashboard",
+      "// @qa-live-policy: safe-interaction",
+      'test("clean", async ({ page }) => {',
+      '  await page.getByTestId("menu").click();',
+      '  await expect(page.getByText("Opened")).toBeVisible();',
+      "});",
+      "// @qa-live-policy: safe-interaction",
+      'test("opaque", async ({ page }) => {',
+      "  await openDialog(page);",
+      '  await expect(page.getByText("Dialog")).toBeVisible();',
+      "});",
+      "",
+    ].join("\n");
+
+    const result = compilePlaywrightSpec({ source, sourcePath: "partial.spec.ts" });
+
+    expect(result.ok).toBe(false);
+    const scenarios = result.qaIr.suites[0].scenarios;
+    expect(scenarios).toHaveLength(2);
+    // The clean scenario keeps its interaction step instead of being wiped by its sibling's error.
+    expect(scenarios[0].steps.some(step => step.kind === "INTERACT")).toBe(true);
+    expect(result.qaIr.extensions.blockedScenarioIds).toContain(scenarios[1].id);
+    expect(result.qaIr.extensions.blockedScenarioIds).not.toContain(scenarios[0].id);
+  });
+
   it("compiles locator, fill, and count patterns while rejecting opaque helpers atomically", () => {
     const interaction = `// @qa-scenario: MIXED\n// @qa-live-policy: safe-interaction\ntest("mixed", async ({ page }) => {\n  // await page.getByTestId("comment-only").click();\n  await page.getByTestId("menu").click();\n  await page.locator(".unsafe").click();\n  await page.getByTestId("name").fill("value");\n  await expect(page.locator(".result")).toHaveCount(1);\n});\n`;
     const result = compilePlaywrightSpec({ source: interaction, sourcePath: "mixed.spec.ts" });
