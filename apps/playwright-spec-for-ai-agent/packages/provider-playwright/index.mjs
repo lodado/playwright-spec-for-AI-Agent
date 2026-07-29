@@ -109,6 +109,8 @@ export async function openPlaywrightBrowserToolGateway({
   secrets = [],
   storageStatePath,
   authBootstrap,
+  store: sharedStore,
+  priorManifest,
   clock = Date.now,
   now = () => new Date().toISOString(),
 } = {}) {
@@ -119,7 +121,7 @@ export async function openPlaywrightBrowserToolGateway({
   const bootstrap = normalizeAuthBootstrap(authBootstrap, initialInput.currentPage.url);
   const deadline = readFiniteClock(clock) + initialInput.remainingBudget.timeMs;
   const capabilities = playwrightBrowserToolCapabilities();
-  const store = createInMemoryEvidenceStore({ providerCapabilities: capabilities, producer: { name: GATEWAY_PROVIDER_ID, version: GATEWAY_PROVIDER_VERSION }, secrets });
+  const store = sharedStore ?? createInMemoryEvidenceStore({ providerCapabilities: capabilities, producer: { name: GATEWAY_PROVIDER_ID, version: GATEWAY_PROVIDER_VERSION }, secrets });
   const selectedBrowserType = browserType ?? await loadBrowserType(browserName);
   if (typeof selectedBrowserType?.launch !== "function") throw new TypeError("browser type cannot launch");
   let launchPromise;
@@ -170,7 +172,7 @@ export async function openPlaywrightBrowserToolGateway({
     let currentMilestoneId = initialInput.currentMilestoneId;
     let outcome;
     let recentObservations = [];
-    let manifest;
+    let manifest = priorManifest;
     let observationSequence = 0;
     const handles = new Map();
     const usedProposalIds = new Set();
@@ -596,11 +598,13 @@ export async function runAdaptiveWithPlaywright({
   secrets = [],
   storageStatePath,
   authBootstrap,
+  store,
+  priorManifest,
   now = () => new Date().toISOString(),
   clock = Date.now,
 } = {}) {
   if (typeof proposeAction !== "function") throw new Error("proposeAction must be a function");
-  const gateway = await openPlaywrightBrowserToolGateway({ input, browserName, browserType, viewport, secrets, storageStatePath, authBootstrap, now, clock });
+  const gateway = await openPlaywrightBrowserToolGateway({ input, browserName, browserType, viewport, secrets, storageStatePath, authBootstrap, store, priorManifest, now, clock });
   const bundles = [];
   let manifest;
   let outcome;

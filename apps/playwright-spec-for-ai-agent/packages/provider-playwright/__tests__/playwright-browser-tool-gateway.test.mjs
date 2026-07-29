@@ -4,10 +4,11 @@ import {
   EXECUTION_AGENT_INPUT_VERSION,
   validateContract,
 } from "../../contracts/index.mjs";
+import { createInMemoryEvidenceStore } from "../../evidence/index.mjs";
 import { judgeEvidence } from "../../judge/index.mjs";
 import * as provider from "../index.mjs";
 
-const { openPlaywrightBrowserToolGateway, runAdaptiveWithPlaywright } = provider;
+const { openPlaywrightBrowserToolGateway, playwrightBrowserToolCapabilities, runAdaptiveWithPlaywright } = provider;
 
 function executionAgentInput() {
   return {
@@ -958,6 +959,37 @@ describe("Playwright browser tool gateway", () => {
     expect(fixture.screenshots).toEqual([]);
 
     await gateway.close();
+  });
+
+  it("chains checkpoints from two gateway sessions into one manifest via a shared store", async () => {
+    const store = createInMemoryEvidenceStore({ providerCapabilities: playwrightBrowserToolCapabilities(), producer: { name: "gateway-shared-test", version: "0.0.0" }, secrets: [] });
+    const semanticInput = (scenarioId) => {
+      const base = executionAgentInput();
+      base.runId = "run-shared";
+      base.scenarioId = scenarioId;
+      base.milestones = [{ id: "observe", class: "REQUIRED_SEMANTIC_MILESTONE", status: "PENDING", description: "Observe the dashboard.", target: { testId: "settings" } }];
+      base.currentMilestoneId = "observe";
+      return base;
+    };
+
+    let manifest;
+    const gateway1 = await openPlaywrightBrowserToolGateway({ input: semanticInput("scenario-a"), browserType: fakeBrowser().browserType, store, secrets: [], now: () => "2026-07-26T00:00:00.000Z" });
+    try {
+      const execution = await gateway1.execute({ proposal: proposal(gateway1.agentInput(), "observe_dom"), tokensUsed: 0 });
+      manifest = execution.manifest;
+      expect(manifest.checkpoints).toHaveLength(1);
+    } finally {
+      await gateway1.close();
+    }
+
+    const gateway2 = await openPlaywrightBrowserToolGateway({ input: semanticInput("scenario-b"), browserType: fakeBrowser().browserType, store, priorManifest: manifest, secrets: [], now: () => "2026-07-26T00:00:00.000Z" });
+    try {
+      const execution = await gateway2.execute({ proposal: proposal(gateway2.agentInput(), "observe_dom"), tokensUsed: 0 });
+      expect(execution.manifest.runId).toBe("run-shared");
+      expect(execution.manifest.checkpoints).toHaveLength(2);
+    } finally {
+      await gateway2.close();
+    }
   });
 });
 
