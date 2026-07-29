@@ -627,6 +627,30 @@ export async function runAdaptiveWithPlaywright({
   }
 }
 
+export async function runAdaptiveSuiteWithPlaywright({ inputs, proposeAction, ...options } = {}) {
+  if (!Array.isArray(inputs) || inputs.length === 0) throw new Error("adaptive suite requires at least one scenario input");
+  if (new Set(inputs.map((input) => input?.runId)).size !== 1) throw new Error("adaptive suite inputs must share one runId");
+  const store = createInMemoryEvidenceStore({ providerCapabilities: playwrightBrowserToolCapabilities(), producer: { name: GATEWAY_PROVIDER_ID, version: GATEWAY_PROVIDER_VERSION }, secrets: options.secrets ?? [] });
+  const bundles = [];
+  const executions = [];
+  let manifest;
+  for (const input of inputs) {
+    let execution;
+    try {
+      execution = await runAdaptiveWithPlaywright({ input, proposeAction, store, priorManifest: manifest, ...options });
+    } catch (error) {
+      throw new Error(`adaptive scenario ${input.scenarioId} failed: ${error.message}`, { cause: error });
+    }
+    if (execution.outcome.type !== "COMPLETED") throw new Error(`adaptive scenario ${input.scenarioId} did not complete`);
+    bundles.push(...execution.bundles);
+    manifest = execution.manifest;
+    executions.push(Object.freeze({ scenarioId: input.scenarioId, input, outcome: execution.outcome, bundleIds: Object.freeze(execution.bundles.map((bundle) => bundle.bundleId)) }));
+  }
+  const suite = Object.freeze({ outcome: executions[executions.length - 1].outcome, bundles: Object.freeze(bundles), manifest, readBlob: store.readBlob, executions: Object.freeze(executions) });
+  adaptiveExecutions.add(suite);
+  return suite;
+}
+
 export function assertPlaywrightAdaptiveExecution(execution) {
   if (!execution || typeof execution !== "object" || !adaptiveExecutions.has(execution)) throw new Error("adaptive execution did not originate from the Playwright gateway");
   return execution;
