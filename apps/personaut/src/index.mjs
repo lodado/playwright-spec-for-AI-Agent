@@ -89,7 +89,7 @@ const STARTER_STUDY = {
     modelRoles: { action: "deterministic-policy", evaluator: "deterministic-oracle" },
   },
   evidence: { screenshot: "on_failure", trace: true, video: "off", semanticSnapshot: "every_action" },
-  evaluation: { minimumRecurrenceForFinding: 1, validityReport: true },
+  evaluation: { minimumRecurrenceForFinding: 2, validityReport: true },
 };
 
 export async function loadStudy(path) {

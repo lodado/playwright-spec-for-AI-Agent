@@ -37,6 +37,28 @@ test("validity defaults to uncalibrated and warns on homogeneous hyperactive sam
   assert.ok(report.forbiddenInterpretations.some((item) => item.includes("conversion")));
 });
 
+test("progressCurve is cumulative/monotonic and zero-action samples are not flagged as biased", () => {
+  const fingerprint = createBehavioralFingerprint({
+    session: { sessionId: "s1", status: "partial" },
+    events: [
+      event("s1", 0, "click", "/a", "/b", { progressChanged: true }),
+      event("s1", 1, "scroll", "/b", "/b", { noProgress: true }),
+      event("s1", 2, "click", "/b", "/c", { progressChanged: true }),
+    ],
+  });
+  assert.deepEqual(fingerprint.progressCurve, [1 / 3, 1 / 3, 2 / 3]);
+  for (let index = 1; index < fingerprint.progressCurve.length; index += 1) {
+    assert.ok(fingerprint.progressCurve[index] >= fingerprint.progressCurve[index - 1]);
+  }
+
+  // Zero-event fingerprints are identical (cosine of two empty profiles = 1, distance 0), and the
+  // cooperation/positivity heuristics must not fire vacuously on empty or n<3 samples.
+  const zeroSessions = ["z1", "z2", "z3"].map((id, index) => ({ session: { sessionId: id, personaId: "p", taskId: "t", status: "manual_review", seed: index }, events: [] }));
+  const report = evaluateSimulationValidity({ sessions: zeroSessions, taskMaxActions: 5 });
+  assert.equal(report.detectedRisks.includes("excessive_cooperation"), false);
+  assert.equal(report.detectedRisks.includes("positivity_bias"), false);
+});
+
 function event(sessionId, index, type, before, after, signals = {}) {
   return {
     id: `${sessionId}-e${index}`,
