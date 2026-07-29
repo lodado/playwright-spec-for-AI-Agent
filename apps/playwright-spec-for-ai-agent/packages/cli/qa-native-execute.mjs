@@ -16,6 +16,7 @@ const MAX_AUTH_BOOTSTRAP_BYTES = 64 * 1024;
 export async function executeQaNative({ specPath, baseUrl, runDirectory, integrityKey, cwd, provider = "playwright", mode = "strict", storageStatePath, authBootstrapPath, allowedOrigins, allowExternalRead, allowPartial = false }, overrides = {}) {
   const compile = overrides.compile ?? compilePlaywrightSpec;
   const reportDiagnostics = overrides.reportDiagnostics ?? defaultReportDiagnostics;
+  const reportSummary = overrides.reportSummary ?? defaultReportSummary;
   const plan = overrides.plan ?? createExecutionPlan;
   const execute = overrides.execute ?? executeWithPlaywright;
   const createAdaptiveInput = overrides.createAdaptiveInput ?? createAdaptiveExecutionInput;
@@ -92,6 +93,9 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
       evidenceManifest: execution.manifest,
       ...(mode === "strict" ? { executionPlan } : { executionAgentInputs: agentInputs, executionAgentOutcomes: agentOutcomes }),
     });
+    const executed = qaIr.suites.reduce((total, suite) => total + suite.scenarios.length, 0);
+    const compiled = compileResult.qaIr.suites.reduce((total, suite) => total + suite.scenarios.length, 0);
+    reportSummary({ runDirectory: relative(cwd, runDirectory), provider, mode, executed, skipped: compiled - executed });
     return 0;
   } catch (error) {
     if (created) rmSync(runDirectory, { recursive: true, force: true });
@@ -103,6 +107,13 @@ function defaultReportDiagnostics(diagnostics) {
   for (const item of diagnostics) {
     process.stderr.write(`[${item.severity}] ${item.code}: ${item.message}\n`);
   }
+}
+
+// A successful run was previously silent (exit 0, no output), leaving CI and operators unable to
+// tell what ran. Emit a one-line summary of executed vs. skipped scenarios and the artifact path.
+function defaultReportSummary({ runDirectory, provider, mode, executed, skipped }) {
+  const skippedNote = skipped > 0 ? `, skipped ${skipped} blocked` : "";
+  process.stdout.write(`qa-native: ${provider}/${mode} executed ${executed} scenario(s)${skippedNote} → ${runDirectory}\n`);
 }
 
 // Return a QA IR without the scenarios the adapter marked as statically un-runnable, so

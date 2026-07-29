@@ -348,13 +348,28 @@ function slugify(value) {
     .slice(0, 80);
 }
 
+/**
+ * Attach `testIndex` to an AST diagnostic by locating the test block whose source range
+ * contains the diagnostic's `offset`. Diagnostics outside any test (e.g. a file-level parse
+ * error) keep no `testIndex` and remain file-level. `tests` is ordered by `index`.
+ */
+function attributeDiagnosticToTest(item, tests) {
+  const { offset, ...rest } = item;
+  if (typeof offset !== "number" || typeof rest.testIndex === "number") return rest;
+  const testIndex = tests.findIndex(test => offset >= test.index && offset < test.endIndex);
+  return testIndex === -1 ? rest : { ...rest, testIndex };
+}
+
 export function parsePlaywrightSource(fileName, source) {
   const ast = parsePlaywrightAst(fileName, source);
   const headerEnd = ast.sourceFile.statements[0]?.getStart(ast.sourceFile) ?? source.length;
   const header = source.slice(0, headerEnd);
   const annotations = parseAnnotations(header);
   const scenarioId = annotations.scenario;
-  const diagnostics = [...ast.diagnostics];
+  // AST diagnostics carry a raw source `offset` but no owning test. Attribute each to the test
+  // whose [index, endIndex) range contains it so a single opaque/dynamic assertion blocks only
+  // that scenario under `--allow-partial` instead of failing the whole file closed.
+  const diagnostics = ast.diagnostics.map(item => attributeDiagnosticToTest(item, ast.tests));
   if (!scenarioId) return { scenario: null, blocks: ast.tests, diagnostics, annotations };
 
   const scenarioLabelMatch = header.match(/\/\/\s*@qa-scenario-label:\s*([^\r\n]+)/);

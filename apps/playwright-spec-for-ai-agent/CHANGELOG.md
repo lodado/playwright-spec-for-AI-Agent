@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.2.0
+
+### Minor Changes
+
+- Make `execute --allow-partial` work on real specs and surface run outcomes.
+
+  - Attribute AST-level compile diagnostics (opaque/dynamic assertion and action targets) to the owning test by source range, so a single unparseable scenario blocks only itself instead of failing the whole file closed.
+  - Record live-policy blocked scenarios (skip, auth-mock, subscription-mutation) as blocked so `--allow-partial` prunes them, instead of exploding `createExecutionPlan` on a NAVIGATE step under a blocked policy.
+  - Surface internal failure detail (message + stack) under `QA_NATIVE_DEBUG`; the default stays a secret-safe opaque message.
+  - Emit a one-line success summary (executed vs. skipped scenarios and the artifact path) instead of running silently.
+
 ## 2.1.0
 
 ### Minor Changes

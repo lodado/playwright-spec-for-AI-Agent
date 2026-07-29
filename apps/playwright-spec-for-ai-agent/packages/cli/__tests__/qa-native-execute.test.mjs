@@ -211,6 +211,46 @@ describe("qa-native execute persistence", () => {
     expect(JSON.stringify(stderr.mock.calls)).not.toContain("archive-secret");
   });
 
+  it("surfaces the failure detail only when QA_NATIVE_DEBUG is set", async () => {
+    const cwd = project();
+    const stderr = vi.fn();
+    const status = await runQaNative([
+      "execute",
+      "--spec=dashboard.spec.ts",
+      "--base-url=https://example.test",
+      "--run-dir=.qa/runs/debug",
+    ], {
+      cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64"), QA_NATIVE_DEBUG: "1" },
+      handlers: { execute: (args) => executeQaNative(args, { execute: fixtureExecution, writeArchive: () => { throw new Error("archive-secret"); } }) },
+      stdout: vi.fn(),
+      stderr,
+    });
+
+    expect(status).toBe(1);
+    expect(JSON.stringify(stderr.mock.calls)).toContain("archive-secret");
+  });
+
+  it("emits a scenario summary on a successful run", async () => {
+    const cwd = project();
+    const reportSummary = vi.fn();
+    const status = await runQaNative([
+      "execute",
+      "--spec=dashboard.spec.ts",
+      "--base-url=https://example.test",
+      "--run-dir=.qa/runs/summary",
+    ], {
+      cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+      handlers: { execute: (args) => executeQaNative(args, { execute: fixtureExecution, reportSummary }) },
+      stdout: vi.fn(),
+      stderr: vi.fn(),
+    });
+
+    expect(status).toBe(0);
+    expect(reportSummary).toHaveBeenCalledWith(expect.objectContaining({ executed: 1, skipped: 0, provider: "playwright", mode: "strict" }));
+  });
+
   it("publishes only the functional execute command", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
     expect(packageJson.bin).toEqual({ "qa-native": "./bin/qa-native.mjs" });

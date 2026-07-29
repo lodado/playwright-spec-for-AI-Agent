@@ -100,9 +100,12 @@ function scenarioFromLegacyTest(legacy, test, index, block, source, sourcePath, 
   }
 
   const id = stableId("scenario", legacy.scenarioId, test.checkId, discriminator);
-  // A scenario the parser flagged, or whose interaction steps could not be normalized, cannot
-  // run statically — record its id so `execute --allow-partial` can skip it.
-  if (scenarioBlocked || parsedActions === undefined) blockedScenarioIds.push(id);
+  // A scenario the parser flagged, whose interaction steps could not be normalized, or whose
+  // live policy blocks navigation/DOM (skip, auth-mock, subscription-mutation) cannot run
+  // statically — record its id so `execute --allow-partial` skips it instead of exploding in
+  // createExecutionPlan (a NAVIGATE step under a BLOCKED policy is a plan-validation error).
+  const policyBlocked = String(test.liveRunPolicy ?? "").startsWith("blocked-");
+  if (scenarioBlocked || parsedActions === undefined || policyBlocked) blockedScenarioIds.push(id);
 
   return {
     id,

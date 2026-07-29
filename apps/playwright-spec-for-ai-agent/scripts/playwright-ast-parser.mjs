@@ -86,6 +86,9 @@ function diagnostic(sourceFile, code, severity, message, node) {
     message,
     path: `${sourceFile.fileName}:${position.line + 1}:${position.character + 1}`,
     source: node ? sourceText(node, sourceFile) : undefined,
+    // Raw character offset lets a caller attribute the diagnostic to the test whose
+    // [index, endIndex] range contains it (per-scenario `--allow-partial` blocking).
+    offset: start,
   };
 }
 

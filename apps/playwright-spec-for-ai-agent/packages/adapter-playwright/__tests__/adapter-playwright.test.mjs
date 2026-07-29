@@ -236,6 +236,56 @@ describe("compilePlaywrightSpec", () => {
     expect(compiled.qaIr.suites[0].scenarios[0].steps.map(step => step.kind)).toEqual(["INTERACT", "CHECKPOINT"]);
   });
 
+  it("attributes an AST-level opaque assertion to its own scenario for --allow-partial", () => {
+    // OPAQUE_ASSERTION_TARGET originates in the AST layer, which carried no testIndex — so it used
+    // to be treated as a file-level error and block every scenario. It must block only its owner.
+    const source = [
+      "// @qa-scenario: PARTIAL",
+      "// @qa-page: /dashboard",
+      "// @qa-live-policy: readonly",
+      'test("clean", async ({ page }) => {',
+      '  await expect(page.getByText("Opened")).toBeVisible();',
+      "});",
+      "// @qa-live-policy: readonly",
+      'test("opaque", async ({ page }) => {',
+      "  await expect(mystery).toBeVisible();",
+      "});",
+      "",
+    ].join("\n");
+
+    const result = compilePlaywrightSpec({ source, sourcePath: "partial.spec.ts" });
+
+    expect(result.ok).toBe(false);
+    const scenarios = result.qaIr.suites[0].scenarios;
+    expect(scenarios).toHaveLength(2);
+    expect(result.qaIr.extensions.blockedScenarioIds).toEqual([scenarios[1].id]);
+    expect(result.diagnostics.some(item => item.code === "OPAQUE_ASSERTION_TARGET")).toBe(true);
+  });
+
+  it("marks live-policy blocked scenarios as blocked so --allow-partial can skip them", () => {
+    const source = [
+      "// @qa-scenario: MIXED",
+      "// @qa-page: /dashboard",
+      "// @qa-live-policy: readonly",
+      'test("runnable", async ({ page }) => {',
+      '  await expect(page.getByText("Ready")).toBeVisible();',
+      "});",
+      "// @qa-live-policy: skip",
+      'test("skipped", async ({ page }) => {',
+      '  await expect(page.getByText("Nope")).toBeVisible();',
+      "});",
+      "",
+    ].join("\n");
+
+    const result = compilePlaywrightSpec({ source, sourcePath: "mixed.spec.ts" });
+
+    // A skip policy is not a compile error, so the file still compiles ok...
+    expect(result.ok).toBe(true);
+    const scenarios = result.qaIr.suites[0].scenarios;
+    // ...but the blocked scenario is recorded so partial execution can prune it.
+    expect(result.qaIr.extensions.blockedScenarioIds).toEqual([scenarios[1].id]);
+  });
+
   it("keeps no-confirm interactions deferred instead of guessing a safe stopping point", () => {
     const interaction = `// @qa-scenario: CONFIRM\n// @qa-live-policy: safe-interaction-no-confirm\ntest("confirm", async ({ page }) => {\n  await page.getByTestId("cancel").click();\n});\n`;
     const result = compilePlaywrightSpec({ source: interaction, sourcePath: "confirm.spec.ts" });

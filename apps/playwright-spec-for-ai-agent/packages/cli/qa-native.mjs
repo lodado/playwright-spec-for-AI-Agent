@@ -2,6 +2,7 @@ import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSy
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseArgs, TextDecoder } from "node:util";
 
+const DEBUG_ENV = "QA_NATIVE_DEBUG";
 const INTEGRITY_KEY_ENV = "QA_NATIVE_INTEGRITY_KEY";
 const PUBLICATION_KEY_ENV = "QA_NATIVE_PUBLICATION_KEY";
 const PRIVATE_DIRECTORY_MODE = 0o700;
@@ -168,7 +169,16 @@ export async function runQaNative(argv, {
     const status = await handler({ ...normalized, integrityKey, ...(publicationKey === undefined ? {} : { publicationKey }) });
     return Number.isInteger(status) ? status : 0;
   } catch (error) {
-    stderr(`qa-native: ${error instanceof CliError ? error.message : "command failed"}\n`);
+    // CliError messages are user-facing. Internal errors stay opaque by default because their
+    // message may embed sensitive data (e.g. evidence bytes); set QA_NATIVE_DEBUG to surface the
+    // full stack when a failure needs diagnosing. The default is a secret-safe control, not an
+    // integrity one — the debug escape hatch keeps failures debuggable without leaking by default.
+    const detail = error instanceof CliError
+      ? error.message
+      : env[DEBUG_ENV]
+        ? (error?.stack ?? String(error?.message ?? error))
+        : "command failed";
+    stderr(`qa-native: ${detail}\n`);
     return 1;
   } finally {
     integrityKey?.fill(0);
