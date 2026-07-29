@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import test from "node:test";
-import { loadStudy, runCli, runPersonaStudy } from "../src/index.mjs";
+import { createDefaultPolicy, loadStudy, runCli, runPersonaStudy } from "../src/index.mjs";
 
 const study = {
   schemaVersion: "study-spec/0.1",
@@ -350,6 +350,39 @@ test("real Chromium executes bounded Hermes type(valueRef) and submit without pe
     await app.close();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("deterministic personas consult their behavioral dimensions (readingDepth wires dwell-before-click)", () => {
+  const task = {
+    id: "t", goal: "Open report",
+    safetyPolicy: { allowClick: true, allowNavigation: true, allowTyping: false },
+    maxActions: 12, maxDurationMs: 60_000, abandonmentAllowed: false,
+  };
+  const observation = {
+    page: { url: "https://example.test/" },
+    semantic: {
+      visibleText: [], headings: [], landmarks: [],
+      interactiveElements: [{ id: "cta", role: "button", name: "Open report", text: "Open report", visible: true, viewportPosition: { inViewport: true, occluded: false } }],
+    },
+  };
+  const drive = preset => {
+    const policy = createDefaultPolicy({ study: {}, persona: { preset }, task, seed: 7 }, { now: () => 0 });
+    const events = [];
+    for (let step = 0; step < task.maxActions; step += 1) {
+      const action = policy.decide({ observation, task, events, session: { startedAt: new Date(0).toISOString() } });
+      events.push({ action, result: { status: "success" }, derivedSignals: { progressChanged: true, noProgress: false, failedInteraction: false } });
+      if (["click", "finish", "abandon"].includes(action.type)) break;
+    }
+    return events.map(event => event.action.type);
+  };
+  const impatient = drive("impatient_new_user");
+  const careful = drive("careful_business_buyer");
+  const scrolls = sequence => sequence.filter(type => type === "scroll").length;
+  // Both are goal-directed and reach the CTA (the click branch is wired), but a high-readingDepth
+  // persona reads (scrolls) strictly more before committing — readingDepth is no longer decorative.
+  assert.ok(impatient.includes("click"), JSON.stringify(impatient));
+  assert.ok(careful.includes("click"), JSON.stringify(careful));
+  assert.ok(scrolls(careful) > scrolls(impatient), JSON.stringify({ impatient, careful }));
 });
 
 function fakeDriver() {

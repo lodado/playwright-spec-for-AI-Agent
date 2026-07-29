@@ -263,36 +263,76 @@ export async function runCli(argv, io = console) {
   throw new Error(`Unknown command: ${command}`);
 }
 
-function createDefaultPolicy(entry) {
+const SIGNUP_LEXICON = /\b(sign ?up|register|create account|join|subscribe|가입|회원|등록)\b/i;
+const PRICE_LEXICON = /\b(price|pricing|upgrade|buy|pay|checkout|plan|billing|결제|요금|업그레이드|구매)\b/i;
+const MAX_READING_SCROLLS = 3;
+
+export function createDefaultPolicy(entry, { now = Date.now } = {}) {
   const presetId = entry.persona.preset ?? entry.persona.source?.presetId ?? "impatient_new_user";
   const definition = PRESETS[presetId] ?? PRESETS.impatient_new_user;
   const pairedVariant = entry.study.comparison?.assignment === "paired" ? "paired" : entry.variant;
   const sampledPolicy = sampleBehaviorPolicy(definition, deriveSessionSeed(entry.seed, entry.task.id, entry.persona.id ?? presetId, pairedVariant, 0));
   const random = createRandom(sampledPolicy.seed);
+  const values = sampledPolicy.values;
+  const requiredReads = Math.round(Number(values.readingDepth) * MAX_READING_SCROLLS);
   let state = createPersonaState();
   return {
     sampledPolicy,
-    decide({ observation, task, events }) {
-      const attention = defaultAttention(sampledPolicy);
-      const perceived = filterPerceivedElements(observation.semantic.interactiveElements, attention, sampledPolicy.seed + events.length);
+    decide({ observation, task, events, session }) {
+      const elapsedMs = session?.startedAt ? Math.max(0, now() - Date.parse(session.startedAt)) : 0;
       const lastEvent = events.at(-1);
       if (lastEvent) state = reducePersonaState(state, lastEvent.derivedSignals);
+
+      const attention = defaultAttention(sampledPolicy);
+      const annotated = annotateForAttention(observation.semantic.interactiveElements, task.goal);
+      const perceived = filterPerceivedElements(annotated, attention, sampledPolicy.seed + events.length);
+      const scrollCount = events.filter(event => event.action.type === "scroll").length;
+
       const abandonment = evaluateAbandonment({
         state,
         sampledPolicy,
         actionCount: events.length,
         maxActions: task.maxActions,
-        elapsedMs: 0,
+        elapsedMs,
         maxDurationMs: task.maxDurationMs,
         abandonmentAllowed: task.abandonmentAllowed,
         randomValue: random(),
       });
       if (abandonment.shouldAbandon) return { type: "abandon", reasonCode: abandonment.reasonCode };
-      const target = rankForGoal(perceived, task.goal)[0];
+
+      // retryPropensity + errorRecoveryAttempts: re-attempt a still-perceivable target that just failed.
+      if (lastEvent?.result?.status === "failure" && lastEvent.action?.elementId && task.safetyPolicy.allowClick) {
+        const failedId = lastEvent.action.elementId;
+        const retriesSoFar = events.filter(event => event.action?.elementId === failedId && event.result?.status === "failure").length;
+        const stillThere = perceived.find(element => element.id === failedId);
+        if (stillThere && retriesSoFar < Number(values.errorRecoveryAttempts) && random() < Number(values.retryPropensity)) {
+          return { type: "click", elementId: failedId, reasonCode: "retry_after_failed_interaction" };
+        }
+      }
+
+      // backtrackPropensity: a stalled step may push the persona back a page.
+      if (lastEvent?.derivedSignals?.noProgress && events.length > 0 && task.safetyPolicy.allowNavigation
+          && random() < Number(values.backtrackPropensity)) {
+        return { type: "back", reasonCode: "backtrack_after_no_progress" };
+      }
+
+      // readingDepth: careful personas read/scroll before committing to their first click.
+      const hasClicked = events.some(event => event.action.type === "click");
+      if (!hasClicked && scrollCount < requiredReads && task.safetyPolicy.allowNavigation) {
+        return { type: "scroll", direction: "down", amount: "medium", reasonCode: "read_before_acting" };
+      }
+
+      // noActionPropensity: hesitate rather than act (bounded by the runtime no-progress budget).
+      if (random() < Number(values.noActionPropensity)) {
+        return { type: "observe_more", reasonCode: "persona_hesitation" };
+      }
+
+      const target = rankForGoal(perceived, task.goal, values)[0];
       if (target && task.safetyPolicy.allowClick && ["button", "link", "checkbox", "radio"].includes(target.role)) {
         return { type: "click", elementId: target.id, reasonCode: "visible_goal_candidate" };
       }
-      if (events.filter(event => event.action.type === "scroll").length < 2 && task.safetyPolicy.allowNavigation) {
+      const explorationScrolls = Math.max(2, Math.round(Number(values.explorationDepth) * 5));
+      if (scrollCount < explorationScrolls && task.safetyPolicy.allowNavigation) {
         return { type: "scroll", direction: "down", amount: "medium", reasonCode: "inspect_below_fold" };
       }
       return task.abandonmentAllowed
@@ -300,6 +340,24 @@ function createDefaultPolicy(entry) {
         : { type: "finish", reasonCode: "manual_review_required" };
     },
   };
+}
+
+// Derives the attention signals (goalMatch / primaryCta) that filterPerceivedElements scores on
+// but the driver does not emit, from the perceivable role/name/text the observation does carry.
+function annotateForAttention(elements, goal) {
+  const words = String(goal).toLowerCase().split(/\W+/).filter(word => word.length > 2);
+  return elements.map(element => {
+    const haystack = `${element.name ?? ""} ${element.text ?? ""}`.toLowerCase();
+    const matched = words.filter(word => haystack.includes(word)).length;
+    const goalMatch = words.length ? matched / words.length : 0;
+    return {
+      ...element,
+      goalMatch,
+      primaryCta: element.role === "button" && goalMatch > 0,
+      inViewport: element.inViewport ?? element.viewportPosition?.inViewport ?? true,
+      occluded: element.occluded ?? element.viewportPosition?.occluded ?? false,
+    };
+  });
 }
 
 async function evaluateLiveOracles({ task, observation, observations, events }) {
@@ -429,12 +487,17 @@ function defaultAttention(sampledPolicy) {
   };
 }
 
-function rankForGoal(elements, goal) {
+function rankForGoal(elements, goal, values = {}) {
   const words = String(goal).toLowerCase().split(/\W+/).filter(word => word.length > 2);
+  const signupResistance = Number(values.signupResistance ?? 0);
+  const priceSensitivity = Number(values.priceSensitivity ?? 0);
   return [...elements].sort((left, right) => score(right) - score(left) || left.id.localeCompare(right.id));
   function score(element) {
     const text = `${element.name ?? ""} ${element.text ?? ""}`.toLowerCase();
-    return words.filter(word => text.includes(word)).length + Number(element.role === "button");
+    const goalOverlap = words.filter(word => text.includes(word)).length + Number(element.role === "button");
+    // Persona-specific aversions lower the appeal of signup / paid affordances.
+    const aversion = (SIGNUP_LEXICON.test(text) ? signupResistance : 0) + (PRICE_LEXICON.test(text) ? priceSensitivity : 0);
+    return goalOverlap - aversion;
   }
 }
 
