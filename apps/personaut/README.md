@@ -18,8 +18,8 @@ Personaut is an evidence-first browser exploration tool built on Playwright. Giv
 
 ## The 30-second mental model
 
-| 🧠 AI chooses | 🛡️ Code constrains | 🔎 Evidence decides |
-| --- | --- | --- |
+| 🧠 AI chooses                                                                         | 🛡️ Code constrains                                                                 | 🔎 Evidence decides                                                               |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | A deterministic policy or Hermes chooses the next visible action using persona hints. | StudySpec, runtime, and the Playwright driver independently reject unsafe actions. | Live oracles decide when to stop; post-close evaluation verifies sealed evidence. |
 
 ```text
@@ -42,11 +42,11 @@ This separation is the core philosophy:
 
 ### When should I use it?
 
-| Good fit | Use something else |
-| --- | --- |
-| Explore where different seeded behaviors stall | Prove one exact regression never returns → Playwright test |
-| Compare relative behavior across baseline and candidate | Measure real-user conversion → product analytics |
-| Collect reproducible, evidence-linked friction signals | Make demographic claims → calibrated human research |
+| Good fit                                                | Use something else                                         |
+| ------------------------------------------------------- | ---------------------------------------------------------- |
+| Explore where different seeded behaviors stall          | Prove one exact regression never returns → Playwright test |
+| Compare relative behavior across baseline and candidate | Measure real-user conversion → product analytics           |
+| Collect reproducible, evidence-linked friction signals  | Make demographic claims → calibrated human research        |
 
 ## 5-minute quick start
 
@@ -108,12 +108,12 @@ The starter result is marked `exploration_only`. Personaut does not claim that s
 
 A StudySpec answers five questions:
 
-| Field | Question |
-| --- | --- |
-| `environment` | Which URL and origins may the browser visit? |
-| `tasks` | What goal should the persona attempt? |
-| `successOracles` | What deterministic evidence counts as success? |
-| `safetyPolicy` | Which browser actions are allowed? |
+| Field                        | Question                                                |
+| ---------------------------- | ------------------------------------------------------- |
+| `environment`                | Which URL and origins may the browser visit?            |
+| `tasks`                      | What goal should the persona attempt?                   |
+| `successOracles`             | What deterministic evidence counts as success?          |
+| `safetyPolicy`               | Which browser actions are allowed?                      |
 | `personas` + `runtime.seeds` | Which behaviors run, and how many sessions are created? |
 
 Personaut evaluates `personas × tasks × seeds`. Two personas, two tasks, and three seeds create twelve isolated sessions.
@@ -158,38 +158,38 @@ tasks:
 
 Keep `allowedOrigins` exact. Personaut blocks navigation outside this list unless the study explicitly permits external origins.
 
-`storageStatePath` is a workspace-local, owner-only (`chmod 600`) Playwright storage-state file. `auth.bootstrap` is optional: while it loads, only `GET`/`HEAD` requests to its URL origin plus `auth.bootstrap.allowedOrigins`, and exact non-GET `allowedEndpoints`, may run. Personaut then navigates to `baseUrl` under the task's normal safety policy; bootstrap endpoints do not stay allowed. Keep credentials, cookies, tokens, and query strings out of the study file. Hermes keeps its current loopback/no-auth preflight restriction.
+`storageStatePath` is a workspace-local, owner-only (`chmod 600`) Playwright storage-state file. `auth.bootstrap` is optional: while it loads, only `GET`/`HEAD` requests to its URL origin plus `auth.bootstrap.allowedOrigins`, and exact non-GET `allowedEndpoints`, may run. Personaut then navigates to `baseUrl` under the task's normal safety policy; bootstrap endpoints do not stay allowed. Keep credentials, cookies, tokens, and query strings out of the study file. Hermes action mode supports these authenticated sessions, but its CLI query places visible page content on the process command line and sends it to the model, so run authenticated Hermes only against staging or loopback targets you control.
 
 ### Success oracles
 
-| Type | Example use |
-| --- | --- |
-| `url` | The session reached `/complete`. |
-| `visible_text` | The page visibly contains expected copy. |
-| `element` | A visible, enabled, disabled, hidden, or checked element exists. |
-| `event` | A named browser action occurred. |
-| `custom` | Mark imported intent for manual review; arbitrary study code is not executed. |
+| Type           | Example use                                                                   |
+| -------------- | ----------------------------------------------------------------------------- |
+| `url`          | The session reached `/complete`.                                              |
+| `visible_text` | The page visibly contains expected copy.                                      |
+| `element`      | A visible, enabled, disabled, hidden, or checked element exists.              |
+| `event`        | A named browser action occurred.                                              |
+| `custom`       | Mark imported intent for manual review; arbitrary study code is not executed. |
 
 Run `personaut validate` after every StudySpec edit.
 
 ## Persona presets
 
-| Preset | Typical behavior |
-| --- | --- |
-| `impatient_new_user` | Explores little and abandons quickly. |
-| `careful_business_buyer` | Reads deeply and retries cautiously. |
+| Preset                      | Typical behavior                                     |
+| --------------------------- | ---------------------------------------------------- |
+| `impatient_new_user`        | Explores little and abandons quickly.                |
+| `careful_business_buyer`    | Reads deeply and retries cautiously.                 |
 | `low_domain_knowledge_user` | Backtracks more and has weaker product expectations. |
-| `exploratory_power_user` | Explores broadly and retries often. |
-| `price_sensitive_user` | Reacts strongly to pricing and signup friction. |
+| `exploratory_power_user`    | Explores broadly and retries often.                  |
+| `price_sensitive_user`      | Reacts strongly to pricing and signup friction.      |
 
 Seeds make policy sampling repeatable. Reusing the same StudySpec and seeds makes baseline/candidate comparison meaningful.
 
 ## Choose a policy mode
 
-| Mode | Who chooses the next action? | Best for |
-| --- | --- | --- |
-| Deterministic, default | Repository code uses seeded persona rules. | Repeatable baseline exploration with no model dependency. |
-| Hermes, opt-in | Hermes chooses from a strict action schema using persona hints. | Exploring paths that should not be pre-ranked by application code. |
+| Mode                   | Who chooses the next action?                                    | Best for                                                           |
+| ---------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Deterministic, default | Repository code uses seeded persona rules.                      | Repeatable baseline exploration with no model dependency.          |
+| Hermes, opt-in         | Hermes chooses from a strict action schema using persona hints. | Exploring paths that should not be pre-ranked by application code. |
 
 Unknown action-model names keep the deterministic path for compatibility. Only the exact value `hermes` activates Hermes.
 
@@ -214,14 +214,14 @@ evidence:
 
 #### What does Hermes see?
 
-| Hermes receives | Hermes never receives |
-| --- | --- |
-| Task goal and bounded context | Whole StudySpec or oracle definitions |
-| Path-only route and visible semantic text | URL query/hash/user info or raw DOM |
-| Visible element IDs, roles, names, and state | Selectors, fingerprints, test IDs, hidden elements |
-| Recent three canonical event summaries | Full event history, console, or network internals |
-| Persona hints and remaining budget | Screenshot, trace, video, auth, or storage state |
-| Fixture **names** such as `email` | Fixture **values** such as an actual email or password |
+| Hermes receives                              | Hermes never receives                                  |
+| -------------------------------------------- | ------------------------------------------------------ |
+| Task goal and bounded context                | Whole StudySpec or oracle definitions                  |
+| Path-only route and visible semantic text    | URL query/hash/user info or raw DOM                    |
+| Visible element IDs, roles, names, and state | Selectors, fingerprints, test IDs, hidden elements     |
+| Recent three canonical event summaries       | Full event history, console, or network internals      |
+| Persona hints and remaining budget           | Screenshot, trace, video, auth, or storage state       |
+| Fixture **names** such as `email`            | Fixture **values** such as an actual email or password |
 
 Hermes may return only `click`, `type(valueRef)`, `scroll`, `back`, `wait`, `finish`, or `abandon`. The task safety policy can narrow that list further.
 
@@ -276,16 +276,16 @@ Comparison uses paired policy sampling and reports relative synthetic difference
 
 ## Read the output
 
-| File | Purpose |
-| --- | --- |
-| `summary.json` | Overall run status and recommended use. |
-| `validity.json` | Calibration, diversity, stability, and interpretation warnings. |
-| `findings.json` | Repeated evidence-linked friction and failure signals. |
-| `variant-comparison.json` | Baseline/candidate deltas from `compare`. |
-| `reports/report.html` | Human-readable report. |
-| `sessions/*/evidence-manifest.json` | Sealed artifact membership and hashes. |
-| `sessions/*/events.jsonl` | Browser action and result stream. |
-| `sessions/*/observations.jsonl` | Per-action semantic observations. |
+| File                                | Purpose                                                         |
+| ----------------------------------- | --------------------------------------------------------------- |
+| `summary.json`                      | Overall run status and recommended use.                         |
+| `validity.json`                     | Calibration, diversity, stability, and interpretation warnings. |
+| `findings.json`                     | Repeated evidence-linked friction and failure signals.          |
+| `variant-comparison.json`           | Baseline/candidate deltas from `compare`.                       |
+| `reports/report.html`               | Human-readable report.                                          |
+| `sessions/*/evidence-manifest.json` | Sealed artifact membership and hashes.                          |
+| `sessions/*/events.jsonl`           | Browser action and result stream.                               |
+| `sessions/*/observations.jsonl`     | Per-action semantic observations.                               |
 
 Evidence files are verified against the sealed manifest before an outcome is reported as successful.
 
@@ -293,14 +293,14 @@ For Hermes runs, `model_attempt` evidence stores only provider/model identity, p
 
 ## Troubleshooting
 
-| Symptom | Fix |
-| --- | --- |
-| `Executable doesn't exist` | Run `pnpm exec playwright install chromium`. |
-| StudySpec validation fails | Run `personaut validate`, then compare required fields with the generated starter. |
-| Navigation is blocked | Add the exact origin, including scheme and port, to `environment.allowedOrigins`. |
-| Sessions never click | Check `safetyPolicy.allowClick` and make the task goal match visible button/link wording. |
-| Everything becomes manual review | Prefer deterministic URL, text, or element success oracles. |
-| Hermes preflight rejects the study | Hermes v0.1 requires a loopback URL, `concurrency: 1`, `semanticSnapshot: every_action`, and no auth or storage state. |
+| Symptom                                          | Fix                                                                                                  |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `Executable doesn't exist`                       | Run `pnpm exec playwright install chromium`.                                                         |
+| StudySpec validation fails                       | Run `personaut validate`, then compare required fields with the generated starter.                   |
+| Navigation is blocked                            | Add the exact origin, including scheme and port, to `environment.allowedOrigins`.                    |
+| Sessions never click                             | Check `safetyPolicy.allowClick` and make the task goal match visible button/link wording.            |
+| Everything becomes manual review                 | Prefer deterministic URL, text, or element success oracles.                                          |
+| Hermes preflight rejects the study               | Hermes action mode requires `concurrency: 1` and `semanticSnapshot: every_action`.                   |
 | Report says `uncalibrated` or `exploration_only` | This is expected without a human reference dataset; do not present the result as real-user behavior. |
 
 ## Safety and limits
@@ -311,7 +311,9 @@ For Hermes runs, `model_attempt` evidence stores only provider/model identity, p
 - Study safety policy gates navigation, clicking, typing, uploads, mutations, external origins, and confirmation stopping.
 - Browser capability closes before browserless evaluation begins.
 - Study files are trusted operator input; keep secrets in operator-controlled configuration or environment variables.
-- Hermes v0.1 is restricted to loopback test environments because its CLI query is passed through process arguments; external beta and production use are intentionally blocked.
+- Hermes action mode passes its query (including visible page content) through process arguments and on to the model, so the target page content and any local process listing are exposed to the model host; binary evidence is suppressed for authenticated sessions, but run authenticated or otherwise sensitive Hermes studies only against staging or loopback targets you control.
+- A driven browser can issue subresource requests (fetch, images, beacons) to third-party origins the same way any browser can; navigation is gated to `allowedOrigins` but subresources are not, so run studies against pages you trust not to exfiltrate.
+- Secret redaction is best-effort against verbatim fixture values; transformed forms (whitespace-collapsed, re-encoded, or split across DOM nodes) may not be caught, so keep true secrets out of study files and supply credentials through the auth or storageState path.
 - Invalid model output gets one repair attempt; timeout and provider failures get none and never fall back silently.
 - Synthetic findings support release decisions but do not replace deterministic tests, analytics, or human research.
 
