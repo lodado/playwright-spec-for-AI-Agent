@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.0
+
+### Major Changes
+
+- Remove the legacy page-QA CLI. The `playwright-spec-for-ai-agent <spec|abstract-ai|judge|review|slack|nightly>` bin, its scripts, and the `./cli` export are deleted; the evidence-driven `qa-native` CLI is now the only entry point. Config files keep only the `remediation` section (`loadProjectConfig`); page/staging/paths config no longer drives a command.
+
 ## 1.2.0
 
 ### Minor Changes

@@ -1,15 +1,17 @@
 # Examples
 
 - `sample-spec.ts` — minimal Playwright spec with `@qa-scenario` / `@qa-live-policy` annotations.
-- `ocr-fixture-upload-example.ts` — `@qa-fixture` (PDF) file-level + test-level override example for upload flows.
+- `ocr-fixture-upload-example.ts` — file-level and test-level fixture annotation example for upload flows.
 
-Generated QA artifacts belong in **your app's** output directory (e.g. `.qa/{page}/`), not in this package repo:
+Point `qa-native execute --spec` at a spec like `sample-spec.ts` to compile and
+run its scenarios. Generated QA artifacts belong under **your app's** run
+directory (e.g. `.qa/runs/<id>/`), not in this package repo:
 
 ```bash
-npx playwright-spec-for-ai-agent spec --page=dashboard
-npx playwright-spec-for-ai-agent abstract-ai --page=dashboard
+npx qa-native execute \
+  --spec=examples/sample-spec.ts \
+  --base-url=https://staging.example.com \
+  --run-dir=.qa/runs/sample-1 \
+  --provider=hermes \
+  --mode=adaptive
 ```
-
-`qa-spec-live.md` is created only by `abstract-ai` (Given/When/Then `livePlan`).
-
-in a project that points `specDir` at specs like `sample-spec.ts`.

@@ -39,10 +39,8 @@ try {
   );
 
   const installed = join(consumer, "node_modules", "playwright-spec-for-ai-agent");
-  for (const bin of ["playwright-spec-for-ai-agent.mjs", "qa-native.mjs"]) {
-    const output = run(process.execPath, [join(installed, "bin", bin), "--help"], consumer);
-    if (!output.includes("Usage:")) throw new Error(`${bin} did not print help`);
-  }
+  const output = run(process.execPath, [join(installed, "bin", "qa-native.mjs"), "--help"], consumer);
+  if (!output.includes("Usage:")) throw new Error("qa-native.mjs did not print help");
 
   const remediation = await import(pathToFileURL(join(installed, "packages", "cli", "qa-native-remediate.mjs")));
   if (typeof remediation.remediateQaNative !== "function" || typeof remediation.verifyPatchQaNative !== "function") {
@@ -54,28 +52,6 @@ try {
     throw new Error("installed package name changed");
   }
 
-  const specDir = join(consumer, "tests", "e2e", "pricing");
-  mkdirSync(specDir, { recursive: true });
-  writeFileSync(join(consumer, "playwright-spec-for-ai-agent.config.mjs"), `export default {
-  paths: { specDir: "tests/e2e/{page}", outputDir: ".qa/{page}" },
-  staging: { baseUrl: "https://staging.example.com", authRequired: false },
-  pages: { pricing: { targetPath: "/pricing", authRequired: false } },
-};\n`);
-  writeFileSync(join(specDir, "pricing.spec.ts"), `// @qa-page: pricing
-// @qa-scenario: A visitor can understand the pricing options
-import { expect, test } from "@playwright/test";
-// @qa-live-policy: readonly
-test("shows pricing options", async ({ page }) => {
-  await expect(page.getByRole("heading", { name: "Pricing" })).toBeVisible();
-});\n`);
-  run(process.execPath, [join(installed, "bin", "playwright-spec-for-ai-agent.mjs"), "spec", "--page=pricing"], consumer);
-  const extracted = JSON.parse(readFileSync(join(consumer, ".qa", "pricing", "pricing-qa-spec.json"), "utf8"));
-  if (extracted.scenarios?.[0]?.tests?.[0]?.title !== "shows pricing options") {
-    throw new Error("README quick-start scenario was not extracted");
-  }
-  if (extracted.scenarios[0].tests[0].expectations?.[0]?.locator?.role !== "heading") {
-    throw new Error("published AST parser did not preserve the README role locator");
-  }
   if (!readFileSync(join(installed, "docs", "qa-native.md"), "utf8").includes("QA Native")) {
     throw new Error("QA Native guide is missing from the package");
   }
