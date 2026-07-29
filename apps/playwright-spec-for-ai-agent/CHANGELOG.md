@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.2
+
+### Patch Changes
+
+- Complete authenticated adaptive one-shot QA with safer bounded action handling.
+
 ## 1.1.1
 
 ### Patch Changes

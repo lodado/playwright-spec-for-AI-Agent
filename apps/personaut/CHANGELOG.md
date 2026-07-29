@@ -1,5 +1,11 @@
 # @lodado/personaut
 
+## 0.3.2
+
+### Patch Changes
+
+- Complete authenticated adaptive one-shot QA with safer bounded action handling.
+
 ## 0.3.1
 
 ### Patch Changes
