@@ -213,7 +213,7 @@ describe("qa-native execute persistence", () => {
 
   it("publishes only the functional execute command", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-    expect(packageJson.bin).toMatchObject({ "qa-native": "./bin/qa-native.mjs", "playwright-spec-for-ai-agent": "./bin/playwright-spec-for-ai-agent.mjs" });
+    expect(packageJson.bin).toEqual({ "qa-native": "./bin/qa-native.mjs" });
     expect(packageJson.exports).toMatchObject({
       "./cli/qa-native": "./packages/cli/qa-native.mjs",
       "./cli/qa-native-execute": "./packages/cli/qa-native-execute.mjs",

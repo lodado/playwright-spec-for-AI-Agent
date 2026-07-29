@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
 describe("published package", () => {
-  it("contains the compatibility CLIs and their runtime files", () => {
+  it("contains the qa-native CLI and its runtime files", () => {
     const packed = spawnSync(
       "npm",
       ["pack", "--dry-run", "--json", "--ignore-scripts"],
@@ -20,9 +20,8 @@ describe("published package", () => {
     expect(paths).toEqual(
       expect.arrayContaining([
         "README.md",
-        "bin/playwright-spec-for-ai-agent.mjs",
         "bin/qa-native.mjs",
-        "packages/cli/index.mjs",
+        "packages/cli/qa-native.mjs",
         "scripts/dashboard-spec-parser.mjs",
         "scripts/playwright-ast-parser.mjs",
         "playwright-spec-for-ai-agent.config.example.mjs",

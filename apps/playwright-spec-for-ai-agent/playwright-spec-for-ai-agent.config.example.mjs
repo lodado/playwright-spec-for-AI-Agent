@@ -1,40 +1,17 @@
 /**
  * Copy to your app repo as playwright-spec-for-ai-agent.config.mjs.
  *
- *   npx playwright-spec-for-ai-agent spec --page=billing
- *   npx playwright-spec-for-ai-agent judge --page=billing
+ * Consumed by the `qa-native` remediation commands (remediate, propose-patch,
+ * verify-patch, publish) via loadProjectConfig. Only the `remediation` section
+ * is used; the run itself is driven by the qa-native CLI flags:
+ *
+ *   qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> --provider=hermes --mode=adaptive
+ *   qa-native judge   --run-dir=.qa/runs/<id>
+ *   qa-native report  --run-dir=.qa/runs/<id> --repository-root=.
  *
  * Legacy config names (hermes-qa.config.*, playwright-spec-qa.config.*) are still discovered.
  */
 export default {
-  paths: {
-    specDir: "src/page/{page}/__tests__",
-  },
-
-  /**
-   * Staging origin and account expectations for Hermes judge.
-   * When pageUrl or targetPath is set under pages.*, judge uses it automatically.
-   */
-  staging: {
-    baseUrl: "https://staging.example.com",
-    loginPath: "/login",
-    authRequired: true,
-    expectedSubscriptionStatus: "INACTIVE",
-    expectedPlan: "BASIC",
-    accountNotes: "QA account on staging — do not mutate billing",
-  },
-
-  pages: {
-    dashboard: {
-      pageUrl: "https://staging.example.com/dashboard",
-      expectedSubscriptionStatus: "ACTIVE",
-    },
-    pricing: {
-      targetPath: "/pricing",
-      authRequired: false,
-    },
-  },
-
   remediation: {
     patch: {
       minimumConfidence: 0.5,
