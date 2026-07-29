@@ -288,9 +288,8 @@ function statefulResult(oracle, satisfied, evidenceIds) {
 }
 
 function matchVisibleText(visibleText, oracle) {
-  const haystack = visibleText.join("\n");
-  const matched = matchText(haystack, oracle.operation, oracle.value);
-  return oracle.operation === "not_contains" ? matched : matched;
+  // matchText already negates for not_contains; join with newlines so multi-line copy still matches.
+  return matchText(visibleText.join("\n"), oracle.operation, oracle.value);
 }
 
 function matchText(actual, operation, expected) {
@@ -424,7 +423,7 @@ export function createBehavioralFingerprint({ session, events = [], observations
       ignore: ratio(events.filter((event) => event.action?.type === "ignore").length, Math.max(failedCount, 1)),
       abandon: session?.status === "abandoned" && failedCount > 0 ? 1 : 0,
     },
-    progressCurve: events.map((event, index) => event.derivedSignals?.progressChanged ? ratio(index + 1, eventCount) : 0),
+    progressCurve: events.map((event, index) => ratio(events.slice(0, index + 1).filter((item) => item.derivedSignals?.progressChanged).length, eventCount)),
     frustrationCurve: events.map((event, index) => ratio(events.slice(0, index + 1).filter((item) => !isNonProductInteraction(item) && (item.derivedSignals?.noProgress || item.derivedSignals?.failedInteraction)).length, eventCount)),
     trustCurve: events.map((event, index) => 1 - ratio(events.slice(0, index + 1).filter((item) => !isNonProductInteraction(item) && item.derivedSignals?.failedInteraction).length, eventCount)),
     goalDirectednessScore: clamp01(ratio(events.filter((event) => event.derivedSignals?.progressChanged).length, Math.max(eventCount, 1)) - ratio(backtrackCount + noActionCount, Math.max(eventCount * 2, 1)) + 0.5),
@@ -443,8 +442,8 @@ export function evaluateSimulationValidity({ sessions = [], fingerprints = [], t
   if (normalizedFingerprints.length < 3) detectedRisks.push("insufficient_sample");
   if (diversity.homogenizationRisk === "high") detectedRisks.push("persona_homogenization");
   if (isHyperactive(normalizedFingerprints, taskMaxActions)) detectedRisks.push("hyperactivity");
-  if (normalizedFingerprints.length > 0 && normalizedFingerprints.every((item) => item.noActionRate === 0 && !item.abandonmentOccurred)) detectedRisks.push("excessive_cooperation");
-  if (normalizedFingerprints.length > 0 && normalizedFingerprints.every((item) => item.trustCurve.every((value) => value > 0.8))) detectedRisks.push("positivity_bias");
+  if (normalizedFingerprints.length >= 3 && normalizedFingerprints.every((item) => item.actionCount > 0 && item.noActionRate === 0 && !item.abandonmentOccurred)) detectedRisks.push("excessive_cooperation");
+  if (normalizedFingerprints.length >= 3 && normalizedFingerprints.every((item) => item.actionCount > 0 && item.trustCurve.length > 0 && item.trustCurve.every((value) => value > 0.8))) detectedRisks.push("positivity_bias");
 
   const report = {
     schemaVersion: SIMULATION_VALIDITY_VERSION,
@@ -452,7 +451,7 @@ export function evaluateSimulationValidity({ sessions = [], fingerprints = [], t
       ? { level: "calibrated", datasetId: humanReference.id, sampleSize: humanReference.sampleSize }
       : { level: "uncalibrated", reason: "No human reference dataset was provided." },
     stability: {
-      seedVariance: variance(normalizedFingerprints.map((item) => item.actionCount)),
+      seedVariance: seedSensitivity(normalizedFingerprints, sessionRecords),
       modelAgreement: "not_available",
       orderConsistency: "not_available",
     },
@@ -507,8 +506,36 @@ function fingerprintDistance(left, right) {
   const actionDistance = 1 - cosine(left.actionTypeRates, right.actionTypeRates);
   const routeDistance = 1 - jaccard(new Set(left.routeSequence), new Set(right.routeSequence));
   const outcomeDistance = left.abandonmentOccurred === right.abandonmentOccurred ? 0 : 1;
-  const behaviorDistance = Math.abs(left.backtrackRate - right.backtrackRate) + Math.abs(left.retryRate - right.retryRate) + Math.abs(left.failedInteractionRate - right.failedInteractionRate);
+  // Normalize the 3-term behavior sum to [0,1] so every component carries equal weight in the mean.
+  const behaviorDistance = (Math.abs(left.backtrackRate - right.backtrackRate) + Math.abs(left.retryRate - right.retryRate) + Math.abs(left.failedInteractionRate - right.failedInteractionRate)) / 3;
   return clamp01((actionDistance + routeDistance + outcomeDistance + behaviorDistance) / 4);
+}
+
+// Mean within-cell pairwise fingerprint distance across (persona, task, variant) cells that were
+// actually replicated over >=2 distinct seeds — an honest seed-sensitivity scalar in [0,1].
+// (The prior "seedVariance" was raw action-count variance over all mixed sessions, which measured
+// cross-persona spread, not seed stability, and was anti-correlated with what its name claimed.)
+function seedSensitivity(fingerprints, sessions) {
+  const cells = new Map();
+  sessions.forEach((session, index) => {
+    const fingerprint = fingerprints[index];
+    if (!fingerprint) return;
+    const key = [session.personaId ?? "", session.taskId ?? "", session.variant ?? ""].join(" ");
+    const cell = cells.get(key) ?? { seeds: new Set(), prints: [] };
+    cell.seeds.add(session.seed);
+    cell.prints.push(fingerprint);
+    cells.set(key, cell);
+  });
+  const cellMeans = [];
+  for (const { seeds, prints } of cells.values()) {
+    if (seeds.size < 2 || prints.length < 2) continue;
+    const distances = [];
+    for (let i = 0; i < prints.length; i += 1) {
+      for (let j = i + 1; j < prints.length; j += 1) distances.push(fingerprintDistance(prints[i], prints[j]));
+    }
+    if (distances.length) cellMeans.push(average(distances));
+  }
+  return cellMeans.length ? average(cellMeans) : "not_available";
 }
 
 function isHyperactive(fingerprints, taskMaxActions) {
@@ -564,17 +591,12 @@ function average(values) {
   return values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-function variance(values) {
-  if (values.length < 2) return "not_available";
-  const mean = average(values);
-  return values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
-}
-
 function cosine(left, right) {
   const keys = unique([...Object.keys(left), ...Object.keys(right)]);
   const dot = keys.reduce((sum, key) => sum + (left[key] ?? 0) * (right[key] ?? 0), 0);
   const leftNorm = Math.sqrt(keys.reduce((sum, key) => sum + (left[key] ?? 0) ** 2, 0));
   const rightNorm = Math.sqrt(keys.reduce((sum, key) => sum + (right[key] ?? 0) ** 2, 0));
+  if (!leftNorm && !rightNorm) return 1; // two empty action profiles are identical, not maximally distant
   if (!leftNorm || !rightNorm) return 0;
   return dot / (leftNorm * rightNorm);
 }

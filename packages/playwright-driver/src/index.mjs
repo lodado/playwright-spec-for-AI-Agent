@@ -122,7 +122,11 @@ async function startSession({ input, browserType, launchOptions, now }) {
   const valueRefs = input.valueRefs ?? {};
   const secretValues = Object.values(valueRefs).filter((value) => typeof value === "string" && value.length > 0);
   const requestedEvidencePolicy = normalizeEvidencePolicy(input.evidencePolicy ?? input.study?.evidence);
-  const evidencePolicy = secretValues.length > 0
+  // Any secret-bearing session — fixtures, injected storage state, or an auth bootstrap — renders
+  // authenticated PII, so suppress the binary evidence (screenshot/video/trace) that would persist
+  // it at rest. Redacted semantic snapshots still record what happened.
+  const suppressBinaryEvidence = secretValues.length > 0 || Boolean(environment.storageStatePath) || Boolean(environment.auth);
+  const evidencePolicy = suppressBinaryEvidence
     ? { ...requestedEvidencePolicy, screenshot: "off", trace: false, video: "off" }
     : requestedEvidencePolicy;
   const storageState = environment.storageStatePath ? await resolveStorageStatePath(environment.storageStatePath) : undefined;

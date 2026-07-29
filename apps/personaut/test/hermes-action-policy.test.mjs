@@ -64,6 +64,28 @@ test("Hermes chooses from bounded semantic input and records digest-only attempt
   assert.equal(JSON.stringify(decision.attempts).includes(calls[0].prompt), false);
 });
 
+test("Hermes may voluntarily finish or abandon the session", async () => {
+  for (const type of ["finish", "abandon"]) {
+    const policy = createHermesActionPolicy(entry, {
+      model: "test-model",
+      now: () => 1_000,
+      transport: () => ({ action: { type } }),
+    });
+    const decision = await policy.decide(input());
+    assert.deepEqual(decision.action, { type, reasonCode: "hermes_selected" });
+  }
+});
+
+test("abandon is rejected when the task forbids abandonment", async () => {
+  const policy = createHermesActionPolicy(entry, {
+    model: "test-model",
+    now: () => 1_000,
+    transport: () => ({ action: { type: "abandon" } }),
+  });
+  const strictInput = { ...input(), task: { ...task, abandonmentAllowed: false } };
+  await assert.rejects(() => policy.decide(strictInput), error => error.code === "MODEL_INVALID_OUTPUT");
+});
+
 test("invalid output gets one schema-only repair and never deterministic fallback", async () => {
   const prompts = [];
   const policy = createHermesActionPolicy(entry, {

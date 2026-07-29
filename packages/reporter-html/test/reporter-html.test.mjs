@@ -94,6 +94,19 @@ test("links findings and timeline steps to relative evidence anchors", () => {
   assert.doesNotMatch(html, /href="file:/);
 });
 
+test("renders screenshot and video evidence inline from relative session paths", () => {
+  const html = renderBehavioralHtmlReport({
+    evidence: { entries: [
+      { id: "shot-1", type: "screenshot", src: "../sessions/session-1/screenshots/1.png" },
+      { id: "vid-1", type: "video", src: "../sessions/session-1/videos/1.webm" },
+    ] },
+  });
+  assert.match(html, /<img class="evidence-media"[^>]*src="\.\.\/sessions\/session-1\/screenshots\/1\.png"/);
+  assert.match(html, /<video class="evidence-media"[^>]*src="\.\.\/sessions\/session-1\/videos\/1\.webm"/);
+  assert.doesNotMatch(html, /src="\/[^/]/);
+  assert.doesNotMatch(html, /src="file:/);
+});
+
 test("redacts secrets and private absolute paths", () => {
   const html = renderBehavioralHtmlReport(report, { secrets: ["abc123"] });
   assert.doesNotMatch(html, /\/Users\/chungheon/);

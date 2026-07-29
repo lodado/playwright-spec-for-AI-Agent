@@ -65,7 +65,12 @@ describe("playwright behavioral driver", () => {
       const observation = await driver.observe(handle);
       expect(observation.semantic.visibleText).toContain("Authenticated");
       expect(requests).toContain("/login");
-      await driver.close(handle);
+      // Authenticated (storage-state / auth-bootstrap) sessions must not persist binary PII evidence.
+      expect(observation.visual.screenshotEvidenceId).toBeUndefined();
+      expect(observation.evidence.every((entry) => entry.type !== "screenshot")).toBe(true);
+      const closeResult = await driver.close(handle);
+      expect(closeResult.evidence.every((entry) => !["trace", "video"].includes(entry.type))).toBe(true);
+      await expect(stat(path.join(root, "evidence", "trace.zip"))).rejects.toMatchObject({ code: "ENOENT" });
       expect(requests).toContain("/mutation");
     } finally {
       await driver.closeAll();
