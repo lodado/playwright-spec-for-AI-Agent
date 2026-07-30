@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.7.0
+
+### Minor Changes
+
+- 07b5505: Adaptive (AI-native) execution can now perform `@qa-fixture` file uploads. An `UPLOAD` interaction
+  becomes an `upload_observed_element` adaptive action, offered only when the scenario declares an
+  upload milestone with a designated `@qa-fixture`. The agent chooses the target element; the file is
+  always the author-designated fixture, resolved strictly inside the project root (no symlink escape,
+  size cap) before `setInputFiles`. Uploads whose fixture is undeclared stay blocked. The QA IR
+  milestone gains an optional `fixture` field and the vocabulary gains `upload_observed_element` (both
+  additive).
+- 07b5505: `qa-native execute` now defaults to AI-native execution (`--provider=hermes --mode=adaptive`).
+  Passing `--mode=strict` (or `--provider=playwright`) still selects the deterministic read-only
+  provider; either flag alone infers the matching pair. Runs that previously relied on the implicit
+  strict default now run adaptively unless they pass `--mode=strict`.
+
 ## 2.6.0
 
 ### Minor Changes
