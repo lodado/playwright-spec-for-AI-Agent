@@ -40,6 +40,12 @@ const GATEWAY_ARIA_LIMIT = 512 * 1024;
 const GATEWAY_MAX_ELEMENTS = 128;
 const GATEWAY_ELEMENT_TEXT_LIMIT = 1024;
 const GATEWAY_CLEANUP_TIMEOUT_MS = 1_000;
+// Hydration settle after adaptive navigation — SSR HTML can lack testids the client only
+// attaches after hydration, so evidence sealed at domcontentloaded misleads the judge. The
+// page counts as settled once it is fully loaded and the DOM stays quiet; the cap keeps the
+// wait bounded when an app mutates forever (carousels, polling).
+const GATEWAY_NAVIGATION_SETTLE_MS = 5_000;
+const GATEWAY_NAVIGATION_SETTLE_QUIET_MS = 300;
 const GATEWAY_ACTIONS = Object.freeze(["get_current_url", "observe_dom", "observe_aria", "navigate", "go_back", "reload_page", "click_observed_element", "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state", "report_blocked"]);
 const adaptiveExecutions = new WeakSet();
 
@@ -168,6 +174,7 @@ export async function openPlaywrightBrowserToolGateway({
       bootstrapActive = false;
     }
     await runGatewayBrowserOperation({ deadline, clock }, (timeout) => page.goto(initialInput.currentPage.url, { waitUntil: "domcontentloaded", timeout }));
+    await settleGatewayDom(page, { deadline, clock });
     assertGatewayOrigin(page, initialInput.capabilityLease.allowedOrigins);
 
     let currentPage = { ...initialInput.currentPage, url: gatewayUrl(page, initialInput.capabilityLease.allowedOrigins) };
@@ -215,13 +222,16 @@ export async function openPlaywrightBrowserToolGateway({
           // URL is captured in the mandatory pre/post evidence.
         } else if (authorization.proposal.action === "navigate") {
           await runGatewayBrowserOperation({ deadline, clock }, (timeout) => page.goto(authorization.proposal.parameters.url, { waitUntil: "domcontentloaded", timeout }));
+          await settleGatewayDom(page, { deadline, clock });
           invalidateGatewayObservations();
         } else if (authorization.proposal.action === "go_back") {
           const response = await runGatewayBrowserOperation({ deadline, clock }, (timeout) => page.goBack({ waitUntil: "domcontentloaded", timeout }));
           if (response === null) throw new Error("browser history has no previous page");
+          await settleGatewayDom(page, { deadline, clock });
           invalidateGatewayObservations();
         } else if (authorization.proposal.action === "reload_page") {
           await runGatewayBrowserOperation({ deadline, clock }, (timeout) => page.reload({ waitUntil: "domcontentloaded", timeout }));
+          await settleGatewayDom(page, { deadline, clock });
           invalidateGatewayObservations();
         } else if (authorization.proposal.action === "observe_dom" || authorization.proposal.action === "observe_aria") {
           observation = await observeGatewayElements({ page, input: beforeInput, currentPage, sequence: ++observationSequence, secrets: [...secrets, ...before.sensitiveValues], deadline, clock });
@@ -348,6 +358,37 @@ export async function openPlaywrightBrowserToolGateway({
     closed = true;
     await closeGatewayBrowser(browser).catch(() => undefined);
     throw error;
+  }
+}
+
+async function settleGatewayDom(page, timing) {
+  // The wait runs in the browser and stays bounded below the remaining budget; it must end as
+  // a no-op under budget pressure, never as a run-killing timeout.
+  try {
+    await runGatewayBrowserOperation(timing, (remaining) => {
+      const capMs = Math.min(GATEWAY_NAVIGATION_SETTLE_MS, remaining - 1_000);
+      if (capMs <= 0) return undefined;
+      return page.evaluate(({ capMs: cap, quietMs }) => new Promise((resolve) => {
+        let timer;
+        const finish = () => {
+          observer.disconnect();
+          document.removeEventListener("readystatechange", arm);
+          clearTimeout(timer);
+          resolve();
+        };
+        const arm = () => {
+          clearTimeout(timer);
+          timer = setTimeout(() => (document.readyState === "complete" ? finish() : arm()), quietMs);
+        };
+        const observer = new MutationObserver(arm);
+        observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+        document.addEventListener("readystatechange", arm);
+        setTimeout(finish, cap);
+        arm();
+      }), { capMs, quietMs: GATEWAY_NAVIGATION_SETTLE_QUIET_MS });
+    });
+  } catch {
+    // Budget exhausted or evaluate raced a navigation; capture proceeds with the DOM as-is.
   }
 }
 
