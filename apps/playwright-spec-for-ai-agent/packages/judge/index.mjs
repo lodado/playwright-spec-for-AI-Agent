@@ -15,9 +15,9 @@ const DEFAULT_JUDGE = Object.freeze({
   promptVersion: "deterministic-evidence/0.1",
 });
 const TEXT_EVIDENCE_TYPES = new Set(["DOM_SNAPSHOT", "ARIA_SNAPSHOT", "VISIBLE_TEXT", "NETWORK_LOG", "CONSOLE_LOG", "ACTION_LOG"]);
-const MAX_ITEM_CHARS = 8_192;
-const MAX_EVIDENCE_CHARS = 32_768;
-const MAX_SEMANTIC_INPUT_CHARS = 65_536;
+const MAX_ITEM_CHARS = 16_384;
+const MAX_EVIDENCE_CHARS = 65_536;
+const MAX_SEMANTIC_INPUT_CHARS = 131_072;
 
 export function evaluateDeterministically({ qaIr, bundle, manifest, readBlob }) {
   const qaIrSnapshot = jsonSnapshot(qaIr, "QA IR");
@@ -266,6 +266,7 @@ function buildSemanticInput(qaIr, verified, evaluation, secrets) {
     });
   }
 
+  const clues = expectationClues(scenario, unresolved);
   let remaining = MAX_EVIDENCE_CHARS;
   const evidence = [];
   for (const item of candidates.sort((left, right) => left.id.localeCompare(right.id))) {
@@ -273,7 +274,11 @@ function buildSemanticInput(qaIr, verified, evaluation, secrets) {
     // for the judge and would violate the SemanticJudgeInput contract, making the run unjudgeable.
     if (item.content.length === 0 || remaining === 0 || evidence.some((entry) => entry.id === item.id)) continue;
     const length = Math.min(item.content.length, MAX_ITEM_CHARS, remaining);
-    evidence.push({ id: item.id, kind: item.kind, content: item.content.slice(0, length), truncated: item.truncated || length < item.content.length });
+    // Head-slicing dropped whatever the routed expectations were actually about whenever it sat
+    // past the item budget (the judge then answers TRUNCATED_DOM). Centre the slice on the
+    // earliest clue match instead; items whose clues fit in the head keep the plain head slice.
+    const start = clueWindowStart(item.content, clues, length);
+    evidence.push({ id: item.id, kind: item.kind, content: item.content.slice(start, start + length), truncated: item.truncated || length < item.content.length });
     remaining -= length;
   }
 
@@ -288,6 +293,35 @@ function buildSemanticInput(qaIr, verified, evaluation, secrets) {
   const validated = validateContract("SemanticJudgeInput", input);
   if (JSON.stringify(validated).length > MAX_SEMANTIC_INPUT_CHARS) throw new Error("Semantic judge input exceeds size limit");
   return deepFreeze(validated);
+}
+
+// Literal strings that identify what the routed expectations are about: testIds, accessible
+// names, expected texts. They anchor evidence slicing to the relevant part of large artifacts.
+function expectationClues(scenario, unresolved) {
+  const clues = [];
+  for (const expectation of scenario.expectations) {
+    if (!unresolved.has(expectation.id)) continue;
+    for (const value of [expectation.target?.testId, promptLiteral(expectation.target?.accessibleName), promptLiteral(expectation.target?.text), promptLiteral(expectation.text), promptLiteral(expectation.expected)]) {
+      if (typeof value === "string" && value.length >= 2) clues.push(value);
+    }
+  }
+  return clues;
+}
+
+function promptLiteral(value) {
+  if (typeof value === "string") return value;
+  return value?.kind === "literal" || value?.kind === "TEXT" ? value.value : undefined;
+}
+
+function clueWindowStart(content, clues, length) {
+  if (content.length <= length) return 0;
+  let earliest = -1;
+  for (const clue of clues) {
+    const index = content.indexOf(clue);
+    if (index !== -1 && (earliest === -1 || index < earliest)) earliest = index;
+  }
+  if (earliest === -1 || earliest + Math.min(64, length) <= length) return 0;
+  return Math.min(Math.max(0, earliest - Math.floor(length / 2)), content.length - length);
 }
 
 function assertCompleteDecision(input, decision) {
