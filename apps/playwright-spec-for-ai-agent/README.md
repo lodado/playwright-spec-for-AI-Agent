@@ -86,13 +86,16 @@ forced into pass or fail. A strict read-only provider (`--provider=playwright
   to pin an exact, predetermined spec so nothing improvises which tests run.
 - **`--page=<name>`** — resolve the page's _designated_ specs from the project
   config (`hermes-qa.config.mjs` / `playwright-spec-for-ai-agent.config.mjs`)
-  instead of naming a file. The config's `paths.specDir` / per-page `specDir`
-  locates the page's `__tests__` directory; every `*.spec.ts` in it is compiled
-  and merged into one run, `--base-url` defaults to `batch.defaultBaseUrl`, and
-  the scenarios that cannot run against the live target (`@qa-live-skip`, or a
-  `@qa-live-policy` that blocks navigation/DOM such as `skip` / `auth-mock` /
-  `subscription-mutation`) are skipped — leaving only the page's live-runnable
-  specs. `--config=<file>` overrides config auto-discovery.
+  instead of naming a file. From the page's `__tests__` directory, `--page`
+  selects the specs whose `@qa-scenario` matches the page's
+  `expectedSubscriptionStatus` (case-insensitive; page config, then the
+  `staging` default), plus any marked `// @qa-always-run: true`, minus any
+  `// @qa-live-skip: true`. When no status is configured, the whole directory is
+  designated. The selected specs are compiled and merged into one run,
+  `--base-url` defaults to `batch.defaultBaseUrl`, navigation uses the config's
+  per-page `targetPath` (e.g. a locale-prefixed route), and scenarios blocked by
+  `@qa-live-policy` (`skip` / `auth-mock` / `subscription-mutation`) are still
+  skipped. `--config=<file>` overrides config auto-discovery.
 
 ```bash
 # Run the dashboard page's designated specs, base URL from config:
@@ -132,13 +135,14 @@ secret-handling constraints.
 File annotations belong before imports; live policy belongs above each test or a
 shared `describe`.
 
-| Annotation        | Required | Purpose                                                                            |
-| ----------------- | -------- | ---------------------------------------------------------------------------------- |
-| `@qa-page`        | No       | Page id; the target path resolves relative to `--base-url`.                        |
-| `@qa-scenario`    | Yes      | Name the scenario or account state.                                                |
-| `@qa-live-policy` | Yes      | Declare what live interaction is safe.                                             |
-| `@qa-live-skip`   | No       | `true` skips the test (or whole file at file level) on live; it is never executed. |
-| `@qa-fixture`     | No       | `name=repo-relative/path` file for an `setInputFiles("name")` upload (see below).  |
+| Annotation        | Required | Purpose                                                                                                   |
+| ----------------- | -------- | --------------------------------------------------------------------------------------------------------- |
+| `@qa-page`        | No       | Page id; the target path resolves relative to `--base-url`.                                               |
+| `@qa-scenario`    | Yes      | Name the scenario or account state.                                                                       |
+| `@qa-live-policy` | Yes      | Declare what live interaction is safe.                                                                    |
+| `@qa-live-skip`   | No       | `true` skips the test (or whole file at file level) on live; it is never executed.                        |
+| `@qa-always-run`  | No       | `true` includes the spec under `--page` even when its `@qa-scenario` does not match the configured state. |
+| `@qa-fixture`     | No       | `name=repo-relative/path` file for an `setInputFiles("name")` upload (see below).                         |
 
 ### File uploads (`@qa-fixture`)
 

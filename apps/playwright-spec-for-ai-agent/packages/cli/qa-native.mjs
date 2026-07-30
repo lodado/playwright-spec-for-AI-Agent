@@ -272,14 +272,14 @@ function parseRequest(argv) {
 // config loader lives in the scripts layer; import it lazily so a plain `--spec` run never loads it.
 async function resolvePageSpecSource(options, cwd) {
   const projectRoot = realpathSync(cwd);
-  const { loadProjectConfig, resolveSpecFilesForPage, resolveConfigBaseUrl, resetProjectConfigForTests } =
+  const { loadProjectConfig, selectSpecFilesForPage, resolveConfigBaseUrl, resolveJudgeTarget, resetProjectConfigForTests } =
     await import("../../scripts/hermes-qa-project-config.mjs");
   resetProjectConfigForTests();
   const argv = [`--project-root=${projectRoot}`, ...(options.config ? [`--config=${resolve(cwd, options.config)}`] : [])];
   await loadProjectConfig(argv);
   let specPaths;
   try {
-    specPaths = resolveSpecFilesForPage(options.page);
+    specPaths = selectSpecFilesForPage(options.page);
   } catch (error) {
     throw new CliError(error instanceof Error ? error.message : "page spec resolution failed");
   }
@@ -290,7 +290,9 @@ async function resolvePageSpecSource(options, cwd) {
   }
   const baseUrl = options["base-url"] ?? resolveConfigBaseUrl() ?? undefined;
   if (baseUrl === undefined) throw new CliError("--page requires --base-url or a base URL in the project config");
-  return { specPaths, baseUrl };
+  // The config's per-page target path (e.g. a locale-prefixed route) overrides the spec's @qa-page.
+  const { targetPath, pageUrl } = resolveJudgeTarget([], options.page);
+  return { specPaths, baseUrl, ...(targetPath ? { targetPath } : {}), ...(pageUrl ? { pageUrl } : {}) };
 }
 
 function normalizeRequest(request, cwd, pageSource) {
@@ -316,13 +318,15 @@ function normalizeRequest(request, cwd, pageSource) {
     // that cannot run against the live target — leaving only the page's designated live specs.
     const specSource = pageSource === undefined
       ? { specPath: resolveRegularInput(request.options.spec, { root: cwd, label: "spec" }), baseUrl: safeBaseUrl(request.options["base-url"]) }
-      : { specPaths: pageSource.specPaths, baseUrl: safeBaseUrl(pageSource.baseUrl), allowPartial: true };
+      : { specPaths: pageSource.specPaths, baseUrl: safeBaseUrl(pageSource.baseUrl), allowPartial: true, pageTargetPath: pageSource.targetPath, pageUrl: pageSource.pageUrl };
     return Object.freeze({
       command: request.command,
       cwd,
       runDirectory,
       ...(specSource.specPaths === undefined ? { specPath: specSource.specPath } : { specPaths: specSource.specPaths }),
       baseUrl: specSource.baseUrl,
+      ...(specSource.pageTargetPath ? { pageTargetPath: specSource.pageTargetPath } : {}),
+      ...(specSource.pageUrl ? { pageUrl: specSource.pageUrl } : {}),
       provider,
       mode,
       ...(storageStatePath === undefined ? {} : { storageStatePath }),

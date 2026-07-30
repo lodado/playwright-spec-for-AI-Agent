@@ -103,9 +103,13 @@ Skipped: 2.1.0 — missing `testIndex` neutralized `--allow-partial`.
 (both must list a new flag) ② usage/help text ③ README ④ `docs/qa-native-one-shot-runbook.md`.
 Skipped: `--help` drifts from reality; a flag added to `COMMAND_OPTIONS` but not the `parseArgs`
 schema fails as "invalid command arguments".
-`execute` takes exactly one spec source: `--spec=<file>` (needs `--base-url`) or `--page=<name>`,
-which resolves the page's `__tests__` directory and base URL from the project config
-(`scripts/hermes-qa-project-config.mjs`, imported lazily) and runs its live-runnable specs.
+`execute` takes exactly one spec source: `--spec=<file>` (needs `--base-url`) or `--page=<name>`.
+Page mode (`scripts/hermes-qa-project-config.mjs` `selectSpecFilesForPage`, imported lazily) runs the
+config-designated specs: `@qa-scenario == expectedSubscriptionStatus` (case-insensitive) ∪
+`@qa-always-run` − `@qa-live-skip`, with base URL from `batch.defaultBaseUrl` and navigation rewritten
+to the per-page `targetPath` (`applyPageTarget` in `qa-native-execute.mjs`). No configured status =
+whole directory. `@qa-always-run` / `@qa-live-skip` are parsed by the shared `parseAnnotations` — do
+not fork that regex.
 
 **Budget shape**
 → ① `DEFAULT_ADAPTIVE_BUDGET` ② `--budget-*` flags ③ authorizer exhaustion checks ④ prompt

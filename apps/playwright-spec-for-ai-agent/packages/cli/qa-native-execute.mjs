@@ -13,7 +13,7 @@ import { CliError, createExclusiveQaDirectory, writePrivateJsonExclusive } from 
 const MAX_SPEC_BYTES = 4 * 1024 * 1024;
 const MAX_AUTH_BOOTSTRAP_BYTES = 64 * 1024;
 
-export async function executeQaNative({ specPath, specPaths, baseUrl, runDirectory, integrityKey, cwd, provider = "playwright", mode = "strict", storageStatePath, authBootstrapPath, allowedOrigins, allowExternalRead, allowPartial = false, budgetOverrides = {} }, overrides = {}) {
+export async function executeQaNative({ specPath, specPaths, baseUrl, runDirectory, integrityKey, cwd, provider = "playwright", mode = "strict", storageStatePath, authBootstrapPath, allowedOrigins, allowExternalRead, allowPartial = false, pageTargetPath, pageUrl, budgetOverrides = {} }, overrides = {}) {
   const compile = overrides.compile ?? compilePlaywrightSpec;
   const reportDiagnostics = overrides.reportDiagnostics ?? defaultReportDiagnostics;
   const reportSummary = overrides.reportSummary ?? defaultReportSummary;
@@ -37,7 +37,10 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
     const compileResult = compiledResults.length === 1 ? compiledResults[0] : mergeCompileResults(compiledResults);
     if (compileResult.diagnostics.length > 0) reportDiagnostics(compileResult.diagnostics);
     if (!compileResult.ok && !allowPartial) throw new Error("QA spec compilation failed");
-    const qaIr = allowPartial ? withoutBlockedScenarios(compileResult.qaIr) : compileResult.qaIr;
+    const compiledQaIr = allowPartial ? withoutBlockedScenarios(compileResult.qaIr) : compileResult.qaIr;
+    // Page mode navigates to the config's per-page target (e.g. a locale-prefixed route) instead of
+    // the spec's own @qa-page path.
+    const qaIr = applyPageTarget(compiledQaIr, { pageTargetPath, pageUrl });
     if (allowPartial && qaIr.suites.every((suite) => suite.scenarios.length === 0)) throw new Error("no statically compilable scenarios remain after skipping blocked ones");
     let execution;
     let executionPlan;
@@ -203,6 +206,19 @@ export function mergeCompileResults(results) {
     },
   };
   return { schemaVersion: results[0].schemaVersion, ok: results.every((result) => result.ok), qaIr, diagnostics: results.flatMap((result) => result.diagnostics) };
+}
+
+// Rewrite each scenario's startup NAVIGATE (the spec's @qa-page PATH) to the config's per-page
+// target — a locale-prefixed path (PATH) or a full same-origin URL. No-op when neither is set or a
+// scenario has no PATH navigation.
+export function applyPageTarget(qaIr, { pageTargetPath, pageUrl } = {}) {
+  if (!pageTargetPath && !pageUrl) return qaIr;
+  const target = pageUrl ? { type: "URL", value: pageUrl } : { type: "PATH", value: pageTargetPath };
+  const rewrite = (steps) => steps.map((step) => (step.kind === "NAVIGATE" && step.target?.type === "PATH" ? { ...step, target } : step));
+  return {
+    ...qaIr,
+    suites: qaIr.suites.map((suite) => ({ ...suite, scenarios: suite.scenarios.map((scenario) => ({ ...scenario, steps: rewrite(scenario.steps) })) })),
+  };
 }
 
 // Return a QA IR without the scenarios the adapter marked as statically un-runnable, so

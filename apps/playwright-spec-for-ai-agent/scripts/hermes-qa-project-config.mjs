@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { parseAnnotations } from "./dashboard-spec-parser.mjs";
 
 const CONFIG_FILENAMES = [
   "playwright-spec-for-ai-agent.config.mjs",
@@ -276,11 +277,18 @@ export function resolveSpecDirForPage(page) {
   return resolvePathFromConfig(config.paths.specDir, page);
 }
 
+/** The subscription state the config designates for a page (page config, then staging default). */
+export function resolveExpectedStatusForPage(page) {
+  const config = getProjectConfig();
+  const pageConfig = getPageConfig(page);
+  const raw = pageConfig.expectedSubscriptionStatus ?? config.staging?.expectedSubscriptionStatus ?? "";
+  return raw ? String(raw).trim().toUpperCase() : "";
+}
+
 /**
- * The page's designated spec files: every `*.spec.ts` under its spec directory, sorted for a
- * stable run order. Helper modules (`*.helpers.ts`) and non-spec files are excluded. This is what
- * `qa-native execute --page=<name>` runs when no explicit `--spec` is given — the predefined specs
- * for the page, never an ad-hoc one.
+ * Every `*.spec.ts` under the page's spec directory, sorted for a stable run order. Helper modules
+ * and non-spec files are excluded. This is the raw glob; `selectSpecFilesForPage` narrows it to the
+ * config-designated specs.
  */
 export function resolveSpecFilesForPage(page, { readdir = readdirSync } = {}) {
   const specDir = resolveSpecDirForPage(page);
@@ -290,12 +298,33 @@ export function resolveSpecFilesForPage(page, { readdir = readdirSync } = {}) {
   } catch {
     throw new Error(`spec directory for page "${page}" does not exist: ${specDir}`);
   }
-  const specFiles = entries
-    .filter((name) => name.endsWith(".spec.ts"))
-    .sort()
-    .map((name) => join(specDir, name));
+  const specFiles = entries.filter((name) => name.endsWith(".spec.ts")).sort().map((name) => join(specDir, name));
   if (specFiles.length === 0) throw new Error(`no *.spec.ts files found for page "${page}" in ${specDir}`);
   return specFiles;
+}
+
+/**
+ * The specs the config designates for `qa-native execute --page=<name>`: from the page's directory,
+ * keep those whose `@qa-scenario` matches `expectedSubscriptionStatus` (case-insensitive) or that
+ * carry `// @qa-always-run: true`, and drop any `// @qa-live-skip: true`. When no status is
+ * configured the whole directory is designated (backward compatible). Scenario-level `@qa-live-skip`
+ * / blocked policies are still filtered later by the adapter — this is only the file-level cut.
+ */
+export function selectSpecFilesForPage(page, { readFile = readFileSync } = {}) {
+  const files = resolveSpecFilesForPage(page);
+  const expected = resolveExpectedStatusForPage(page);
+  if (!expected) return files;
+  const kept = [];
+  const seen = new Set();
+  for (const file of files) {
+    const { scenario, liveSkip, alwaysRun } = parseAnnotations(readFile(file, "utf8"));
+    const scenarioStatus = scenario ? scenario.trim().toUpperCase() : null;
+    if (scenarioStatus) seen.add(scenarioStatus);
+    if (liveSkip) continue;
+    if (alwaysRun || scenarioStatus === expected) kept.push(file);
+  }
+  if (kept.length === 0) throw new Error(`page "${page}": no spec matches expectedSubscriptionStatus "${expected}" (@qa-scenario found: ${[...seen].join(", ") || "none"}; mark cross-state specs with // @qa-always-run: true)`);
+  return kept;
 }
 
 /** Base URL designated by the config (batch default, then staging), or null when neither is set. */
