@@ -1,3 +1,10 @@
+// Integrity only. This file verifies that sealed adaptive evidence is untampered and bound to its
+// run; it does not re-derive execution semantics. Milestone completion (milestoneCompletionRule),
+// action vocabulary and artifact shape (auditArtifactShape) live in core and contracts and are
+// imported here, never re-implemented. This separation is deliberate: the 2.3.0 regression was a
+// local copy of completion semantics drifting from the runtime and rejecting its own output. What
+// stays local is pure integrity — HMAC (via verifyStoredEvidence), run/scenario/lease binding,
+// origin containment, checkpoint-to-manifest matching, and page continuity across the audit chain.
 import { TextDecoder } from "node:util";
 import { auditArtifactShape, validateContract } from "../contracts/index.mjs";
 import { milestoneCompletionRule } from "../core/index.mjs";
