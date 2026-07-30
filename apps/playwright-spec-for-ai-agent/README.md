@@ -75,8 +75,9 @@ npx qa-native report --run-dir=.qa/runs/pricing-1 --repository-root=. --revision
 
 `execute` runs every declared scenario of the spec sequentially into one sealed
 evidence manifest. Unclear live states become `MANUAL_REVIEW`; they are not
-forced into pass or fail. A strict read-only provider (`--provider=playwright
---mode=strict`) is available for evidence capture without an inference model.
+forced into pass or fail. **AI-native (`--provider=hermes --mode=adaptive`) is the
+default**; pass `--mode=strict` for the deterministic read-only provider that needs
+no inference model. See [Providers and modes](#providers-and-modes).
 
 ### Choosing the spec: `--spec` vs `--page`
 
@@ -114,10 +115,12 @@ operator setup, and verdict handling.
 
 `execute` has two ways to run a spec. Pick one with `--provider` and `--mode`:
 
-| Combination                           | What it does                                                                                                                                                            | When to use                                                     |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `--provider=playwright --mode=strict` | **Deterministic.** Compiles the spec into a fixed plan and replays it exactly — navigate, the declared interactions, observe, checkpoint. No AI. File uploads run here. | Reproducible runs, no inference model, pinning exact behaviour. |
-| `--provider=hermes --mode=adaptive`   | **AI-driven.** A bounded agent proposes one small action at a time (observe, navigate, click, wait…) to reach the spec's milestones. Needs a Hermes inference model.    | Flaky/unclear live states where a fixed plan is too brittle.    |
+| Combination                                       | What it does                                                                                                                                                                 | When to use                                                     |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `--provider=hermes --mode=adaptive` **(default)** | **AI-driven.** A bounded agent proposes one small action at a time (observe, navigate, click, wait, upload…) to reach the spec's milestones. Needs a Hermes inference model. | Flaky/unclear live states where a fixed plan is too brittle.    |
+| `--provider=playwright --mode=strict`             | **Deterministic.** Compiles the spec into a fixed plan and replays it exactly — navigate, the declared interactions, observe, checkpoint. No AI.                             | Reproducible runs, no inference model, pinning exact behaviour. |
+
+Both run `@qa-fixture` file uploads (the file is author-designated, never agent-chosen).
 
 Both seal the same tamper-evident browser evidence and hand it to a **browserless
 judge**. Strict is the safe default; adaptive trades determinism for resilience.
@@ -190,7 +193,7 @@ qa-native execute (--spec=<file> | --page=<name>) [--base-url=<url>] --run-dir=.
 | `--provider` / `--mode`   | `playwright`/`strict` (default) or `hermes`/`adaptive` — see above.                            |
 | `--storage-state=<file>`  | Signed-in session; auto-discovers `.private/storage-state.json`.                               |
 | `--auth-bootstrap=<file>` | SSO/session-refresh page with origin/endpoint allowlists.                                      |
-| `--allowed-origin=<url>`  | Extra origin(s) the page may read from; comma-separated, up to 7.                                              |
+| `--allowed-origin=<url>`  | Extra origin(s) the page may read from; comma-separated, up to 7.                              |
 | `--allow-partial`         | Skip statically un-runnable scenarios instead of failing the whole file (implied by `--page`). |
 | `--budget-actions=<n>`    | Adaptive: max actions (default 32).                                                            |
 | `--budget-turns=<n>`      | Adaptive: max agent turns (default 32).                                                        |
@@ -233,10 +236,10 @@ shared `describe`.
 
 ### File uploads (`@qa-fixture`)
 
-File upload is the one interaction that replays a real file, so it is an
-exception path handled only in **strict** mode (`--provider=playwright
---mode=strict`) — the adaptive/AI provider never uploads. Declare the file and
-name it in the `setInputFiles` call:
+File upload replays a real file, so the file must be **explicitly designated** by
+`@qa-fixture` — never chosen by the agent. It runs in **both** strict and adaptive
+mode: in adaptive mode the AI may only upload when the scenario declares a fixture,
+and only that fixture. Declare the file and name it in the `setInputFiles` call:
 
 ```ts
 // @qa-scenario: UPLOAD
@@ -407,7 +410,7 @@ Evidence is never deleted. A run that fails validation is quarantined to
 
 - The CLI reads specs as source material; it does not replace deterministic Playwright CI or API contract tests.
 - Live judgment is non-deterministic; unclear states resolve to `MANUAL_REVIEW`.
-- The browser policy allows only same-origin `GET`/`HEAD` reads after a safe interaction; mutations, cross-origin requests, and destructive confirmations are blocked. File uploads run only in strict mode from a declared `@qa-fixture`, resolved inside the project root; the adaptive/AI provider never uploads.
+- The browser policy allows only same-origin `GET`/`HEAD` reads after a safe interaction; mutations, cross-origin requests, and destructive confirmations are blocked. File uploads run only from a declared `@qa-fixture` resolved inside the project root — the file is always author-designated, never chosen by the agent, in either mode.
 - Credentials belong in environment variables, a secret manager, or a private `storageState` file — never committed config or CLI flags.
 - Remediation can create private worktrees and Draft PRs only after strict verification; it has no merge or auto-merge path.
 - Results are first-pass live QA evidence, not a replacement for a QA engineer.

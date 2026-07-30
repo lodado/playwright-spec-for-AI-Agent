@@ -118,6 +118,7 @@ export async function openPlaywrightBrowserToolGateway({
   secrets = [],
   storageStatePath,
   authBootstrap,
+  projectRoot,
   store: sharedStore,
   priorManifest,
   clock = Date.now,
@@ -250,6 +251,22 @@ export async function openPlaywrightBrowserToolGateway({
           await runGatewayBrowserOperation({ deadline, clock }, () => assertSafeClickTarget(locator));
           interactionStarted = true;
           await runGatewayBrowserOperation({ deadline, clock }, (timeout) => locator.hover({ timeout: Math.min(10_000, timeout) }));
+          invalidateGatewayObservations();
+        } else if (authorization.proposal.action === "upload_observed_element") {
+          const locator = handles.get(`${authorization.proposal.parameters.observationId}\0${authorization.proposal.parameters.elementId}`);
+          if (!locator) throw new Error("observed element handle is unavailable");
+          // The file is the milestone's author-designated @qa-fixture, resolved strictly inside the
+          // project root — the AI chooses the element, never the file.
+          const uploadMilestone = input.milestones.find((milestone) => milestone.id === authorization.proposal.milestoneId);
+          if (!uploadMilestone?.fixture) throw new Error("upload milestone has no designated fixture");
+          let file;
+          try {
+            file = resolveFixtureFile(projectRoot, uploadMilestone.fixture.path);
+          } catch {
+            throw new Error("upload fixture is unavailable or outside the project root");
+          }
+          interactionStarted = true;
+          await runGatewayBrowserOperation({ deadline, clock }, (timeout) => locator.setInputFiles(file, { timeout: Math.min(10_000, timeout) }));
           invalidateGatewayObservations();
         } else if (authorization.proposal.action === "scroll_view") {
           interactionStarted = true;
@@ -508,6 +525,9 @@ async function observeGatewayElements({ page, input, currentPage, sequence, secr
       ...(input.capabilityLease.actions.includes("wait_for_element_state") ? ["wait_for_element_state"] : []),
       ...(safe && input.capabilityLease.actions.includes("click_observed_element") ? ["click_observed_element"] : []),
       ...(safe && input.capabilityLease.actions.includes("hover_observed_element") ? ["hover_observed_element"] : []),
+      // Upload is allowed only on the element matching an upload milestone's target (a file input),
+      // even though file inputs are otherwise "unsafe" (editable). The fixture is author-designated.
+      ...(input.capabilityLease.actions.includes("upload_observed_element") && input.milestones.some((milestone) => milestone.requiredAction === "upload_observed_element" && milestoneIds.includes(milestone.id)) ? ["upload_observed_element"] : []),
     ];
     elements.push({
       elementId,
@@ -677,13 +697,14 @@ export async function runAdaptiveWithPlaywright({
   secrets = [],
   storageStatePath,
   authBootstrap,
+  projectRoot,
   store,
   priorManifest,
   now = () => new Date().toISOString(),
   clock = Date.now,
 } = {}) {
   if (typeof proposeAction !== "function") throw new Error("proposeAction must be a function");
-  const gateway = await openPlaywrightBrowserToolGateway({ input, browserName, browserType, viewport, secrets, storageStatePath, authBootstrap, store, priorManifest, now, clock });
+  const gateway = await openPlaywrightBrowserToolGateway({ input, browserName, browserType, viewport, secrets, storageStatePath, authBootstrap, projectRoot, store, priorManifest, now, clock });
   const bundles = [];
   let manifest;
   let outcome;

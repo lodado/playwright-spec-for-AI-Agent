@@ -254,7 +254,7 @@ describe("qa-native CLI security foundation", () => {
     const handlers = { execute: handler, judge: handler, replay: handler, diagnose: handler, "suggest-fix": handler, report: handler, "publish-issue": handler, "propose-patch": handler, "verify-patch": handler, publish: handler, remediate: handler };
     const shared = { cwd, env: { QA_NATIVE_INTEGRITY_KEY: key, QA_NATIVE_PUBLICATION_KEY: Buffer.alloc(32, 0x62).toString("base64") }, handlers, stdout: vi.fn(), stderr: vi.fn() };
     expect(await runQaNative(["execute", "--spec=a.spec.ts", "--base-url=https://example.test", "--run-dir=.qa/runs/new"], shared)).toBe(0);
-    expect(handler.mock.calls[0][0]).toMatchObject({ provider: "playwright", mode: "strict" });
+    expect(handler.mock.calls[0][0]).toMatchObject({ provider: "hermes", mode: "adaptive" }); // AI-native default
     createExclusiveQaDirectory(".qa/runs/existing", { cwd });
     expect(await runQaNative(["judge", "--run-dir=.qa/runs/existing"], shared)).toBe(0);
     expect(await runQaNative(["replay", "--run-dir=.qa/runs/existing"], shared)).toBe(0);

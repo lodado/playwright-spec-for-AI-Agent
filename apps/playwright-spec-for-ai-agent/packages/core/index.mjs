@@ -177,8 +177,17 @@ export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId,
   const startUrl = adaptiveStartUrl(baseUrl, navigationStep);
   const leaseOrigins = adaptiveAllowedOrigins(startUrl, allowedOrigins);
   const interactionMilestones = interactionSteps.map((step) => {
-    if (step.action !== "CLICK") throw contractError("execute", `${step.action} is not supported by adaptive execution`);
-    return { id: step.id, class: step.milestoneClass, status: "PENDING", description: `Perform required ${step.action.toLowerCase()} action.`, requiredAction: "click_observed_element", target: structuredClone(step.target) };
+    if (step.action === "CLICK") {
+      return { id: step.id, class: step.milestoneClass, status: "PENDING", description: "Perform required click action.", requiredAction: "click_observed_element", target: structuredClone(step.target) };
+    }
+    if (step.action === "UPLOAD") {
+      // File upload is designated by @qa-fixture (author-controlled): the AI replays exactly that
+      // file, never one it chose. The scenario is blocked at compile time when the fixture is absent.
+      const fixturePath = scenario.fixtures?.[step.value];
+      if (typeof step.value !== "string" || typeof fixturePath !== "string") throw contractError("execute", "adaptive upload requires a declared @qa-fixture");
+      return { id: step.id, class: step.milestoneClass, status: "PENDING", description: "Upload the designated fixture to the required file input.", requiredAction: "upload_observed_element", target: structuredClone(step.target), fixture: { id: step.value, path: fixturePath } };
+    }
+    throw contractError("execute", `${step.action} is not supported by adaptive execution`);
   });
   const milestones = isSemantic
     ? [

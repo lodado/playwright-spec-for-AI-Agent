@@ -407,6 +407,31 @@ describe("milestone completion rule", () => {
   });
 });
 
+describe("adaptive file upload", () => {
+  const uploadQaIr = () => {
+    const qaIr = adaptiveQaIr();
+    const scenario = qaIr.suites[0].scenarios[0];
+    scenario.steps = scenario.steps.map((step) => (step.id === "click-settings" ? { ...step, action: "UPLOAD", value: "doc" } : step));
+    scenario.fixtures = { doc: "src/page/deep-parser/__QA__/fixtures/sample.pdf" };
+    return qaIr;
+  };
+
+  it("builds an upload_observed_element milestone carrying the designated @qa-fixture", () => {
+    const input = createAdaptiveExecutionInput({ qaIr: uploadQaIr(), scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-upload" });
+    const milestone = input.milestones.find((item) => item.requiredAction === "upload_observed_element");
+    expect(milestone).toBeDefined();
+    expect(milestone.fixture).toEqual({ id: "doc", path: "src/page/deep-parser/__QA__/fixtures/sample.pdf" });
+    expect(input.capabilityLease.actions).toContain("upload_observed_element"); // offered under the click policy
+  });
+
+  it("rejects an upload step whose fixture is not declared with @qa-fixture", () => {
+    const qaIr = uploadQaIr();
+    delete qaIr.suites[0].scenarios[0].fixtures;
+    expect(() => createAdaptiveExecutionInput({ qaIr, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-x" }))
+      .toThrow(/adaptive upload requires a declared @qa-fixture/);
+  });
+});
+
 function semanticJudgmentQaIr() {
   const qaIr = adaptiveQaIr();
   qaIr.extensions = { semanticJudgmentScenarioIds: ["scenario-settings"] };

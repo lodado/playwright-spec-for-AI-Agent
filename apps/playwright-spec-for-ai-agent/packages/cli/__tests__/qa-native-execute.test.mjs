@@ -125,6 +125,7 @@ describe("qa-native execute persistence", () => {
       "--spec=dashboard.spec.ts",
       "--base-url=https://example.test",
       "--run-dir=.qa/runs/run-1",
+      "--mode=strict",
     ], {
       cwd,
       env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
@@ -440,7 +441,7 @@ test.describe("dashboard", () => {
       "execute",
       "--spec=dashboard.spec.ts",
       "--base-url=https://example.test",
-      "--run-dir=.qa/runs/strict-fail",
+      "--run-dir=.qa/runs/strict-fail", "--mode=strict",
     ], {
       cwd,
       env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
@@ -466,7 +467,7 @@ test.describe("dashboard", () => {
       "execute",
       "--spec=dashboard.spec.ts",
       "--base-url=https://example.test",
-      "--run-dir=.qa/runs/failed",
+      "--run-dir=.qa/runs/failed", "--mode=strict",
     ], {
       cwd,
       env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
@@ -488,7 +489,7 @@ test.describe("dashboard", () => {
       "execute",
       "--spec=dashboard.spec.ts",
       "--base-url=https://example.test",
-      "--run-dir=.qa/runs/debug",
+      "--run-dir=.qa/runs/debug", "--mode=strict",
     ], {
       cwd,
       env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64"), QA_NATIVE_DEBUG: "1" },
@@ -508,7 +509,7 @@ test.describe("dashboard", () => {
       "execute",
       "--spec=dashboard.spec.ts",
       "--base-url=https://example.test",
-      "--run-dir=.qa/runs/summary",
+      "--run-dir=.qa/runs/summary", "--mode=strict",
     ], {
       cwd,
       env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
@@ -540,7 +541,7 @@ test.describe("dashboard", () => {
   }
 
   async function runStrictExecute(cwd, { runDir, capture, stderr = vi.fn() } = {}) {
-    return runQaNative(["execute", "--spec=dashboard.spec.ts", "--base-url=https://example.test", `--run-dir=${runDir}`], {
+    return runQaNative(["execute", "--spec=dashboard.spec.ts", "--base-url=https://example.test", `--run-dir=${runDir}`, "--mode=strict"], {
       cwd,
       env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
       handlers: { execute: (args) => { capture?.(args); return executeQaNative(args, { execute: fixtureExecution }); } },
@@ -581,7 +582,7 @@ test.describe("dashboard", () => {
     writeFileSync(explicit, "{}");
     chmodSync(explicit, 0o600);
     let captured;
-    const status = await runQaNative(["execute", "--spec=dashboard.spec.ts", "--base-url=https://example.test", "--run-dir=.qa/runs/run-explicit", "--storage-state=explicit.storage.json"], {
+    const status = await runQaNative(["execute", "--spec=dashboard.spec.ts", "--base-url=https://example.test", "--run-dir=.qa/runs/run-explicit", "--mode=strict", "--storage-state=explicit.storage.json"], {
       cwd,
       env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
       handlers: { execute: (args) => { captured = args.storageStatePath; return executeQaNative(args, { execute: fixtureExecution }); } },

@@ -13,26 +13,26 @@ import {
 } from "../index.mjs";
 
 describe("ACTION_SPECS derivations (behaviour-invariance locks)", () => {
-  it("keeps the exact 12-action vocabulary and order", () => {
+  it("keeps the exact action vocabulary and order", () => {
     expect(ADAPTIVE_ACTIONS).toEqual([
       "observe_dom", "observe_aria", "get_current_url", "navigate", "click_observed_element",
-      "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state",
+      "press_key", "hover_observed_element", "upload_observed_element", "scroll_view", "wait_for_element_state",
       "go_back", "reload_page", "report_blocked",
     ]);
   });
 
-  it("derives the pre-refactor safe-recovery set in the same order", () => {
+  it("derives the safe-recovery set in vocabulary order (upload is not a recovery action)", () => {
     expect(ADAPTIVE_ACTIONS.filter((action) => ACTION_SPECS[action].recovery)).toEqual([
       "observe_dom", "observe_aria", "get_current_url", "click_observed_element", "press_key",
       "hover_observed_element", "scroll_view", "wait_for_element_state", "report_blocked",
     ]);
   });
 
-  it("derives the pre-refactor element-bound set in the same order", () => {
-    expect(ELEMENT_BOUND_ACTIONS).toEqual(["click_observed_element", "hover_observed_element", "wait_for_element_state"]);
+  it("derives the element-bound set in vocabulary order", () => {
+    expect(ELEMENT_BOUND_ACTIONS).toEqual(["click_observed_element", "hover_observed_element", "upload_observed_element", "wait_for_element_state"]);
   });
 
-  it("reproduces the pre-refactor lease order for each policy combination", () => {
+  it("reproduces the lease order for each policy combination", () => {
     const allows = (policy, action) => {
       const requires = ACTION_SPECS[action].requiresPolicy;
       if (requires === "navigation") return policy.navigation === "ALLOWED";
@@ -46,7 +46,7 @@ describe("ACTION_SPECS derivations (behaviour-invariance locks)", () => {
     ]);
     expect(lease({ navigation: "ALLOWED", click: "SAFE_ONLY" })).toEqual([
       "observe_dom", "observe_aria", "get_current_url", "scroll_view", "wait_for_element_state", "report_blocked",
-      "navigate", "go_back", "reload_page", "click_observed_element", "press_key", "hover_observed_element",
+      "navigate", "go_back", "reload_page", "click_observed_element", "press_key", "hover_observed_element", "upload_observed_element",
     ]);
   });
 });

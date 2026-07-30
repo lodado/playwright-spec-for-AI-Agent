@@ -59,6 +59,9 @@ export const ACTION_SPECS = Object.freeze({
   click_observed_element: Object.freeze({ params: OBSERVED_ELEMENT_PARAMS, requiresPolicy: "click", recovery: true, elementBound: true }),
   press_key:              Object.freeze({ params: Object.freeze(["key"]), requiresPolicy: "click", recovery: true }),
   hover_observed_element: Object.freeze({ params: OBSERVED_ELEMENT_PARAMS, requiresPolicy: "click", recovery: true, elementBound: true }),
+  // Replays the milestone's designated @qa-fixture file into the observed file input. Not a recovery
+  // action — only offered when the scenario declares an upload milestone with a fixture.
+  upload_observed_element: Object.freeze({ params: OBSERVED_ELEMENT_PARAMS, requiresPolicy: "click", elementBound: true }),
   scroll_view:            Object.freeze({ params: Object.freeze(["deltaX", "deltaY"]), recovery: true }),
   wait_for_element_state: Object.freeze({ params: Object.freeze(["observationId", "elementId", "state", "timeoutMs"]), recovery: true, elementBound: true, provesSemantic: Object.freeze(["present", "visible"]) }),
   go_back:                Object.freeze({ params: NO_PARAMS, requiresPolicy: "navigation" }),
@@ -469,7 +472,7 @@ function validateExecutionAgentInput(value, path) {
   value.milestones.forEach((milestone, index) => {
     const milestonePath = `${path}.milestones[${index}]`;
     object(milestone, milestonePath, contract);
-    allowedKeys(milestone, ["id", "class", "status", "description", "requiredAction", "target", "expectation"], milestonePath, contract);
+    allowedKeys(milestone, ["id", "class", "status", "description", "requiredAction", "target", "expectation", "fixture"], milestonePath, contract);
     boundedString(milestone.id, 256, `${milestonePath}.id`, contract);
     oneOf(milestone.class, MILESTONE_CLASSES, `${milestonePath}.class`, contract);
     oneOf(milestone.status, ["PENDING", "COMPLETED", "BLOCKED"], `${milestonePath}.status`, contract);
@@ -487,6 +490,15 @@ function validateExecutionAgentInput(value, path) {
       if (milestone.target === undefined) fail(contract, `${milestonePath}.target`, "is required for REQUIRED_EXACT_ACTION");
     }
     else if (milestone.requiredAction !== undefined) fail(contract, `${milestonePath}.requiredAction`, "is only allowed for REQUIRED_EXACT_ACTION");
+    // A designated @qa-fixture for an upload milestone: its id (fixture name) and repo-relative path.
+    if (milestone.fixture !== undefined) {
+      if (milestone.requiredAction !== "upload_observed_element") fail(contract, `${milestonePath}.fixture`, "is only allowed for an upload_observed_element milestone");
+      object(milestone.fixture, `${milestonePath}.fixture`, contract);
+      allowedKeys(milestone.fixture, ["id", "path"], `${milestonePath}.fixture`, contract);
+      boundedString(milestone.fixture.id, 128, `${milestonePath}.fixture.id`, contract);
+      boundedString(milestone.fixture.path, 1_024, `${milestonePath}.fixture.path`, contract);
+    }
+    if (milestone.requiredAction === "upload_observed_element" && milestone.fixture === undefined) fail(contract, `${milestonePath}.fixture`, "is required for an upload_observed_element milestone");
   });
   const milestoneIds = value.milestones.map((milestone) => milestone.id);
   if (new Set(milestoneIds).size !== milestoneIds.length) fail(contract, `${path}.milestones`, "milestone ids must be unique");
@@ -1627,7 +1639,7 @@ function validateAdaptiveActionParameters(action, value, path, contract) {
   allowedKeys(value, ACTION_SPECS[action].params, path, contract);
   if (action === "navigate") {
     httpUrl(value.url, `${path}.url`, contract);
-  } else if (action === "click_observed_element" || action === "hover_observed_element") {
+  } else if (action === "click_observed_element" || action === "hover_observed_element" || action === "upload_observed_element") {
     boundedString(value.observationId, 256, `${path}.observationId`, contract);
     boundedString(value.elementId, 256, `${path}.elementId`, contract);
   } else if (action === "press_key") {

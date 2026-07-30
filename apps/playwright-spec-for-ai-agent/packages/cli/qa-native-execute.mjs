@@ -53,7 +53,7 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
       const runId = basename(runDirectory);
       const budget = { ...DEFAULT_ADAPTIVE_BUDGET, ...budgetOverrides };
       agentInputs = scenarios.map((scenario) => createAdaptiveInput({ qaIr, scenarioId: scenario.id, baseUrl, runId, budget, ...(allowedOrigins === undefined ? {} : { allowedOrigins }), ...(allowExternalRead === true ? { allowExternalRead: true } : {}) }));
-      execution = await executeAdaptive({ inputs: agentInputs, proposeAction: createProposer(), storageStatePath, authBootstrap });
+      execution = await executeAdaptive({ inputs: agentInputs, proposeAction: createProposer(), storageStatePath, authBootstrap, projectRoot });
       assertPlaywrightAdaptiveExecution(execution);
       try {
         agentOutcomes = execution.executions.map((entry, index) => validateContract("ExecutionAgentOutcome", entry.outcome, { input: agentInputs[index] }));

@@ -299,8 +299,9 @@ function normalizeRequest(request, cwd, pageSource) {
   const runDirectory = resolvePrivateQaPath(request.options["run-dir"], { cwd });
   if (request.command === "execute") {
     if (lstatIfExists(runDirectory)) throw new CliError("run directory already exists");
-    const provider = request.options.provider ?? "playwright";
-    const mode = request.options.mode ?? "strict";
+    // AI-native (hermes/adaptive) is the default; either flag alone infers the matching pair.
+    const provider = request.options.provider ?? (request.options.mode === "strict" ? "playwright" : "hermes");
+    const mode = request.options.mode ?? (provider === "playwright" ? "strict" : "adaptive");
     if (!((provider === "playwright" && mode === "strict") || (provider === "hermes" && mode === "adaptive"))) throw new CliError("execution provider and mode combination is unsupported");
     const storageStatePath = request.options["storage-state"] === undefined
       ? defaultStorageStatePath(cwd)
