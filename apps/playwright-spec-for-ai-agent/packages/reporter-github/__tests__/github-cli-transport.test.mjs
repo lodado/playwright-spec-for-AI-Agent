@@ -45,6 +45,21 @@ describe("GitHub CLI Issue transport", () => {
     expect(issueCall[2].env.APP_BROWSER_PASSWORD).toBeUndefined();
   });
 
+  it("treats a null pull_request from the gh jq projection as an issue", async () => {
+    // The search projection (`--jq {…,pull_request}`) emits null for plain issues; comparing with
+    // === undefined misclassified every found issue as a draft PR and failed dedup validation.
+    const fingerprint = `sha256:${"a".repeat(64)}`;
+    const spawn = vi.fn((command, args) => {
+      if (args.includes("search/issues")) return { status: 0, stdout: Buffer.from(JSON.stringify({ total_count: 1, items: [{ number: 42, state: "open", html_url: "https://github.com/owner/example/issues/42", pull_request: null }] })) };
+      return { status: 0, stdout: Buffer.from(JSON.stringify({ number: 42, state: "open", html_url: "https://github.com/owner/example/issues/42", body: `<!-- qa-fingerprint: ${fingerprint} -->` })) };
+    });
+    const transport = createGitHubCliIssueTransport({ spawn });
+    const matches = await transport.findOpenPublications({ repository: "owner/example", fingerprint });
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0].publication).toBe("ISSUE");
+  });
+
   it("fails closed on content drift and CLI errors", async () => {
     const revision = "a".repeat(40);
     const drift = createGitHubCliIssueTransport({ spawn: vi.fn().mockReturnValueOnce({ status: 0, stdout: Buffer.from(revision) }).mockReturnValueOnce({ status: 0, stdout: Buffer.from("changed") }) });

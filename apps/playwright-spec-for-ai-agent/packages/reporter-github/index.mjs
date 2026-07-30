@@ -24,7 +24,7 @@ export function createGitHubCliIssueTransport({ spawn = spawnSync } = {}) {
       if (!search || !Number.isSafeInteger(search.total_count) || search.total_count < 0 || search.total_count > MAX_PUBLICATION_MATCHES || !Array.isArray(search.items) || search.items.length > MAX_PUBLICATION_MATCHES) throw new Error("GitHub publication search is ambiguous");
       for (const item of search.items) {
         if (!item || item.state !== "open" || !Number.isSafeInteger(item.number) || item.number < 1 || seen.has(item.number)) continue;
-        const publication = item.pull_request === undefined ? "ISSUE" : "DRAFT_PR";
+        const publication = item.pull_request == null ? "ISSUE" : "DRAFT_PR"; // jq projections emit null for absent keys
         const found = awaitGitHubPublication(spawn, target, { publication, number: item.number, url: item.html_url });
         if (!hasFingerprintMarker(found.body, fingerprint)) continue;
         matches.push(found);
@@ -39,7 +39,7 @@ export function createGitHubCliIssueTransport({ spawn = spawnSync } = {}) {
       if (!Array.isArray(items) || items.length >= 100) throw new Error("GitHub recent publication search is ambiguous");
       return items.flatMap((item) => {
         if (!item || item.state !== "open" || !Number.isSafeInteger(item.number) || item.number < 1 || typeof item.body !== "string" || !hasFingerprintMarker(item.body, fingerprint)) return [];
-        const publication = item.pull_request === undefined ? "ISSUE" : "DRAFT_PR";
+        const publication = item.pull_request == null ? "ISSUE" : "DRAFT_PR"; // jq projections emit null for absent keys
         return [awaitGitHubPublication(spawn, target, { publication, number: item.number, url: item.html_url })];
       });
     },
