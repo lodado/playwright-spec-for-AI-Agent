@@ -90,28 +90,28 @@ test("driver close failure replaces a success with runtime_error", async () => {
   assert.equal(result.session.terminalReason.code, "DRIVER_FAILED");
 });
 
-test("seal failure persists runtime_error instead of leaving a success artifact", async () => {
+test("seal failure degrades one session to runtime_error without aborting or faking success", async () => {
   const store = memoryStore();
   store.sealManifest = async () => {
     throw new Error("disk full");
   };
 
-  await assert.rejects(
-    () => runSession({
-      study,
-      task: study.tasks[0],
-      persona: study.personas[0],
-      seed: 101,
-      runId: "run-seal-error",
-      sessionId: "session-seal-error",
-      driver: fakeDriver({ successAfterObserve: 1 }),
-      policy: { decide: () => ({ type: "finish", reasonCode: "done" }) },
-      oracle: { evaluate: () => ({ definitiveSuccess: true }) },
-      store,
-    }),
-    (error) => error.code === "EVIDENCE_SEAL_FAILED",
-  );
+  const result = await runSession({
+    study,
+    task: study.tasks[0],
+    persona: study.personas[0],
+    seed: 101,
+    runId: "run-seal-error",
+    sessionId: "session-seal-error",
+    driver: fakeDriver({ successAfterObserve: 1 }),
+    policy: { decide: () => ({ type: "finish", reasonCode: "done" }) },
+    oracle: { evaluate: () => ({ definitiveSuccess: true }) },
+    store,
+  });
 
+  assert.equal(result.session.status, "runtime_error");
+  assert.equal(result.session.terminalReason.code, "EVIDENCE_SEAL_FAILED");
+  assert.ok(result.manifest, "in-memory manifest is still returned for reporting");
   assert.deepEqual(store.calls.at(-1), ["session", "RUNTIME_ERROR"]);
 });
 
@@ -207,7 +207,7 @@ test("semanticSnapshot off omits persisted semantic evidence", async () => {
   assert.equal(result.manifest.entries.some((entry) => entry.type === "semantic_snapshot"), false);
 });
 
-test("action budget exhaustion becomes runtime_error instead of false pass", async () => {
+test("action budget exhaustion becomes a clean abandonment, not runtime_error or a false pass", async () => {
   const limitedTask = { ...study.tasks[0], maxActions: 1 };
   const result = await runSession({
     study: { ...study, tasks: [limitedTask] },
@@ -223,7 +223,9 @@ test("action budget exhaustion becomes runtime_error instead of false pass", asy
   });
 
   assert.equal(result.session.phase, "EVIDENCE_SEALED");
-  assert.equal(result.session.transitions.some((transition) => transition.phase === "RUNTIME_ERROR"), true);
+  assert.equal(result.session.status, "abandoned");
+  assert.equal(result.session.transitions.some((transition) => transition.phase === "ABANDONED"), true);
+  assert.equal(result.session.transitions.some((transition) => transition.phase === "RUNTIME_ERROR"), false);
   assert.equal(result.session.terminalReason.code, "ACTION_BUDGET_EXHAUSTED");
 });
 
@@ -450,35 +452,36 @@ test("runStudy creates a unique run id for each invocation", async () => {
   assert.notEqual(first.runId, second.runId);
 });
 
-test("runStudy stops scheduling after failure and awaits active sibling cleanup", async () => {
+test("one session's seal failure does not abort the run; every session still completes", async () => {
   const starts = [];
   let siblingClosed = false;
   const concurrentStudy = { ...study, runtime: { seeds: [1, 2, 3], concurrency: 2 } };
 
-  await assert.rejects(
-    () => runStudy({
-      study: concurrentStudy,
-      driverFactory: ({ seed }) => fakeDriver({
-        successAfterObserve: 1,
-        asyncStart: async () => starts.push(seed),
-        asyncClose: seed === 2
-          ? async () => {
-            await new Promise((resolve) => setTimeout(resolve, 20));
-            siblingClosed = true;
-          }
-          : undefined,
-      }),
-      policyFactory: () => ({ decide: () => ({ type: "finish", reasonCode: "done" }) }),
-      oracle: { evaluate: () => ({ definitiveSuccess: true }) },
-      storeFactory: ({ seed }) => seed === 1
-        ? { ...memoryStore(), sealManifest: async () => { throw new Error("disk full"); } }
-        : memoryStore(),
+  const result = await runStudy({
+    study: concurrentStudy,
+    driverFactory: ({ seed }) => fakeDriver({
+      successAfterObserve: 1,
+      asyncStart: async () => starts.push(seed),
+      asyncClose: seed === 2
+        ? async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          siblingClosed = true;
+        }
+        : undefined,
     }),
-    (error) => error.code === "EVIDENCE_SEAL_FAILED",
-  );
+    policyFactory: () => ({ decide: () => ({ type: "finish", reasonCode: "done" }) }),
+    oracle: { evaluate: () => ({ definitiveSuccess: true }) },
+    storeFactory: ({ seed }) => seed === 1
+      ? { ...memoryStore(), sealManifest: async () => { throw new Error("disk full"); } }
+      : memoryStore(),
+  });
 
-  assert.deepEqual(starts, [1, 2]);
+  assert.equal(result.results.length, 3);
+  assert.deepEqual([...starts].sort(), [1, 2, 3]);
   assert.equal(siblingClosed, true);
+  const failed = result.results.find((item) => item.session.seed === 1);
+  assert.equal(failed.session.status, "runtime_error");
+  assert.ok(result.results.filter((item) => item.session.seed !== 1).every((item) => item.session.status === "success"));
 });
 
 test("counterbalances paired variant order and sends each variant URL to the driver", async () => {

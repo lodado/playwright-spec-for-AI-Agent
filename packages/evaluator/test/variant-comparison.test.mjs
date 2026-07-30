@@ -4,13 +4,16 @@ import test from "node:test";
 import { compareVariants, evaluateReleaseGate } from "../src/index.mjs";
 
 test("compares paired variant metrics as relative release evidence", () => {
-  const baselineSessions = [session("b1", "p1", "success"), session("b2", "p2", "success"), session("b3", "p3", "success")];
-  const candidateSessions = [session("c1", "p1", "abandoned"), session("c2", "p2", "failure"), session("c3", "p3", "success")];
+  const baselineSessions = ["b1", "b2", "b3", "b4", "b5"].map((id, index) => session(id, `p${index + 1}`, "success"));
+  const candidateSessions = [
+    session("c1", "p1", "abandoned"), session("c2", "p2", "failure"), session("c3", "p3", "abandoned"),
+    session("c4", "p4", "failure"), session("c5", "p5", "success"),
+  ];
   const report = compareVariants({
     baselineSessions,
     candidateSessions,
-    baselineFingerprints: [fp("b1", 4, 0), fp("b2", 5, 0), fp("b3", 5, 0)],
-    candidateFingerprints: [fp("c1", 9, 0.2), fp("c2", 10, 0.3), fp("c3", 8, 0.1)],
+    baselineFingerprints: ["b1", "b2", "b3", "b4", "b5"].map((id) => fp(id, 4, 0)),
+    candidateFingerprints: ["c1", "c2", "c3", "c4", "c5"].map((id, index) => fp(id, 8 + (index % 3), 0.2)),
     candidateFindings: [{ id: "finding-candidate", maturity: "reproduced_synthetic_finding" }],
     orderResults: ["baseline_better", "baseline_better"],
   });
@@ -40,10 +43,10 @@ test("marks reversed order disagreement unstable", () => {
 
 test("reports candidate_better with candidate-minus-baseline delta direction", () => {
   const report = compareVariants({
-    baselineSessions: [session("b1", "p1", "abandoned"), session("b2", "p2", "failure")],
-    candidateSessions: [session("c1", "p1", "success"), session("c2", "p2", "success")],
-    baselineFingerprints: [fp("b1", 8, 0.2), fp("b2", 9, 0.3)],
-    candidateFingerprints: [fp("c1", 4, 0), fp("c2", 5, 0)],
+    baselineSessions: ["b1", "b2", "b3", "b4", "b5"].map((id, index) => session(id, `p${index + 1}`, index % 2 ? "failure" : "abandoned")),
+    candidateSessions: ["c1", "c2", "c3", "c4", "c5"].map((id, index) => session(id, `p${index + 1}`, "success")),
+    baselineFingerprints: ["b1", "b2", "b3", "b4", "b5"].map((id) => fp(id, 8, 0.2)),
+    candidateFingerprints: ["c1", "c2", "c3", "c4", "c5"].map((id) => fp(id, 4, 0)),
     orderResults: ["candidate_better", "candidate_better"],
   });
 

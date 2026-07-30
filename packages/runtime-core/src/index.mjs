@@ -86,6 +86,14 @@ const STATUS_BY_TERMINAL_PHASE = Object.freeze({
   MANUAL_REVIEW: "manual_review",
 });
 
+// Budget exhaustion is a behavioral outcome (the persona ran out of actions/time/patience), not an
+// infrastructure fault — it terminates as ABANDONED with the budget code preserved, never runtime_error.
+const BUDGET_TERMINAL_REASONS = Object.freeze({
+  ACTION_BUDGET_EXHAUSTED: "action_budget",
+  TIME_BUDGET_EXHAUSTED: "time_budget",
+  NO_PROGRESS_BUDGET_EXHAUSTED: "no_progress",
+});
+
 const ELEMENT_ACTIONS = new Set(["click", "type", "select", "ignore"]);
 const NON_PROGRESS_ACTIONS = new Set(["wait", "observe_more", "ignore", "idle"]);
 const INTERACTION_RESULT_CODE_SET = new Set(INTERACTION_RESULT_CODES);
@@ -325,7 +333,12 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
       runtimeError = toRuntimeError(metadataError);
     }
     if (!TERMINAL_PHASES.includes(session.phase)) {
-      await setPhase("RUNTIME_ERROR", { terminalReason: { code: runtimeError.code, message: runtimeError.message } });
+      const budgetReason = BUDGET_TERMINAL_REASONS[runtimeError.code];
+      if (budgetReason) {
+        await setPhase("ABANDONED", { terminalReason: { code: runtimeError.code, message: runtimeError.message }, reasonCode: budgetReason });
+      } else {
+        await setPhase("RUNTIME_ERROR", { terminalReason: { code: runtimeError.code, message: runtimeError.message } });
+      }
     }
   } finally {
     if (handle !== undefined) {
@@ -348,17 +361,14 @@ export async function runSession({ study, task, persona, seed, variant, runId, s
     for (const observation of observations) await store.appendObservation?.(observation);
   }
 
-  let manifest;
-  try {
-    manifest = await sealSessionEvidence({ study, session, observations, events, driverEvidence, modelAttempts, store, now: now() });
-  } catch (error) {
-    const runtimeError = toRuntimeError(error);
+  const { manifest, sealError } = await sealSessionEvidence({ study, session, observations, events, driverEvidence, modelAttempts, store, now: now() });
+  if (sealError) {
     if (session.phase !== "RUNTIME_ERROR") {
-      await setPhase("RUNTIME_ERROR", { terminalReason: { code: runtimeError.code, message: runtimeError.message } });
+      await setPhase("RUNTIME_ERROR", { terminalReason: { code: sealError.code, message: sealError.message } });
     }
-    throw runtimeError;
+  } else {
+    await setPhase("EVIDENCE_SEALED", { evidenceManifestId: manifest.id });
   }
-  await setPhase("EVIDENCE_SEALED", { evidenceManifestId: manifest.id });
   return deepFreeze({ session, manifest, observations, events });
 }
 
@@ -472,12 +482,15 @@ async function sealSessionEvidence({ study, session, observations, events, drive
     },
   };
   const manifest = validateEvidenceManifest({ ...manifestBody, manifestHash: hashJson(manifestBody) });
+  // The manifest is valid in memory before persistence; a failed disk write degrades this one session
+  // to runtime_error but must not abort the run, so surface the error rather than throwing it.
+  let sealError;
   try {
     await store.sealManifest?.(manifest);
   } catch (error) {
-    throw new RuntimeCoreError(RUNTIME_ERROR_CODES.EVIDENCE_SEAL_FAILED, "failed to seal session evidence", { cause: error });
+    sealError = new RuntimeCoreError(RUNTIME_ERROR_CODES.EVIDENCE_SEAL_FAILED, "failed to seal session evidence", { cause: error });
   }
-  return manifest;
+  return { manifest, sealError };
 }
 
 function collectModelAttempts(target, attempts) {
