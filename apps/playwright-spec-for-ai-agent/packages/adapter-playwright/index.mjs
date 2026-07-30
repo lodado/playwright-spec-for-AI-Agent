@@ -107,7 +107,15 @@ function scenarioFromLegacyTest(legacy, test, index, block, source, sourcePath, 
   // statically — record its id so `execute --allow-partial` skips it instead of exploding in
   // createExecutionPlan (a NAVIGATE step under a BLOCKED policy is a plan-validation error).
   const policyBlocked = String(test.liveRunPolicy ?? "").startsWith("blocked-");
-  if (scenarioBlocked || parsedActions === undefined || policyBlocked) blockedScenarioIds.push(id);
+  // File upload is an exception path: an UPLOAD step replays a declared `@qa-fixture` file, so its
+  // setInputFiles argument must name a fixture the test declared. An upload with no resolvable
+  // fixture cannot run statically — block the scenario so it is skipped, never executed blind.
+  const fixtures = test.fixtures ?? {};
+  const uploadFixtureUnresolved = (parsedActions ?? []).some(
+    (action) => action.action === "UPLOAD" && (typeof action.value !== "string" || !Object.hasOwn(fixtures, action.value)),
+  );
+  if (uploadFixtureUnresolved) diagnostics.push(diagnostic("UPLOAD_FIXTURE_UNRESOLVED", "WARNING", `Upload step has no matching @qa-fixture in test: ${test.title}`, sourcePath, positionAt(source, block?.index ?? 0)));
+  if (scenarioBlocked || parsedActions === undefined || policyBlocked || uploadFixtureUnresolved) blockedScenarioIds.push(id);
   // A judgment-* live policy (mock-api / interaction-no-confirm) means the expectations were
   // authored against mock data — record the id so the judge/adaptive layers judge structure,
   // not literals. Mirrors the blockedScenarioIds side channel above.
@@ -120,6 +128,7 @@ function scenarioFromLegacyTest(legacy, test, index, block, source, sourcePath, 
     steps: stepsFromLegacy(legacy, test, discriminator, expectations, parsedActions ?? []),
     expectations,
     policy: clonePolicy(POLICY_BY_LIVE_RUN[test.liveRunPolicy] ?? blockedPolicy()),
+    ...(test.fixtures && Object.keys(test.fixtures).length > 0 ? { fixtures: clone(test.fixtures) } : {}),
     provenance: [clone(provenance)],
   };
 }

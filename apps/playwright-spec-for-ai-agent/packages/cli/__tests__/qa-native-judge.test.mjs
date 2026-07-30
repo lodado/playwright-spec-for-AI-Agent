@@ -111,7 +111,7 @@ describe("qa-native offline judge", () => {
     const stderr = vi.fn();
     expect(await dispatch(unauthenticated.cwd, {}, { key: Buffer.alloc(32, 0x62), stderr })).toBe(1);
     expect(existsSync(join(unauthenticated.runDirectory, "judgments"))).toBe(false);
-    expect(stderr).toHaveBeenCalledWith("qa-native: command failed\n");
+    expect(stderr).toHaveBeenCalledWith("qa-native: judge failed: Error\n");
 
     const failed = persistedRun({ scenarioCount: 2, deterministic: true });
     let calls = 0;

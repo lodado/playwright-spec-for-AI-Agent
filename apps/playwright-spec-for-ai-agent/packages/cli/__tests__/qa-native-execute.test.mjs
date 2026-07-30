@@ -8,8 +8,34 @@ import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_AGENT_INPUT_VERSION, RUNTI
 import { createAdaptiveExecutionInput, DEFAULT_ADAPTIVE_BUDGET } from "../../core/index.mjs";
 import { createInMemoryEvidenceStore, readEvidenceArchive } from "../../evidence/index.mjs";
 import { playwrightExecutionCapabilities, runAdaptiveSuiteWithPlaywright, runAdaptiveWithPlaywright } from "../../provider-playwright/index.mjs";
-import { executeQaNative } from "../qa-native-execute.mjs";
+import { compilePlaywrightSpec } from "../../adapter-playwright/index.mjs";
+import { executeQaNative, mergeCompileResults } from "../qa-native-execute.mjs";
 import { runQaNative } from "../qa-native.mjs";
+
+describe("mergeCompileResults", () => {
+  const compileSource = (scenario, sourcePath) => compilePlaywrightSpec({
+    source: `// @qa-scenario: ${scenario}\ntest.describe("${scenario}", () => {\n  // @qa-live-policy: readonly\n  test("t", async ({ page }) => { await expect(page.getByText("X")).toBeVisible(); });\n});\n`,
+    sourcePath,
+  });
+
+  it("unions the scenarios of every compiled spec into one QA IR", () => {
+    const merged = mergeCompileResults([compileSource("A", "dir/a.spec.ts"), compileSource("B", "dir/b.spec.ts")]);
+    expect(merged.ok).toBe(true);
+    expect(merged.qaIr.suites).toHaveLength(2);
+    expect(merged.qaIr.suites.flatMap((suite) => suite.scenarios)).toHaveLength(2);
+    expect(merged.qaIr.id).toMatch(/^qa-ir:/);
+  });
+
+  it("carries the union of blocked scenario ids so page mode can skip them", () => {
+    const runnable = compileSource("A", "dir/a.spec.ts");
+    const blocked = compilePlaywrightSpec({
+      source: `// @qa-scenario: B\ntest.describe("B", () => {\n  // @qa-live-policy: skip\n  test("t", async ({ page }) => { await expect(page.getByText("X")).toBeVisible(); });\n});\n`,
+      sourcePath: "dir/b.spec.ts",
+    });
+    const merged = mergeCompileResults([runnable, blocked]);
+    expect(merged.qaIr.extensions.blockedScenarioIds ?? []).toEqual(blocked.qaIr.extensions.blockedScenarioIds);
+  });
+});
 
 const temporaryDirectories = [];
 const integrityKey = Buffer.alloc(32, 0x63);
@@ -451,7 +477,7 @@ test.describe("dashboard", () => {
 
     expect(status).toBe(1);
     expect(existsSync(join(cwd, ".qa", "runs", "failed"))).toBe(false);
-    expect(stderr).toHaveBeenCalledWith("qa-native: command failed\n");
+    expect(stderr).toHaveBeenCalledWith("qa-native: execute failed: Error\n");
     expect(JSON.stringify(stderr.mock.calls)).not.toContain("archive-secret");
   });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  ADAPTIVE_ACTIONS,
   EXECUTION_ACTION_PROPOSAL_VERSION,
   EXECUTION_AGENT_INPUT_VERSION,
   CODE_CONTEXT_VERSION,
@@ -185,6 +186,11 @@ describe("Hermes judge provider", () => {
     oversized.milestones = Array.from({ length: 64 }, (_, index) => ({ ...oversized.milestones[0], id: `milestone-${index}`, description: `milestone ${index} ${"large description ".repeat(240)}`.slice(0, 4_096) }));
     oversized.currentMilestoneId = "milestone-0";
     expect(() => buildHermesExecutionQuery(oversized)).toThrow(/size limit/);
+  });
+
+  it("names every adaptive action in the execution prompt so new actions cannot ship undocumented", () => {
+    const query = buildHermesExecutionQuery(executionAgentInput());
+    for (const action of ADAPTIVE_ACTIONS) expect(query).toContain(action);
   });
 
   it("asks Hermes for one text-only PatchProposal without repository tools", async () => {

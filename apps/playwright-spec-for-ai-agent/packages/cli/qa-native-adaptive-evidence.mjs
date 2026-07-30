@@ -1,5 +1,12 @@
+// Integrity only. This file verifies that sealed adaptive evidence is untampered and bound to its
+// run; it does not re-derive execution semantics. Milestone completion (milestoneCompletionRule),
+// action vocabulary and artifact shape (auditArtifactShape) live in core and contracts and are
+// imported here, never re-implemented. This separation is deliberate: the 2.3.0 regression was a
+// local copy of completion semantics drifting from the runtime and rejecting its own output. What
+// stays local is pure integrity — HMAC (via verifyStoredEvidence), run/scenario/lease binding,
+// origin containment, checkpoint-to-manifest matching, and page continuity across the audit chain.
 import { TextDecoder } from "node:util";
-import { validateContract } from "../contracts/index.mjs";
+import { auditArtifactShape, validateContract } from "../contracts/index.mjs";
 import { milestoneCompletionRule } from "../core/index.mjs";
 import { verifyStoredEvidence } from "../evidence/index.mjs";
 
@@ -16,13 +23,10 @@ export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, man
   const audits = bundles.map((bundle) => {
     const verified = verifyStoredEvidence({ bundle, manifest, readBlob });
     if (verified.bundle.runId !== input.runId || verified.bundle.scenarioId !== input.scenarioId) throw new Error("adaptive evidence is bound to a different run or scenario");
-    const domArtifacts = verified.bundle.artifacts.filter((artifact) => artifact.type === "DOM_SNAPSHOT");
-    const ariaArtifacts = verified.bundle.artifacts.filter((artifact) => artifact.type === "ARIA_SNAPSHOT");
+    // The action log must exist to read the proposal; the full artifact shape is action-dependent,
+    // so it is checked once the action is known.
     const actionArtifacts = verified.bundle.artifacts.filter((artifact) => artifact.type === "ACTION_LOG");
-    // report_blocked audits seal one extra VISIBLE_TEXT artifact (the page the agent claims is
-    // blocked); every other action seals exactly the five pre/post snapshots plus the action log.
-    const visibleTextArtifacts = verified.bundle.artifacts.filter((artifact) => artifact.type === "VISIBLE_TEXT");
-    if (verified.bundle.artifacts.length !== 5 + visibleTextArtifacts.length || visibleTextArtifacts.length > 1 || domArtifacts.length !== 2 || ariaArtifacts.length !== 2 || actionArtifacts.length !== 1) throw new Error("adaptive checkpoint evidence is incomplete");
+    if (actionArtifacts.length !== 1) throw new Error("adaptive checkpoint evidence is incomplete");
     let audit;
     try {
       audit = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(verified.readBlob(actionArtifacts[0].storageRef)));
@@ -33,7 +37,7 @@ export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, man
     const invalidSatisfiedMilestones = audit.satisfiedMilestoneIds !== undefined && (!Array.isArray(audit.satisfiedMilestoneIds) || audit.satisfiedMilestoneIds.some((id) => !input.milestones.some((milestone) => milestone.id === id)));
     if (audit.status !== "ACCEPTED" || invalidSatisfiedMilestones) throw new Error("adaptive action evidence is invalid");
     const proposal = validateContract("ExecutionActionProposal", audit.proposal);
-    if (visibleTextArtifacts.length === 1 && proposal.action !== "report_blocked") throw new Error("adaptive checkpoint evidence is incomplete");
+    if (!matchesAuditArtifactShape(verified.bundle.artifacts, auditArtifactShape(proposal.action))) throw new Error("adaptive checkpoint evidence is incomplete");
     if (proposal.runId !== input.runId || proposal.scenarioId !== input.scenarioId || proposal.leaseId !== input.capabilityLease.leaseId || !input.capabilityLease.actions.includes(proposal.action)) throw new Error("adaptive action evidence is bound to a different execution");
     if (!input.milestones.some((milestone) => milestone.id === proposal.milestoneId) || verified.bundle.checkpointId !== proposal.proposalId) throw new Error("adaptive action evidence is bound to an unknown milestone");
     validateAuditPage(audit.before, input.capabilityLease.allowedOrigins);
@@ -67,6 +71,15 @@ export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, man
   // Non-COMPLETED outcomes (ERROR/BLOCKED) seal only partial evidence: their bundle integrity and
   // sequencing above are still verified, but they need not cover every required milestone.
   if (outcome.type === "COMPLETED" && (milestoneIndex !== requiredMilestones.length || requiredMilestones.some((milestone) => !outcome.completedMilestoneIds.includes(milestone.id)))) throw new Error("adaptive milestone completion lacks accepted evidence");
+}
+
+function matchesAuditArtifactShape(artifacts, shape) {
+  const counts = artifacts.reduce((totals, artifact) => ({ ...totals, [artifact.type]: (totals[artifact.type] ?? 0) + 1 }), {});
+  const requiredCounts = shape.required.reduce((totals, entry) => ({ ...totals, [entry.type]: (totals[entry.type] ?? 0) + 1 }), {});
+  const admissible = new Set([...Object.keys(requiredCounts), ...shape.optional]);
+  return Object.entries(requiredCounts).every(([type, count]) => counts[type] === count)
+    && shape.optional.every((type) => (counts[type] ?? 0) <= 1)
+    && Object.keys(counts).every((type) => admissible.has(type));
 }
 
 function isExactObject(value, keys) {

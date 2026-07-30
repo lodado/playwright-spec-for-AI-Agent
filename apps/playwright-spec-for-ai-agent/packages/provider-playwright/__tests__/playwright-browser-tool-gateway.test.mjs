@@ -164,6 +164,7 @@ function fakeBrowser({
       wheel: vi.fn(async (deltaX, deltaY) => calls.push(["scroll", deltaX, deltaY])),
     },
     waitForFunction: vi.fn(async () => calls.push(["wait-for-function"])),
+    evaluate: vi.fn(async () => undefined),
   };
   const context = {
     route: vi.fn(async (_pattern, handler) => {
@@ -184,6 +185,8 @@ function fakeBrowser({
     calls,
     screenshots,
     candidate,
+    page,
+    htmlLocator,
   };
 }
 
@@ -363,6 +366,30 @@ describe("Playwright browser tool gateway", () => {
     expect(fixture.calls).toContainEqual(["goto", "https://example.test/settings"]);
     expect(fixture.calls.filter(([action]) => action === "continue")).toHaveLength(2);
     expect(gateway.agentInput().recentObservations).toEqual([]);
+    await gateway.close();
+  });
+
+  it("settles the page after navigation before sealing post-action evidence", async () => {
+    const fixture = fakeBrowser();
+    const input = executionAgentInput();
+    input.milestones[0].status = "COMPLETED";
+    input.currentMilestoneId = "dialog-visible";
+    input.capabilityLease.actions.push("navigate");
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
+    expect(fixture.page.evaluate).toHaveBeenCalledTimes(1);
+    expect(fixture.page.evaluate.mock.calls[0][1]).toEqual({ capMs: 5_000, quietMs: 300 });
+
+    await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "navigate", { url: "https://example.test/settings" }),
+      tokensUsed: 2,
+    });
+
+    expect(fixture.page.evaluate).toHaveBeenCalledTimes(2);
+    const settleOrder = fixture.page.evaluate.mock.invocationCallOrder[1];
+    const gotoOrder = fixture.page.goto.mock.invocationCallOrder.at(-1);
+    const afterCaptureOrder = fixture.htmlLocator.evaluate.mock.invocationCallOrder.at(-1);
+    expect(settleOrder).toBeGreaterThan(gotoOrder);
+    expect(settleOrder).toBeLessThan(afterCaptureOrder);
     await gateway.close();
   });
 

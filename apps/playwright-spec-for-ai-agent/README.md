@@ -78,6 +78,31 @@ evidence manifest. Unclear live states become `MANUAL_REVIEW`; they are not
 forced into pass or fail. A strict read-only provider (`--provider=playwright
 --mode=strict`) is available for evidence capture without an inference model.
 
+### Choosing the spec: `--spec` vs `--page`
+
+`execute` needs exactly one spec source, and an explicit spec always wins:
+
+- **`--spec=<file>`** — run that one spec file. Requires `--base-url`. Use this
+  to pin an exact, predetermined spec so nothing improvises which tests run.
+- **`--page=<name>`** — resolve the page's _designated_ specs from the project
+  config (`hermes-qa.config.mjs` / `playwright-spec-for-ai-agent.config.mjs`)
+  instead of naming a file. The config's `paths.specDir` / per-page `specDir`
+  locates the page's `__tests__` directory; every `*.spec.ts` in it is compiled
+  and merged into one run, `--base-url` defaults to `batch.defaultBaseUrl`, and
+  the scenarios that cannot run against the live target (`@qa-live-skip`, or a
+  `@qa-live-policy` that blocks navigation/DOM such as `skip` / `auth-mock` /
+  `subscription-mutation`) are skipped — leaving only the page's live-runnable
+  specs. `--config=<file>` overrides config auto-discovery.
+
+```bash
+# Run the dashboard page's designated specs, base URL from config:
+npx qa-native execute --page=dashboard --run-dir=.qa/runs/dashboard-1 \
+  --provider=hermes --mode=adaptive
+```
+
+Giving both `--spec` and `--page`, or neither, is an error. This keeps a QA run
+tied to the specs you defined for a page rather than an ad-hoc plan.
+
 See the [QA Native guide](docs/qa-native.md) and the
 [one-shot runbook](docs/qa-native-one-shot-runbook.md) for the full flow,
 operator setup, and verdict handling.
@@ -107,11 +132,35 @@ secret-handling constraints.
 File annotations belong before imports; live policy belongs above each test or a
 shared `describe`.
 
-| Annotation        | Required | Purpose                                                     |
-| ----------------- | -------- | ----------------------------------------------------------- |
-| `@qa-page`        | No       | Page id; the target path resolves relative to `--base-url`. |
-| `@qa-scenario`    | Yes      | Name the scenario or account state.                         |
-| `@qa-live-policy` | Yes      | Declare what live interaction is safe.                      |
+| Annotation        | Required | Purpose                                                                            |
+| ----------------- | -------- | ---------------------------------------------------------------------------------- |
+| `@qa-page`        | No       | Page id; the target path resolves relative to `--base-url`.                        |
+| `@qa-scenario`    | Yes      | Name the scenario or account state.                                                |
+| `@qa-live-policy` | Yes      | Declare what live interaction is safe.                                             |
+| `@qa-live-skip`   | No       | `true` skips the test (or whole file at file level) on live; it is never executed. |
+| `@qa-fixture`     | No       | `name=repo-relative/path` file for an `setInputFiles("name")` upload (see below).  |
+
+### File uploads (`@qa-fixture`)
+
+File upload is the one interaction that replays a real file, so it is an
+exception path handled only in **strict** mode (`--provider=playwright
+--mode=strict`) — the adaptive/AI provider never uploads. Declare the file and
+name it in the `setInputFiles` call:
+
+```ts
+// @qa-scenario: UPLOAD
+// @qa-live-policy: safe-interaction
+// @qa-fixture: doc=src/page/deep-parser/__QA__/fixtures/sample.pdf
+test("uploads a document", async ({ page }) => {
+  await page.getByTestId("file-input").setInputFiles("doc"); // "doc" names the @qa-fixture
+  await expect(page.getByText("업로드 완료")).toBeVisible();
+});
+```
+
+The fixture path is repo-relative and resolved strictly inside the project root
+(no symlink escape, 32 MB cap) before Playwright touches it. An upload whose
+`setInputFiles` argument does not name a declared `@qa-fixture` is blocked (a
+`UPLOAD_FIXTURE_UNRESOLVED` diagnostic), so it is skipped rather than run blind.
 
 Supported live policies:
 
@@ -198,6 +247,29 @@ patches, pull requests, or merges.
 Read the [QA Native guide](docs/qa-native.md) before enabling patch verification
 or GitHub publication.
 
+## Commands
+
+`execute` → `judge` → `report` → `publish-issue` is the core flow; the rest support
+replay and remediation. Run `qa-native --help` for full flags.
+
+| Command         | Purpose                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------- |
+| `execute`       | Compile the spec(s) and run them against live staging, sealing browser evidence.              |
+| `judge`         | Turn sealed evidence into a `PASS` / `FAIL` / `MANUAL_REVIEW` / `SKIP` verdict.               |
+| `replay`        | Re-verify a sealed run's evidence offline, without a browser.                                 |
+| `diagnose`      | Produce a failure diagnosis for a judged run.                                                 |
+| `suggest-fix`   | Add a repair recommendation on top of the diagnosis.                                          |
+| `report`        | Connect a failure to source at a pinned commit; write diagnosis, code context, and repair.    |
+| `propose-patch` | Generate a candidate patch for a reported failure.                                            |
+| `verify-patch`  | Verify a proposed patch under strict checks before it can be published.                       |
+| `publish-issue` | Publish a code-backed GitHub Issue (idempotent; see above).                                   |
+| `publish`       | Report and publish in one authenticated step (`--publish=auto`).                              |
+| `remediate`     | End-to-end remediation: a private worktree and Draft PR after strict verification (no merge). |
+
+Report, publish, and remediate commands take `--repository-root=.` and `--revision=<commit>`;
+publication commands also take `--repository=<owner/repo>`. Select one result of a multi-failure run
+with `--judgment=<result.json>`.
+
 ## Troubleshooting
 
 | Symptom                               | Fix                                                                                                            |
@@ -208,12 +280,13 @@ or GitHub publication.
 | Model configuration is missing        | Configure `~/.hermes/config.yaml` or `HERMES_INFERENCE_MODEL`.                                                 |
 | Storage state rejected                | Make it owner-only (`chmod 600`) and workspace-local.                                                          |
 | Live state is plausible but uncertain | `MANUAL_REVIEW` is the expected safe result.                                                                   |
+| Need the cause of a failed command    | Set `QA_NATIVE_DEBUG=1` to print the full stack on stderr; without it only the failure category is shown.      |
 
 ## Safety and limits
 
 - The CLI reads specs as source material; it does not replace deterministic Playwright CI or API contract tests.
 - Live judgment is non-deterministic; unclear states resolve to `MANUAL_REVIEW`.
-- The browser policy allows only same-origin `GET`/`HEAD` reads after a safe interaction; mutations, cross-origin requests, uploads, and destructive confirmations are blocked.
+- The browser policy allows only same-origin `GET`/`HEAD` reads after a safe interaction; mutations, cross-origin requests, and destructive confirmations are blocked. File uploads run only in strict mode from a declared `@qa-fixture`, resolved inside the project root; the adaptive/AI provider never uploads.
 - Credentials belong in environment variables, a secret manager, or a private `storageState` file — never committed config or CLI flags.
 - Remediation can create private worktrees and Draft PRs only after strict verification; it has no merge or auto-merge path.
 - Results are first-pass live QA evidence, not a replacement for a QA engineer.

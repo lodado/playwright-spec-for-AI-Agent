@@ -1,7 +1,7 @@
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, renameSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { compilePlaywrightSpec } from "../adapter-playwright/index.mjs";
-import { RUNTIME_OUTCOME_VERSION, validateContract } from "../contracts/index.mjs";
+import { RUNTIME_OUTCOME_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
 import { createAdaptiveExecutionInput, createExecutionPlan, DEFAULT_ADAPTIVE_BUDGET } from "../core/index.mjs";
 import { writeEvidenceArchive } from "../evidence/index.mjs";
 import { createHermesExecutionProposer } from "../provider-hermes/index.mjs";
@@ -13,7 +13,7 @@ import { CliError, createExclusiveQaDirectory, writePrivateJsonExclusive } from 
 const MAX_SPEC_BYTES = 4 * 1024 * 1024;
 const MAX_AUTH_BOOTSTRAP_BYTES = 64 * 1024;
 
-export async function executeQaNative({ specPath, baseUrl, runDirectory, integrityKey, cwd, provider = "playwright", mode = "strict", storageStatePath, authBootstrapPath, allowedOrigins, allowExternalRead, allowPartial = false, budgetOverrides = {} }, overrides = {}) {
+export async function executeQaNative({ specPath, specPaths, baseUrl, runDirectory, integrityKey, cwd, provider = "playwright", mode = "strict", storageStatePath, authBootstrapPath, allowedOrigins, allowExternalRead, allowPartial = false, budgetOverrides = {} }, overrides = {}) {
   const compile = overrides.compile ?? compilePlaywrightSpec;
   const reportDiagnostics = overrides.reportDiagnostics ?? defaultReportDiagnostics;
   const reportSummary = overrides.reportSummary ?? defaultReportSummary;
@@ -31,9 +31,10 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
   try {
     createExclusiveQaDirectory(relative(cwd, runDirectory), { cwd });
     created = true;
-    const source = readBoundedSpec(specPath);
+    const specPathList = specPaths ?? [specPath];
     const authBootstrap = authBootstrapPath === undefined ? undefined : readAuthBootstrap(authBootstrapPath);
-    const compileResult = compile({ source, sourcePath: relative(projectRoot, specPath) });
+    const compiledResults = specPathList.map((path) => compile({ source: readBoundedSpec(path), sourcePath: relative(projectRoot, path) }));
+    const compileResult = compiledResults.length === 1 ? compiledResults[0] : mergeCompileResults(compiledResults);
     if (compileResult.diagnostics.length > 0) reportDiagnostics(compileResult.diagnostics);
     if (!compileResult.ok && !allowPartial) throw new Error("QA spec compilation failed");
     const qaIr = allowPartial ? withoutBlockedScenarios(compileResult.qaIr) : compileResult.qaIr;
@@ -68,7 +69,7 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
       runtimeOutcome = validateContract("RuntimeOutcome", { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "execute", type: "COMPLETED" });
     } else if (provider === "playwright" && mode === "strict") {
       executionPlan = plan({ qaIr, providerCapabilities: playwrightExecutionCapabilities() });
-      execution = await execute({ qaIr, plan: executionPlan, baseUrl, runId: basename(runDirectory), storageStatePath, authBootstrap });
+      execution = await execute({ qaIr, plan: executionPlan, baseUrl, runId: basename(runDirectory), storageStatePath, authBootstrap, projectRoot });
       runtimeOutcome = validateContract("RuntimeOutcome", execution.outcome);
     } else {
       throw new Error("execution provider and mode combination is unsupported");
@@ -179,6 +180,29 @@ function defaultReportSummary({ runDirectory, provider, mode, executed, skipped,
 // consumption (the reason string carries the per-scenario turns/seconds/tokens from budget exhaustion).
 function defaultReportScenario({ scenarioId, type, reason }) {
   process.stderr.write(`qa-native: scenario ${scenarioId} ${type} — ${reason}\n`);
+}
+
+// Combine per-file compile results (page mode compiles the page's whole spec directory) into one
+// QA IR whose suites/scenarios and blocked/semantic side channels are the union across files.
+// Scenario and suite ids are stable hashes over source path + content, so they stay unique across
+// files and no de-duplication is needed.
+export function mergeCompileResults(results) {
+  const first = results[0].qaIr;
+  const suites = results.flatMap((result) => result.qaIr.suites);
+  const blockedScenarioIds = results.flatMap((result) => result.qaIr.extensions?.blockedScenarioIds ?? []);
+  const semanticJudgmentScenarioIds = results.flatMap((result) => result.qaIr.extensions?.semanticJudgmentScenarioIds ?? []);
+  const qaIr = {
+    ...first,
+    id: `qa-ir:${canonicalHash(results.map((result) => result.qaIr.id)).slice("sha256:".length)}`,
+    suites,
+    extensions: {
+      ...first.extensions,
+      sourceContentHash: canonicalHash(results.map((result) => result.qaIr.extensions?.sourceContentHash ?? result.qaIr.id)),
+      ...(blockedScenarioIds.length > 0 ? { blockedScenarioIds } : {}),
+      ...(semanticJudgmentScenarioIds.length > 0 ? { semanticJudgmentScenarioIds } : {}),
+    },
+  };
+  return { schemaVersion: results[0].schemaVersion, ok: results.every((result) => result.ok), qaIr, diagnostics: results.flatMap((result) => result.diagnostics) };
 }
 
 // Return a QA IR without the scenarios the adapter marked as statically un-runnable, so

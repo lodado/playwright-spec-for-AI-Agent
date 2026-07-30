@@ -1,7 +1,9 @@
 import {
+  ADAPTIVE_ACTIONS,
   EXECUTION_ACTION_RESULT_VERSION,
   EXECUTION_AGENT_OUTCOME_VERSION,
   RUNTIME_OUTCOME_VERSION,
+  auditArtifactShape,
   canonicalHash,
   snapshotContract,
   validateContract,
@@ -10,9 +12,12 @@ import {
   advanceAdaptiveMilestone,
   createAdaptiveActionAuthorizer,
   executePlan,
+  observationSettleBudget,
   providerCapabilities,
   validateExecutionPlanBinding,
 } from "../core/index.mjs";
+import { closeSync, constants as fsConstants, fstatSync, openSync, realpathSync } from "node:fs";
+import { resolve as resolvePath, sep as pathSep } from "node:path";
 import { createInMemoryEvidenceStore, redactSensitiveText } from "../evidence/index.mjs";
 
 const PROVIDER_ID = "playwright-readonly";
@@ -20,6 +25,7 @@ const PROVIDER_VERSION = "0.1.0";
 const TEXT_LIMIT = 1024 * 1024;
 const DOM_LIMIT = 4 * 1024 * 1024;
 const ACTION_LOG_LIMIT = 16 * 1024;
+const MAX_FIXTURE_BYTES = 32 * 1024 * 1024;
 const ELEMENT_TEXT_LIMIT = 4 * 1024;
 const MAX_ELEMENT_OBSERVATIONS = 128;
 const MAX_POST_INTERACTION_REQUESTS = 100;
@@ -40,7 +46,6 @@ const GATEWAY_ARIA_LIMIT = 512 * 1024;
 const GATEWAY_MAX_ELEMENTS = 128;
 const GATEWAY_ELEMENT_TEXT_LIMIT = 1024;
 const GATEWAY_CLEANUP_TIMEOUT_MS = 1_000;
-const GATEWAY_ACTIONS = Object.freeze(["get_current_url", "observe_dom", "observe_aria", "navigate", "go_back", "reload_page", "click_observed_element", "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state", "report_blocked"]);
 const adaptiveExecutions = new WeakSet();
 
 export function normalizeAuthBootstrap(value, baseUrl) {
@@ -92,7 +97,7 @@ function normalizeBootstrapEndpoint(value, allowedOrigins) {
 export function playwrightExecutionCapabilities() {
   return providerCapabilities({
     providerId: PROVIDER_ID,
-    actions: ["NAVIGATE", "CLICK", "OBSERVE", "CHECKPOINT"],
+    actions: ["NAVIGATE", "CLICK", "UPLOAD", "OBSERVE", "CHECKPOINT"],
     evidence: ["VISIBLE_TEXT", "DOM_SNAPSHOT", "ACTION_LOG", "ELEMENT_OBSERVATION"],
   });
 }
@@ -100,7 +105,7 @@ export function playwrightExecutionCapabilities() {
 export function playwrightBrowserToolCapabilities() {
   return providerCapabilities({
     providerId: GATEWAY_PROVIDER_ID,
-    actions: [...GATEWAY_ACTIONS],
+    actions: [...ADAPTIVE_ACTIONS],
     evidence: ["DOM_SNAPSHOT", "ARIA_SNAPSHOT", "VISIBLE_TEXT", "ACTION_LOG"],
   });
 }
@@ -168,6 +173,7 @@ export async function openPlaywrightBrowserToolGateway({
       bootstrapActive = false;
     }
     await runGatewayBrowserOperation({ deadline, clock }, (timeout) => page.goto(initialInput.currentPage.url, { waitUntil: "domcontentloaded", timeout }));
+    await settleGatewayDom(page, { deadline, clock });
     assertGatewayOrigin(page, initialInput.capabilityLease.allowedOrigins);
 
     let currentPage = { ...initialInput.currentPage, url: gatewayUrl(page, initialInput.capabilityLease.allowedOrigins) };
@@ -198,7 +204,7 @@ export async function openPlaywrightBrowserToolGateway({
       if (closed || failed) throw new Error("browser tool gateway is closed");
       if (executing) throw new Error("browser tool gateway already has an action in progress");
       if (usedProposalIds.has(proposal?.proposalId)) throw new Error("action proposal was already consumed");
-      if (!GATEWAY_ACTIONS.includes(proposal?.action)) throw new Error("browser tool is not implemented by this gateway slice");
+      if (!ADAPTIVE_ACTIONS.includes(proposal?.action)) throw new Error("browser tool is not implemented by this gateway slice");
       executing = true;
       let operationStarted = false;
       try {
@@ -215,13 +221,16 @@ export async function openPlaywrightBrowserToolGateway({
           // URL is captured in the mandatory pre/post evidence.
         } else if (authorization.proposal.action === "navigate") {
           await runGatewayBrowserOperation({ deadline, clock }, (timeout) => page.goto(authorization.proposal.parameters.url, { waitUntil: "domcontentloaded", timeout }));
+          await settleGatewayDom(page, { deadline, clock });
           invalidateGatewayObservations();
         } else if (authorization.proposal.action === "go_back") {
           const response = await runGatewayBrowserOperation({ deadline, clock }, (timeout) => page.goBack({ waitUntil: "domcontentloaded", timeout }));
           if (response === null) throw new Error("browser history has no previous page");
+          await settleGatewayDom(page, { deadline, clock });
           invalidateGatewayObservations();
         } else if (authorization.proposal.action === "reload_page") {
           await runGatewayBrowserOperation({ deadline, clock }, (timeout) => page.reload({ waitUntil: "domcontentloaded", timeout }));
+          await settleGatewayDom(page, { deadline, clock });
           invalidateGatewayObservations();
         } else if (authorization.proposal.action === "observe_dom" || authorization.proposal.action === "observe_aria") {
           observation = await observeGatewayElements({ page, input: beforeInput, currentPage, sequence: ++observationSequence, secrets: [...secrets, ...before.sensitiveValues], deadline, clock });
@@ -348,6 +357,47 @@ export async function openPlaywrightBrowserToolGateway({
     closed = true;
     await closeGatewayBrowser(browser).catch(() => undefined);
     throw error;
+  }
+}
+
+// Shared observation settle: both the strict OBSERVE node and the adaptive gateway route every
+// evidence capture through this wait. SSR HTML can lack testids the client only attaches after
+// hydration, so evidence sealed at domcontentloaded misleads the judge. The page counts as
+// settled once it is fully loaded and the DOM stays quiet; the cap (core's observationSettleBudget)
+// keeps the wait bounded when an app mutates forever (carousels, polling). Never throws — under
+// budget pressure or an evaluate/navigation race the capture proceeds with the DOM as-is.
+async function settleDomForObservation(page, remainingMs) {
+  const budget = observationSettleBudget(remainingMs);
+  if (budget === undefined) return;
+  try {
+    await page.evaluate(({ capMs, quietMs }) => new Promise((resolve) => {
+      let timer;
+      const finish = () => {
+        observer.disconnect();
+        document.removeEventListener("readystatechange", arm);
+        clearTimeout(timer);
+        resolve();
+      };
+      const arm = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => (document.readyState === "complete" ? finish() : arm()), quietMs);
+      };
+      const observer = new MutationObserver(arm);
+      observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+      document.addEventListener("readystatechange", arm);
+      setTimeout(finish, capMs);
+      arm();
+    }), budget);
+  } catch {
+    // Budget exhausted or evaluate raced a navigation; capture proceeds with the DOM as-is.
+  }
+}
+
+async function settleGatewayDom(page, timing) {
+  try {
+    await runGatewayBrowserOperation(timing, (remaining) => settleDomForObservation(page, remaining));
+  } catch {
+    // Gateway time budget exhausted; capture proceeds with the DOM as-is.
   }
 }
 
@@ -544,13 +594,15 @@ function captureGatewayArtifacts(store, proposal, before, after, satisfiedMilest
     url.hash = "";
     auditProposal.parameters.url = url.href;
   }
-  return [
-    store.captureArtifact({ id: `${proposal.proposalId}:before:dom`, type: "DOM_SNAPSHOT", contentType: "text/html", content: before.dom }),
-    store.captureArtifact({ id: `${proposal.proposalId}:before:aria`, type: "ARIA_SNAPSHOT", contentType: "text/plain", content: before.aria }),
-    store.captureArtifact({ id: `${proposal.proposalId}:action`, type: "ACTION_LOG", contentType: "application/json", content: JSON.stringify({ proposal: auditProposal, status: "ACCEPTED", before: before.page, after: after.page, satisfiedMilestoneIds }) }),
-    store.captureArtifact({ id: `${proposal.proposalId}:after:dom`, type: "DOM_SNAPSHOT", contentType: "text/html", content: after.dom }),
-    store.captureArtifact({ id: `${proposal.proposalId}:after:aria`, type: "ARIA_SNAPSHOT", contentType: "text/plain", content: after.aria }),
-  ];
+  const content = {
+    "before:dom": { contentType: "text/html", content: before.dom },
+    "before:aria": { contentType: "text/plain", content: before.aria },
+    action: { contentType: "application/json", content: JSON.stringify({ proposal: auditProposal, status: "ACCEPTED", before: before.page, after: after.page, satisfiedMilestoneIds }) },
+    "after:dom": { contentType: "text/html", content: after.dom },
+    "after:aria": { contentType: "text/plain", content: after.aria },
+  };
+  return auditArtifactShape(proposal.action).required.map((entry) =>
+    store.captureArtifact({ id: `${proposal.proposalId}:${entry.suffix}`, type: entry.type, ...content[entry.suffix] }));
 }
 
 function gatewayUrl(page, allowedOrigins) {
@@ -719,6 +771,7 @@ export async function executeWithPlaywright({
   secrets = [],
   storageStatePath,
   authBootstrap,
+  projectRoot,
   now = () => new Date().toISOString(),
 } = {}) {
   let runtime;
@@ -731,7 +784,7 @@ export async function executeWithPlaywright({
     validateExecutionPlanBinding({ qaIr, plan, providerCapabilities: capabilities });
     if (plan.nodes.length > MAX_PLAN_NODES || plan.retryPolicy.maxAttempts !== 1) throw new Error("execution plan exceeds readonly provider limits");
     if (plan.timeoutPolicy.perNodeMs > MAX_NODE_TIMEOUT_MS || plan.timeoutPolicy.runMs > MAX_RUN_TIMEOUT_MS) throw new Error("execution timeout exceeds readonly provider limits");
-    runtime = createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, storageStatePath, authBootstrap, now, capabilities, nodeTimeoutMs: plan.timeoutPolicy.perNodeMs });
+    runtime = createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, storageStatePath, authBootstrap, projectRoot, now, capabilities, nodeTimeoutMs: plan.timeoutPolicy.perNodeMs });
   } catch {
     return executionResult(runtimeError("CONTRACT_VIOLATION", "Execution provider input is invalid"));
   }
@@ -768,7 +821,7 @@ export async function executeWithPlaywright({
   return executionResult(outcome, runtime);
 }
 
-function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, storageStatePath, authBootstrap, now, capabilities, nodeTimeoutMs }) {
+function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, storageStatePath, authBootstrap, projectRoot, now, capabilities, nodeTimeoutMs }) {
   const base = runtimeUrl(baseUrl);
   const bootstrap = normalizeAuthBootstrap(authBootstrap, base.href);
   if (typeof runId !== "string" || runId.length === 0) throw new Error("runId must be a non-empty string");
@@ -912,6 +965,7 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       assertPageOrigin(page, base);
       const state = observationState(observations, node.scenarioId);
       try {
+        await settleDomForObservation(page, nodeTimeoutMs);
         const captured = [];
         for (const type of node.evidence) {
           if (type === "ELEMENT_OBSERVATION") {
@@ -929,9 +983,27 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       return;
     }
     if (node.kind === "INTERACT") {
-      if (node.action !== "CLICK" || node.evidence.length !== 1 || node.evidence[0] !== "ACTION_LOG") throw providerError("POLICY_VIOLATION");
+      if ((node.action !== "CLICK" && node.action !== "UPLOAD") || node.evidence.length !== 1 || node.evidence[0] !== "ACTION_LOG") throw providerError("POLICY_VIOLATION");
       const page = await openPage();
       const beforeUrl = evidenceUrl(page, base);
+      if (node.action === "UPLOAD") {
+        // File upload is the exception interaction: replay the test's declared `@qa-fixture` file
+        // into the target file input. The fixture file is resolved strictly inside the project root
+        // (no symlink escape, bounded size) before Playwright ever touches it.
+        const fixturePath = entry.scenario.fixtures?.[node.value ?? ""];
+        if (typeof fixturePath !== "string") throw providerError("POLICY_VIOLATION");
+        const file = resolveFixtureFile(projectRoot, fixturePath);
+        const locator = semanticLocator(page, step.target, { allowUnsupported: true });
+        if (!locator) throw providerError("CONTRACT_VIOLATION");
+        interactionStarted = true;
+        await locator.setInputFiles(file, { timeout: nodeTimeoutMs });
+        if (interactionPolicyViolation) throw providerError("POLICY_VIOLATION");
+        const afterUrl = evidenceUrl(page, base);
+        const content = boundedText(JSON.stringify({ action: "UPLOAD", target: actionLogTarget(step.target), fixture: node.value, beforeUrl, afterUrl, status: "SUCCEEDED", allowedRequests: postInteractionRequests }), ACTION_LOG_LIMIT, "ACTION_LOG");
+        postInteractionRequests = [];
+        observationState(observations, node.scenarioId).artifacts.push(captureArtifact(`${node.nodeId}:action_log`, "ACTION_LOG", "application/json", content));
+        return;
+      }
       const locator = semanticLocator(page, step.target, { requireAccessibleName: true });
       if (!locator) throw providerError("CONTRACT_VIOLATION");
       await assertSafeClickTarget(locator, nodeTimeoutMs);
@@ -1014,6 +1086,28 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       activeBrowser = undefined;
     },
   };
+}
+
+// Resolve a repo-relative `@qa-fixture` path to a real file strictly inside the project root, with
+// no symlink escape and a bounded size, before it is handed to Playwright's setInputFiles.
+function resolveFixtureFile(projectRoot, repoRelativePath) {
+  if (typeof projectRoot !== "string" || projectRoot.length === 0) throw providerError("POLICY_VIOLATION");
+  const root = realpathSync(projectRoot);
+  let real;
+  try {
+    real = realpathSync(resolvePath(root, repoRelativePath));
+  } catch {
+    throw providerError("EVIDENCE_STORAGE_FAILED");
+  }
+  if (real !== root && !real.startsWith(root + pathSep)) throw providerError("POLICY_VIOLATION");
+  const fd = openSync(real, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_FIXTURE_BYTES) throw providerError("POLICY_VIOLATION");
+  } finally {
+    closeSync(fd);
+  }
+  return real;
 }
 
 async function assertSafeClickTarget(locator, timeout) {

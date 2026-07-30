@@ -112,8 +112,58 @@ describe("qa-native CLI security foundation", () => {
     expect(exitCode).toBe(1);
     expect(execute).toHaveBeenCalledOnce();
     expect(execute.mock.calls[0][0].integrityKey).toEqual(Buffer.alloc(32));
-    expect(stderr).toHaveBeenCalledWith("qa-native: command failed\n");
+    // The failure category is surfaced (never swallowed) but the secret-bearing message is not.
+    expect(stderr).toHaveBeenCalledWith("qa-native: execute failed: Error\n");
     expect(JSON.stringify({ stdout: stdout.mock.calls, stderr: stderr.mock.calls })).not.toContain("provider-secret");
+  });
+
+  it("surfaces an internal error's stable code without QA_NATIVE_DEBUG", async () => {
+    const cwd = temporaryRoot();
+    writeFileSync(join(cwd, "dashboard.spec.ts"), "test('dashboard', () => {})");
+    const stderr = vi.fn();
+    const execute = vi.fn(async () => {
+      const error = new Error("provider-secret bytes");
+      error.code = "EVIDENCE_STORAGE_FAILED";
+      throw error;
+    });
+    const exitCode = await runQaNative([
+      "execute",
+      "--spec=dashboard.spec.ts",
+      "--base-url=https://example.test",
+      "--run-dir=.qa/runs/run-code",
+    ], {
+      cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: Buffer.alloc(32, 0x51).toString("base64") },
+      handlers: { execute },
+      stdout: vi.fn(),
+      stderr,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toHaveBeenCalledWith("qa-native: execute failed: EVIDENCE_STORAGE_FAILED\n");
+    expect(JSON.stringify(stderr.mock.calls)).not.toContain("provider-secret");
+  });
+
+  it("surfaces the full stack when QA_NATIVE_DEBUG is set", async () => {
+    const cwd = temporaryRoot();
+    writeFileSync(join(cwd, "dashboard.spec.ts"), "test('dashboard', () => {})");
+    const stderr = vi.fn();
+    const execute = vi.fn(async () => { throw new Error("diagnostic-detail"); });
+    const exitCode = await runQaNative([
+      "execute",
+      "--spec=dashboard.spec.ts",
+      "--base-url=https://example.test",
+      "--run-dir=.qa/runs/run-debug",
+    ], {
+      cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: Buffer.alloc(32, 0x51).toString("base64"), QA_NATIVE_DEBUG: "1" },
+      handlers: { execute },
+      stdout: vi.fn(),
+      stderr,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(JSON.stringify(stderr.mock.calls)).toContain("diagnostic-detail");
   });
 
   it("passes workspace-local session and bootstrap inputs without reading them into CLI output", async () => {

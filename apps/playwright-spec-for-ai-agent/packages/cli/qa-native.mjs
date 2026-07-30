@@ -15,7 +15,7 @@ const PUBLISH_ISSUE_OPTIONS = new Set([...REPORT_OPTIONS, "repository"]);
 const REMEDIATION_OPTIONS = new Set([...PUBLISH_ISSUE_OPTIONS, "publish"]);
 const PUBLICATION_COMMANDS = new Set(["publish-issue", "publish", "remediate"]);
 const COMMAND_OPTIONS = Object.freeze({
-  execute: new Set(["spec", "base-url", "run-dir", "provider", "mode", "storage-state", "auth-bootstrap", "allowed-origin", "allow-partial", "budget-actions", "budget-turns", "budget-time-ms", "budget-tokens"]),
+  execute: new Set(["spec", "page", "config", "base-url", "run-dir", "provider", "mode", "storage-state", "auth-bootstrap", "allowed-origin", "allow-partial", "budget-actions", "budget-turns", "budget-time-ms", "budget-tokens"]),
   judge: new Set(["run-dir", "fail-on"]),
   replay: new Set(["run-dir"]),
   diagnose: REPORT_OPTIONS,
@@ -28,7 +28,7 @@ const COMMAND_OPTIONS = Object.freeze({
   remediate: REMEDIATION_OPTIONS,
 });
 const COMMAND_USAGE = Object.freeze({
-  execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> [--storage-state=<file> (default .private/storage-state.json when present) --auth-bootstrap=.private/auth-bootstrap.json --allowed-origin=https://api.example.com --provider=playwright --mode=strict | --provider=hermes --mode=adaptive --allow-partial --budget-actions=<n> --budget-turns=<n> --budget-time-ms=<n> --budget-tokens=<n>]",
+  execute: "qa-native execute (--spec=<file> | --page=<name>) [--base-url=<url>] --run-dir=.qa/runs/<id> [--config=<file> --storage-state=<file> (default .private/storage-state.json when present) --auth-bootstrap=.private/auth-bootstrap.json --allowed-origin=https://api.example.com --provider=playwright --mode=strict | --provider=hermes --mode=adaptive --allow-partial --budget-actions=<n> --budget-turns=<n> --budget-time-ms=<n> --budget-tokens=<n>] (--page resolves the page's designated spec directory and base URL from the project config; --spec always wins when given)",
   judge: "qa-native judge --run-dir=.qa/runs/<id> [--fail-on=fail|manual-review]",
   replay: "qa-native replay --run-dir=.qa/runs/<id>",
   diagnose: "qa-native diagnose --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
@@ -152,6 +152,7 @@ export async function runQaNative(argv, {
 } = {}) {
   let integrityKey;
   let publicationKey;
+  let commandLabel = "command";
   const restoreProcessKey = env !== process.env;
   const previousProcessKey = restoreProcessKey ? process.env[INTEGRITY_KEY_ENV] : undefined;
   const previousPublicationKey = restoreProcessKey ? process.env[PUBLICATION_KEY_ENV] : undefined;
@@ -161,6 +162,7 @@ export async function runQaNative(argv, {
       stdout(helpText(Object.keys(handlers)));
       return 0;
     }
+    if (typeof request.command === "string") commandLabel = request.command;
     const handler = handlers[request.command];
     if (typeof handler !== "function") throw new CliError("command is not available");
     if (platform === "win32") throw new CliError("command is not supported on this platform");
@@ -168,19 +170,26 @@ export async function runQaNative(argv, {
     if (PUBLICATION_COMMANDS.has(request.command)) publicationKey = decodePublicationKey(env[PUBLICATION_KEY_ENV]);
     delete process.env[INTEGRITY_KEY_ENV];
     delete process.env[PUBLICATION_KEY_ENV];
-    const normalized = normalizeRequest(request, cwd);
+    const pageSource = request.command === "execute" && typeof request.options.page === "string" && request.options.page.length > 0
+      ? await resolvePageSpecSource(request.options, cwd)
+      : undefined;
+    const normalized = normalizeRequest(request, cwd, pageSource);
     const status = await handler({ ...normalized, integrityKey, ...(publicationKey === undefined ? {} : { publicationKey }) });
     return Number.isInteger(status) ? status : 0;
   } catch (error) {
-    // CliError messages are user-facing. Internal errors stay opaque by default because their
-    // message may embed sensitive data (e.g. evidence bytes); set QA_NATIVE_DEBUG to surface the
-    // full stack when a failure needs diagnosing. The default is a secret-safe control, not an
-    // integrity one — the debug escape hatch keeps failures debuggable without leaking by default.
-    const detail = error instanceof CliError
-      ? error.message
-      : env[DEBUG_ENV]
-        ? (error?.stack ?? String(error?.message ?? error))
-        : "command failed";
+    // CliError messages are user-facing. For internal errors we surface the failure category — the
+    // error's stable .code or its class name, both free of payload — so a failure is never silently
+    // swallowed (AGENTS.md §3-4), while the raw message/stack (which may embed sensitive data such as
+    // evidence bytes) stays behind QA_NATIVE_DEBUG.
+    let detail;
+    if (error instanceof CliError) {
+      detail = error.message;
+    } else if (env[DEBUG_ENV]) {
+      detail = error?.stack ?? String(error?.message ?? error);
+    } else {
+      const cause = typeof error?.code === "string" ? error.code : (error?.constructor?.name ?? "Error");
+      detail = `${commandLabel} failed: ${cause}`;
+    }
     stderr(`qa-native: ${detail}\n`);
     return 1;
   } finally {
@@ -216,6 +225,8 @@ function parseRequest(argv) {
       options: {
         help: { type: "boolean", short: "h" },
         spec: { type: "string" },
+        page: { type: "string" },
+        config: { type: "string" },
         "base-url": { type: "string" },
         "run-dir": { type: "string" },
         "repository-root": { type: "string" },
@@ -244,12 +255,45 @@ function parseRequest(argv) {
   const command = parsed.positionals[0];
   const supplied = Object.keys(parsed.values).filter((key) => key !== "help");
   if (supplied.some((key) => !COMMAND_OPTIONS[command].has(key))) throw new CliError("invalid command arguments");
-  const required = command === "execute" ? ["spec", "base-url", "run-dir"] : PUBLICATION_COMMANDS.has(command) ? ["run-dir", "repository-root", "repository"] : REPORT_COMMANDS.has(command) ? ["run-dir", "repository-root"] : ["run-dir"];
+  const required = command === "execute" ? ["run-dir"] : PUBLICATION_COMMANDS.has(command) ? ["run-dir", "repository-root", "repository"] : REPORT_COMMANDS.has(command) ? ["run-dir", "repository-root"] : ["run-dir"];
   if (required.some((key) => typeof parsed.values[key] !== "string" || parsed.values[key].length === 0)) throw new CliError("required command argument is missing");
+  // execute needs exactly one spec source: an explicit --spec (with --base-url), or a --page the
+  // project config resolves to the page's designated specs and base URL.
+  if (command === "execute") {
+    const hasSpec = typeof parsed.values.spec === "string" && parsed.values.spec.length > 0;
+    const hasPage = typeof parsed.values.page === "string" && parsed.values.page.length > 0;
+    if (hasSpec === hasPage) throw new CliError("execute requires exactly one of --spec or --page");
+    if (hasSpec && (typeof parsed.values["base-url"] !== "string" || parsed.values["base-url"].length === 0)) throw new CliError("--spec requires --base-url");
+  }
   return { command, options: Object.freeze({ ...parsed.values }) };
 }
 
-function normalizeRequest(request, cwd) {
+// Resolve `--page` to the page's designated spec files and base URL via the project config. The
+// config loader lives in the scripts layer; import it lazily so a plain `--spec` run never loads it.
+async function resolvePageSpecSource(options, cwd) {
+  const projectRoot = realpathSync(cwd);
+  const { loadProjectConfig, resolveSpecFilesForPage, resolveConfigBaseUrl, resetProjectConfigForTests } =
+    await import("../../scripts/hermes-qa-project-config.mjs");
+  resetProjectConfigForTests();
+  const argv = [`--project-root=${projectRoot}`, ...(options.config ? [`--config=${resolve(cwd, options.config)}`] : [])];
+  await loadProjectConfig(argv);
+  let specPaths;
+  try {
+    specPaths = resolveSpecFilesForPage(options.page);
+  } catch (error) {
+    throw new CliError(error instanceof Error ? error.message : "page spec resolution failed");
+  }
+  // The config could name a directory outside the project; keep every spec inside the run root.
+  for (const specPath of specPaths) {
+    const resolved = realpathSync(specPath);
+    if (resolved !== projectRoot && !resolved.startsWith(projectRoot + sep)) throw new CliError("page spec is outside the project root");
+  }
+  const baseUrl = options["base-url"] ?? resolveConfigBaseUrl() ?? undefined;
+  if (baseUrl === undefined) throw new CliError("--page requires --base-url or a base URL in the project config");
+  return { specPaths, baseUrl };
+}
+
+function normalizeRequest(request, cwd, pageSource) {
   const runDirectory = resolvePrivateQaPath(request.options["run-dir"], { cwd });
   if (request.command === "execute") {
     if (lstatIfExists(runDirectory)) throw new CliError("run directory already exists");
@@ -268,18 +312,23 @@ function normalizeRequest(request, cwd) {
       ...(request.options["budget-time-ms"] === undefined ? {} : { timeMs: safePositiveInteger(request.options["budget-time-ms"], "budget time") }),
       ...(request.options["budget-tokens"] === undefined ? {} : { tokens: safePositiveInteger(request.options["budget-tokens"], "budget tokens") }),
     };
+    // Page mode runs the page's whole spec directory and, like --allow-partial, skips the scenarios
+    // that cannot run against the live target — leaving only the page's designated live specs.
+    const specSource = pageSource === undefined
+      ? { specPath: resolveRegularInput(request.options.spec, { root: cwd, label: "spec" }), baseUrl: safeBaseUrl(request.options["base-url"]) }
+      : { specPaths: pageSource.specPaths, baseUrl: safeBaseUrl(pageSource.baseUrl), allowPartial: true };
     return Object.freeze({
       command: request.command,
       cwd,
       runDirectory,
-      specPath: resolveRegularInput(request.options.spec, { root: cwd, label: "spec" }),
-      baseUrl: safeBaseUrl(request.options["base-url"]),
+      ...(specSource.specPaths === undefined ? { specPath: specSource.specPath } : { specPaths: specSource.specPaths }),
+      baseUrl: specSource.baseUrl,
       provider,
       mode,
       ...(storageStatePath === undefined ? {} : { storageStatePath }),
       ...(authBootstrapPath === undefined ? {} : { authBootstrapPath }),
       ...(request.options["allowed-origin"] === undefined ? {} : { allowedOrigins: parseAllowedOrigins(request.options["allowed-origin"]) }),
-      ...(request.options["allow-partial"] ? { allowPartial: true } : {}),
+      ...(request.options["allow-partial"] || specSource.allowPartial ? { allowPartial: true } : {}),
       ...(Object.keys(budgetOverrides).length === 0 ? {} : { budgetOverrides }),
     });
   }

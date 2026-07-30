@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -153,6 +153,7 @@ function normalizeFileConfig(raw) {
 
   const fixtures = isPlainObject(raw.fixtures) ? raw.fixtures : {};
   const remediation = isPlainObject(raw.remediation) ? raw.remediation : {};
+  const batch = isPlainObject(raw.batch) ? raw.batch : {};
 
   return {
     root: raw.root ? resolve(raw.root) : null,
@@ -162,6 +163,7 @@ function normalizeFileConfig(raw) {
     staging,
     fixtures,
     remediation,
+    batch,
   };
 }
 
@@ -182,6 +184,7 @@ function buildDefaultConfig(cwd, overrides = {}) {
     targetPaths: { ...DEFAULT_TARGET_PATHS },
     staging: { ...DEFAULT_STAGING_ACCOUNT, fixtures: {} },
     fixtures: {},
+    batch: {},
     cliOverrides: {
       specDir: overrides.specDir || "",
       outputDir: overrides.outputDir || "",
@@ -271,6 +274,37 @@ export function resolveSpecDirForPage(page) {
     return resolvePathFromConfig(pageConfig.specDir, page);
   }
   return resolvePathFromConfig(config.paths.specDir, page);
+}
+
+/**
+ * The page's designated spec files: every `*.spec.ts` under its spec directory, sorted for a
+ * stable run order. Helper modules (`*.helpers.ts`) and non-spec files are excluded. This is what
+ * `qa-native execute --page=<name>` runs when no explicit `--spec` is given — the predefined specs
+ * for the page, never an ad-hoc one.
+ */
+export function resolveSpecFilesForPage(page, { readdir = readdirSync } = {}) {
+  const specDir = resolveSpecDirForPage(page);
+  let entries;
+  try {
+    entries = readdir(specDir);
+  } catch {
+    throw new Error(`spec directory for page "${page}" does not exist: ${specDir}`);
+  }
+  const specFiles = entries
+    .filter((name) => name.endsWith(".spec.ts"))
+    .sort()
+    .map((name) => join(specDir, name));
+  if (specFiles.length === 0) throw new Error(`no *.spec.ts files found for page "${page}" in ${specDir}`);
+  return specFiles;
+}
+
+/** Base URL designated by the config (batch default, then staging), or null when neither is set. */
+export function resolveConfigBaseUrl() {
+  const config = getProjectConfig();
+  const batchBaseUrl = isPlainObject(config.batch) ? config.batch.defaultBaseUrl : undefined;
+  const stagingBaseUrl = config.staging?.baseUrl;
+  const baseUrl = batchBaseUrl ?? stagingBaseUrl;
+  return baseUrl ? String(baseUrl) : null;
 }
 
 export function resolveOutputDirForPage(page) {
