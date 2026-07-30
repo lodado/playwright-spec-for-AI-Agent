@@ -11,14 +11,16 @@
 
 </div>
 
+Playwright asserts deterministic outcomes; live products are not deterministic. This project delegates the reasoning Playwright cannot do — account-dependent text, animation timing, mock-authored expectations against live data — to an AI agent that performs first-pass QA judgment over sealed browser evidence.
+
 This repository contains two public applications and the private workspace packages that support them. This README is the workspace map; open each linked directory for commands, architecture, examples, safety boundaries, and output formats.
 
 ## Applications
 
-| Application | Package | What it does | Documentation |
-| --- | --- | --- | --- |
-| **Personaut** | `@lodado/personaut` | Explores a web product as seeded personas, seals browser evidence, evaluates deterministic outcomes, and compares variants. | [`apps/personaut`](./apps/personaut/README.md) |
-| **Playwright Spec for AI Agent** | `playwright-spec-for-ai-agent` | Turns Playwright QA intent into AI-assisted staging execution, judgment, review, remediation, and reporting workflows. | [`apps/playwright-spec-for-ai-agent`](./apps/playwright-spec-for-ai-agent/README.md) |
+| Application                      | Package                        | What it does                                                                                                                | Documentation                                                                        |
+| -------------------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| **Personaut**                    | `@lodado/personaut`            | Explores a web product as seeded personas, seals browser evidence, evaluates deterministic outcomes, and compares variants. | [`apps/personaut`](./apps/personaut/README.md)                                       |
+| **Playwright Spec for AI Agent** | `playwright-spec-for-ai-agent` | Turns Playwright QA intent into AI-assisted staging execution, judgment, review, remediation, and reporting workflows.      | [`apps/playwright-spec-for-ai-agent`](./apps/playwright-spec-for-ai-agent/README.md) |
 
 ### Choose an application
 
@@ -31,23 +33,23 @@ Need existing Playwright specs to drive AI QA?   → Playwright Spec for AI Agen
 
 These packages are private implementation modules. Personaut bundles the modules it needs into its published package.
 
-| Workspace | Responsibility | Documentation |
-| --- | --- | --- |
-| `@persona-runtime/contracts` | StudySpec, evidence, evaluation, finding, and validation contracts. | [`packages/contracts`](./packages/contracts/README.md) |
-| `@persona-runtime/runtime-core` | Session state machine, orchestration, budgets, and filesystem storage. | [`packages/runtime-core`](./packages/runtime-core/README.md) |
-| `playwright-driver` | Isolated Playwright sessions, safe actions, and browser evidence capture. | [`packages/playwright-driver`](./packages/playwright-driver/README.md) |
-| `@persona-runtime/persona-policy` | Seeded persona presets, attention filtering, and abandonment behavior. | [`packages/persona-policy`](./packages/persona-policy/README.md) |
-| `@persona-runtime/evaluator` | Browserless outcome evaluation, findings, validity, and variant comparison. | [`packages/evaluator`](./packages/evaluator/README.md) |
-| `@persona-runtime/reporter-html` | Static behavioral HTML report rendering. | [`packages/reporter-html`](./packages/reporter-html/README.md) |
-| `@persona-runtime/reporter-github` | GitHub Check and pull-request comment formatting primitives. | [`packages/reporter-github`](./packages/reporter-github/README.md) |
-| `playwright-spec-adapter` | Playwright spec parsing and StudySpec compilation. | [`packages/playwright-spec-adapter`](./packages/playwright-spec-adapter/README.md) |
+| Workspace                          | Responsibility                                                              | Documentation                                                                      |
+| ---------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `@persona-runtime/contracts`       | StudySpec, evidence, evaluation, finding, and validation contracts.         | [`packages/contracts`](./packages/contracts/README.md)                             |
+| `@persona-runtime/runtime-core`    | Session state machine, orchestration, budgets, and filesystem storage.      | [`packages/runtime-core`](./packages/runtime-core/README.md)                       |
+| `playwright-driver`                | Isolated Playwright sessions, safe actions, and browser evidence capture.   | [`packages/playwright-driver`](./packages/playwright-driver/README.md)             |
+| `@persona-runtime/persona-policy`  | Seeded persona presets, attention filtering, and abandonment behavior.      | [`packages/persona-policy`](./packages/persona-policy/README.md)                   |
+| `@persona-runtime/evaluator`       | Browserless outcome evaluation, findings, validity, and variant comparison. | [`packages/evaluator`](./packages/evaluator/README.md)                             |
+| `@persona-runtime/reporter-html`   | Static behavioral HTML report rendering.                                    | [`packages/reporter-html`](./packages/reporter-html/README.md)                     |
+| `@persona-runtime/reporter-github` | GitHub Check and pull-request comment formatting primitives.                | [`packages/reporter-github`](./packages/reporter-github/README.md)                 |
+| `playwright-spec-adapter`          | Playwright spec parsing and StudySpec compilation.                          | [`packages/playwright-spec-adapter`](./packages/playwright-spec-adapter/README.md) |
 
 ## Examples
 
-| Example | Purpose | Documentation |
-| --- | --- | --- |
-| Hidden CTA | Runs Personaut against a page whose successful action begins below the mobile viewport. | [`examples/hidden-cta`](./examples/hidden-cta/README.md) |
-| Compatibility examples | Demonstrates the Playwright Spec for AI Agent command and annotation formats. | [`apps/playwright-spec-for-ai-agent/examples`](./apps/playwright-spec-for-ai-agent/examples/README.md) |
+| Example                | Purpose                                                                                 | Documentation                                                                                          |
+| ---------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Hidden CTA             | Runs Personaut against a page whose successful action begins below the mobile viewport. | [`examples/hidden-cta`](./examples/hidden-cta/README.md)                                               |
+| Compatibility examples | Demonstrates the Playwright Spec for AI Agent command and annotation formats.           | [`apps/playwright-spec-for-ai-agent/examples`](./apps/playwright-spec-for-ai-agent/examples/README.md) |
 
 ## Quick start
 
