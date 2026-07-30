@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.6.0
+
+### Minor Changes
+
+- 8a94e84: `qa-native execute` now takes a spec source that is either an explicit `--spec=<file>` or a
+  `--page=<name>`. Page mode reads the project config (`hermes-qa.config.mjs` /
+  `playwright-spec-for-ai-agent.config.mjs`) and runs only the specs it designates for the page: from
+  the page's `__tests__` directory, the specs whose `@qa-scenario` matches the page's
+  `expectedSubscriptionStatus` (case-insensitive; page config, then the `staging` default), plus any
+  `// @qa-always-run: true`, minus any `// @qa-live-skip: true`. When no status is configured the whole
+  directory is designated. Navigation uses the config's per-page `targetPath`, and `--base-url`
+  defaults to `batch.defaultBaseUrl`. An explicit `--spec` always wins; giving both or neither is an
+  error. This keeps a run tied to the specs designated for a page's state instead of an ad-hoc plan.
+- 19b7203: Strict execution now performs `@qa-fixture` file uploads. An `UPLOAD` interaction (a
+  `setInputFiles("name")` call) replays the file declared by `// @qa-fixture: name=path` into the
+  target input via Playwright's `setInputFiles`. The fixture path is repo-relative and resolved
+  strictly inside the project root (no symlink escape, 32 MB cap) before the browser touches it; an
+  upload whose argument names no declared fixture is blocked (`UPLOAD_FIXTURE_UNRESOLVED`) rather than
+  run. Upload stays a strict-mode-only exception — the adaptive/AI provider never uploads. The QA IR
+  scenario gains an optional `fixtures` map and execution-plan interaction nodes an optional `value`
+  (both additive; no schemaVersion bump).
+
+### Patch Changes
+
+- cd2bb5d: Collapse duplicated adaptive-protocol rules into single sources. The action vocabulary is now
+  defined once as `ACTION_SPECS` in contracts — lease building, safe-recovery, milestone semantics,
+  the gateway guard, parameter-key validation, element-bound actions, the audit artifact shape, and
+  the Hermes execution prompt version all derive from it instead of keeping their own copies. Audit
+  artifact shape ("five snapshots plus report_blocked's VISIBLE_TEXT") is defined once as
+  `auditArtifactShape` and consumed by both the provider seal and the evidence validator. The
+  observation-settle wait is defined once as `observationSettleBudget` in core and shared by strict
+  observation and adaptive snapshot capture. Behaviour-invariant: the sealed lease order and
+  completion semantics are unchanged (equivalence tests lock them); the Hermes execution prompt
+  version string changes because it now hashes `ACTION_SPECS`.
+- babeb28: Adaptive gateway now settles the page after every navigation (document fully loaded plus a 300ms DOM-mutation quiet window, capped at 5s and bounded by the remaining run budget) before sealing snapshot evidence, so testids attached only after client hydration reach the judge instead of the pre-hydration SSR markup.
+- cd2bb5d: CLI internal errors no longer collapse to an opaque "command failed". stderr now names the failure
+  category — a CliError's message, or an internal error's stable `.code` or class name — so a failure
+  is never silently swallowed. The raw message and stack, which may embed sensitive data such as
+  evidence bytes, stay behind `QA_NATIVE_DEBUG`.
+
 ## 2.5.1
 
 ### Patch Changes
