@@ -40,7 +40,7 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
     const compiledQaIr = allowPartial ? withoutBlockedScenarios(compileResult.qaIr) : compileResult.qaIr;
     // Page mode navigates to the config's per-page target (e.g. a locale-prefixed route) instead of
     // the spec's own @qa-page path.
-    const qaIr = applyPageTarget(compiledQaIr, { pageTargetPath, pageUrl });
+    let qaIr = applyPageTarget(compiledQaIr, { pageTargetPath, pageUrl });
     if (allowPartial && qaIr.suites.every((suite) => suite.scenarios.length === 0)) throw new Error("no statically compilable scenarios remain after skipping blocked ones");
     let execution;
     let executionPlan;
@@ -52,7 +52,26 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
       if (scenarios.length === 0) throw new Error("adaptive execution requires at least one scenario");
       const runId = basename(runDirectory);
       const budget = { ...DEFAULT_ADAPTIVE_BUDGET, ...budgetOverrides };
-      agentInputs = scenarios.map((scenario) => createAdaptiveInput({ qaIr, scenarioId: scenario.id, baseUrl, runId, budget, ...(allowedOrigins === undefined ? {} : { allowedOrigins }), ...(allowExternalRead === true ? { allowExternalRead: true } : {}) }));
+      const buildAdaptiveInput = (scenario) => createAdaptiveInput({ qaIr, scenarioId: scenario.id, baseUrl, runId, budget, ...(allowedOrigins === undefined ? {} : { allowedOrigins }), ...(allowExternalRead === true ? { allowExternalRead: true } : {}) });
+      // A scenario can compile cleanly yet use an expectation/step kind the adaptive runtime cannot
+      // execute (e.g. URL_MATCH). Under --allow-partial, skip those instead of failing the whole run,
+      // and drop them from the QA IR so the written IR matches exactly what executed.
+      const runnableIds = new Set();
+      const builtInputs = [];
+      for (const scenario of scenarios) {
+        try {
+          builtInputs.push(buildAdaptiveInput(scenario));
+          runnableIds.add(scenario.id);
+        } catch (error) {
+          if (!allowPartial) throw error;
+          reportDiagnostics([{ severity: "WARNING", code: "SCENARIO_UNRUNNABLE", message: `Skipped adaptive scenario ${scenario.id}: ${error instanceof Error ? error.message : "unsupported by adaptive runtime"}`, path: qaIr.source?.uri ?? "" }]);
+        }
+      }
+      if (builtInputs.length === 0) throw new Error("no adaptive-runnable scenarios remain after skipping unsupported ones");
+      // Inputs embed only qaIr.id (stable under narrowing) and their own scenario, so building them
+      // against the pre-narrow IR stays consistent after dropping the skipped scenarios.
+      if (runnableIds.size < scenarios.length) qaIr = retainScenarios(qaIr, runnableIds);
+      agentInputs = builtInputs;
       execution = await executeAdaptive({ inputs: agentInputs, proposeAction: createProposer(), storageStatePath, authBootstrap, projectRoot });
       assertPlaywrightAdaptiveExecution(execution);
       try {
@@ -218,6 +237,16 @@ export function applyPageTarget(qaIr, { pageTargetPath, pageUrl } = {}) {
   return {
     ...qaIr,
     suites: qaIr.suites.map((suite) => ({ ...suite, scenarios: suite.scenarios.map((scenario) => ({ ...scenario, steps: rewrite(scenario.steps) })) })),
+  };
+}
+
+// Narrow a QA IR to a set of scenario ids, preserving qaIr.id and every other field. Used when
+// adaptive input construction rejects a compile-valid scenario (an unsupported expectation/step
+// kind) so the written IR matches the scenarios that actually executed.
+export function retainScenarios(qaIr, keepIds) {
+  return {
+    ...qaIr,
+    suites: qaIr.suites.map((suite) => ({ ...suite, scenarios: suite.scenarios.filter((scenario) => keepIds.has(scenario.id)) })),
   };
 }
 

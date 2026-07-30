@@ -232,7 +232,7 @@ function collectBindings(sourceFile) {
   while (changed) {
     changed = false;
     const visit = node => {
-      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && ts.isCallExpression(node.initializer)) {
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && ts.isCallExpression(node.initializer)) {
         const path = callPath(node.initializer.expression);
         if (path?.at(-1) === "extend" && test.has(path[0]) && !test.has(node.name.text)) {
           test.add(node.name.text);
