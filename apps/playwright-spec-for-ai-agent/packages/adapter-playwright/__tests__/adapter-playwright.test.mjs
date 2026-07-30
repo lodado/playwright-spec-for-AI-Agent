@@ -286,6 +286,28 @@ describe("compilePlaywrightSpec", () => {
     expect(result.qaIr.extensions.blockedScenarioIds).toEqual([scenarios[1].id]);
   });
 
+  it("records judgment-policy scenario ids in semanticJudgmentScenarioIds", () => {
+    const source = [
+      "// @qa-scenario: JUDGMENT",
+      "// @qa-page: /dashboard",
+      "// @qa-live-policy: mock-judgment",
+      'test("mock judgment", async ({ page }) => {',
+      '  await expect(page.getByTestId("greeting")).toContainText("dev-user");',
+      "});",
+      "// @qa-live-policy: readonly",
+      'test("readonly", async ({ page }) => {',
+      '  await expect(page.getByTestId("heading")).toContainText("Dashboard");',
+      "});",
+      "",
+    ].join("\n");
+
+    const result = compilePlaywrightSpec({ source, sourcePath: "judgment.spec.ts" });
+    const scenarios = result.qaIr.suites[0].scenarios;
+
+    expect(result.qaIr.extensions.semanticJudgmentScenarioIds).toEqual([scenarios[0].id]);
+    expect(result.qaIr.extensions.semanticJudgmentScenarioIds).not.toContain(scenarios[1].id);
+  });
+
   it("keeps no-confirm interactions deferred instead of guessing a safe stopping point", () => {
     const interaction = `// @qa-scenario: CONFIRM\n// @qa-live-policy: safe-interaction-no-confirm\ntest("confirm", async ({ page }) => {\n  await page.getByTestId("cancel").click();\n});\n`;
     const result = compilePlaywrightSpec({ source: interaction, sourcePath: "confirm.spec.ts" });

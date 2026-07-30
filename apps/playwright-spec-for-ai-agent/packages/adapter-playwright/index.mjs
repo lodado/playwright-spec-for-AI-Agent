@@ -49,8 +49,9 @@ export function compilePlaywrightSpec({ source, sourcePath, revision } = {}) {
   );
 
   const blockedScenarioIds = [];
+  const semanticJudgmentScenarioIds = [];
   const scenarios = legacy
-    ? legacy.tests.map((test, index) => scenarioFromLegacyTest(legacy, test, index, blocks[index], source, sourcePath, revision, diagnostics, fileLevelError || blockedTestIndices.has(index), blockedScenarioIds))
+    ? legacy.tests.map((test, index) => scenarioFromLegacyTest(legacy, test, index, blocks[index], source, sourcePath, revision, diagnostics, fileLevelError || blockedTestIndices.has(index), blockedScenarioIds, semanticJudgmentScenarioIds))
     : [];
 
   const qaIr = {
@@ -74,6 +75,7 @@ export function compilePlaywrightSpec({ source, sourcePath, revision } = {}) {
     extensions: {
       sourceContentHash: canonicalHash(source),
       ...(blockedScenarioIds.length > 0 ? { blockedScenarioIds } : {}),
+      ...(semanticJudgmentScenarioIds.length > 0 ? { semanticJudgmentScenarioIds } : {}),
     },
   };
 
@@ -85,7 +87,7 @@ export function compilePlaywrightSpec({ source, sourcePath, revision } = {}) {
   });
 }
 
-function scenarioFromLegacyTest(legacy, test, index, block, source, sourcePath, revision, diagnostics, scenarioBlocked, blockedScenarioIds) {
+function scenarioFromLegacyTest(legacy, test, index, block, source, sourcePath, revision, diagnostics, scenarioBlocked, blockedScenarioIds, semanticJudgmentScenarioIds) {
   const provenance = blockProvenance(source, sourcePath, block, revision);
   const discriminator = `${index}:${block?.index ?? "unknown"}`;
   const executableInteraction = test.liveRunPolicy === "executable-interaction";
@@ -106,6 +108,10 @@ function scenarioFromLegacyTest(legacy, test, index, block, source, sourcePath, 
   // createExecutionPlan (a NAVIGATE step under a BLOCKED policy is a plan-validation error).
   const policyBlocked = String(test.liveRunPolicy ?? "").startsWith("blocked-");
   if (scenarioBlocked || parsedActions === undefined || policyBlocked) blockedScenarioIds.push(id);
+  // A judgment-* live policy (mock-api / interaction-no-confirm) means the expectations were
+  // authored against mock data — record the id so the judge/adaptive layers judge structure,
+  // not literals. Mirrors the blockedScenarioIds side channel above.
+  if (String(test.liveRunPolicy ?? "").startsWith("judgment-")) semanticJudgmentScenarioIds.push(id);
 
   return {
     id,
