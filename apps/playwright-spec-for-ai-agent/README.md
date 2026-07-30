@@ -132,12 +132,13 @@ secret-handling constraints.
 File annotations belong before imports; live policy belongs above each test or a
 shared `describe`.
 
-| Annotation        | Required | Purpose                                                                           |
-| ----------------- | -------- | --------------------------------------------------------------------------------- |
-| `@qa-page`        | No       | Page id; the target path resolves relative to `--base-url`.                       |
-| `@qa-scenario`    | Yes      | Name the scenario or account state.                                               |
-| `@qa-live-policy` | Yes      | Declare what live interaction is safe.                                            |
-| `@qa-fixture`     | No       | `name=repo-relative/path` file for an `setInputFiles("name")` upload (see below). |
+| Annotation        | Required | Purpose                                                                            |
+| ----------------- | -------- | ---------------------------------------------------------------------------------- |
+| `@qa-page`        | No       | Page id; the target path resolves relative to `--base-url`.                        |
+| `@qa-scenario`    | Yes      | Name the scenario or account state.                                                |
+| `@qa-live-policy` | Yes      | Declare what live interaction is safe.                                             |
+| `@qa-live-skip`   | No       | `true` skips the test (or whole file at file level) on live; it is never executed. |
+| `@qa-fixture`     | No       | `name=repo-relative/path` file for an `setInputFiles("name")` upload (see below).  |
 
 ### File uploads (`@qa-fixture`)
 
@@ -246,6 +247,29 @@ patches, pull requests, or merges.
 Read the [QA Native guide](docs/qa-native.md) before enabling patch verification
 or GitHub publication.
 
+## Commands
+
+`execute` → `judge` → `report` → `publish-issue` is the core flow; the rest support
+replay and remediation. Run `qa-native --help` for full flags.
+
+| Command         | Purpose                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------- |
+| `execute`       | Compile the spec(s) and run them against live staging, sealing browser evidence.              |
+| `judge`         | Turn sealed evidence into a `PASS` / `FAIL` / `MANUAL_REVIEW` / `SKIP` verdict.               |
+| `replay`        | Re-verify a sealed run's evidence offline, without a browser.                                 |
+| `diagnose`      | Produce a failure diagnosis for a judged run.                                                 |
+| `suggest-fix`   | Add a repair recommendation on top of the diagnosis.                                          |
+| `report`        | Connect a failure to source at a pinned commit; write diagnosis, code context, and repair.    |
+| `propose-patch` | Generate a candidate patch for a reported failure.                                            |
+| `verify-patch`  | Verify a proposed patch under strict checks before it can be published.                       |
+| `publish-issue` | Publish a code-backed GitHub Issue (idempotent; see above).                                   |
+| `publish`       | Report and publish in one authenticated step (`--publish=auto`).                              |
+| `remediate`     | End-to-end remediation: a private worktree and Draft PR after strict verification (no merge). |
+
+Report, publish, and remediate commands take `--repository-root=.` and `--revision=<commit>`;
+publication commands also take `--repository=<owner/repo>`. Select one result of a multi-failure run
+with `--judgment=<result.json>`.
+
 ## Troubleshooting
 
 | Symptom                               | Fix                                                                                                            |
@@ -256,12 +280,13 @@ or GitHub publication.
 | Model configuration is missing        | Configure `~/.hermes/config.yaml` or `HERMES_INFERENCE_MODEL`.                                                 |
 | Storage state rejected                | Make it owner-only (`chmod 600`) and workspace-local.                                                          |
 | Live state is plausible but uncertain | `MANUAL_REVIEW` is the expected safe result.                                                                   |
+| Need the cause of a failed command    | Set `QA_NATIVE_DEBUG=1` to print the full stack on stderr; without it only the failure category is shown.      |
 
 ## Safety and limits
 
 - The CLI reads specs as source material; it does not replace deterministic Playwright CI or API contract tests.
 - Live judgment is non-deterministic; unclear states resolve to `MANUAL_REVIEW`.
-- The browser policy allows only same-origin `GET`/`HEAD` reads after a safe interaction; mutations, cross-origin requests, uploads, and destructive confirmations are blocked.
+- The browser policy allows only same-origin `GET`/`HEAD` reads after a safe interaction; mutations, cross-origin requests, and destructive confirmations are blocked. File uploads run only in strict mode from a declared `@qa-fixture`, resolved inside the project root; the adaptive/AI provider never uploads.
 - Credentials belong in environment variables, a secret manager, or a private `storageState` file — never committed config or CLI flags.
 - Remediation can create private worktrees and Draft PRs only after strict verification; it has no merge or auto-merge path.
 - Results are first-pass live QA evidence, not a replacement for a QA engineer.
