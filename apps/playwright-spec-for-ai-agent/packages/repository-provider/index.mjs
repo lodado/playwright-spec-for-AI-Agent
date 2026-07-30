@@ -51,8 +51,11 @@ export function locateCode({ snapshot, diagnosis, judgeResult, qaIr, evidenceBun
     }
   }
 
+  // A route term matches many files; the spec file that actually ran is where the operator starts
+  // reading, so it outranks other pure route matches.
+  const executedSpecPath = input.qaIr.source?.uri;
   const ranked = [...matches.values()]
-    .map((item) => ({ ...item, relevanceScore: score(item.reasons) }))
+    .map((item) => ({ ...item, relevanceScore: Math.min(1, score(item.reasons) + (item.path === executedSpecPath && item.reasons.has("ROUTE_MATCH") ? 0.1 : 0)) }))
     .sort((left, right) => right.relevanceScore - left.relevanceScore || left.path.localeCompare(right.path))
     .slice(0, 10);
   const candidates = [];

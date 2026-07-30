@@ -53,7 +53,7 @@ export function diagnoseFailure({ qaIr, judgeResult, evidenceBundle, secrets = [
   const supportingEvidenceRefs = unique([...failed, ...unresolved].flatMap((item) => item.evidenceRefs));
   const semanticScenarioIds = input.qaIr?.extensions?.semanticJudgmentScenarioIds ?? [];
   const isSemanticJudgment = semanticScenarioIds.includes(input.evidenceBundle.scenarioId);
-  const origin = classifyOrigin(input.evidenceBundle, supportingEvidenceRefs, failed.length > 0, isSemanticJudgment);
+  const origin = classifyOrigin(input.evidenceBundle, supportingEvidenceRefs, failed.length > 0, isSemanticJudgment, input.judgeResult.uncertainty);
   const remediationEligible = !["UNKNOWN", "ENVIRONMENT", "THIRD_PARTY"].includes(origin);
   const manualReviewReasons = remediationEligible ? [] : [manualReviewReason(origin, input.judgeResult.verdict)];
   const symptom = failed.length > 0
@@ -690,11 +690,15 @@ export function decidePublication({ repository, publicationFingerprint, diagnosi
   return snapshotContract("PublicationDecision", { ...body, decisionId: stableId("publication-decision", body) });
 }
 
-function classifyOrigin(bundle, evidenceRefs, hasContradiction, isSemanticJudgment) {
+function classifyOrigin(bundle, evidenceRefs, hasContradiction, isSemanticJudgment, uncertainty = []) {
   const referenced = new Set(evidenceRefs);
   for (const fact of bundle.facts) {
     if (referenced.has(fact.id) && ORIGIN_BY_FACT_KIND.has(fact.kind)) return ORIGIN_BY_FACT_KIND.get(fact.kind);
   }
+  // Judge-flagged context/auth mismatches (stale session, live state differing from the scenario's
+  // intent) point at the environment, not at code — they must route to manual review, never to the
+  // patch pipeline.
+  if (uncertainty.some((item) => /CONTEXT[_-]?MISMATCH|AUTH|LOGIN|SESSION/i.test(String(item.code)))) return "ENVIRONMENT";
   return hasContradiction ? (isSemanticJudgment ? "TEST_DATA" : "PRODUCT_CODE") : "UNKNOWN";
 }
 
