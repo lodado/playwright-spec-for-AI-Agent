@@ -9,7 +9,7 @@
 [![Playwright](https://img.shields.io/badge/Playwright-%3E%3D1.48-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)](https://playwright.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-[Quick start](#quick-start) · [Authenticated pages](#authenticated-pages) · [Annotations](#annotations) · [Code-backed Issues](#publish-a-code-backed-github-issue) · [Safety](#safety-and-limits) · [Workspace](../../README.md)
+[Quick start](#quick-start) · [Providers & modes](#providers-and-modes) · [Config](#project-config-hermes-qaconfigmjs) · [Options](#execute-options) · [Annotations](#annotations) · [Commands](#commands) · [Env vars](#environment-variables) · [Code-backed Issues](#publish-a-code-backed-github-issue) · [Safety](#safety-and-limits)
 
 </div>
 
@@ -109,6 +109,93 @@ tied to the specs you defined for a page rather than an ad-hoc plan.
 See the [QA Native guide](docs/qa-native.md) and the
 [one-shot runbook](docs/qa-native-one-shot-runbook.md) for the full flow,
 operator setup, and verdict handling.
+
+## Providers and modes
+
+`execute` has two ways to run a spec. Pick one with `--provider` and `--mode`:
+
+| Combination                           | What it does                                                                                                                                                            | When to use                                                     |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `--provider=playwright --mode=strict` | **Deterministic.** Compiles the spec into a fixed plan and replays it exactly — navigate, the declared interactions, observe, checkpoint. No AI. File uploads run here. | Reproducible runs, no inference model, pinning exact behaviour. |
+| `--provider=hermes --mode=adaptive`   | **AI-driven.** A bounded agent proposes one small action at a time (observe, navigate, click, wait…) to reach the spec's milestones. Needs a Hermes inference model.    | Flaky/unclear live states where a fixed plan is too brittle.    |
+
+Both seal the same tamper-evident browser evidence and hand it to a **browserless
+judge**. Strict is the safe default; adaptive trades determinism for resilience.
+The adaptive agent can never declare a verdict itself — it only gathers evidence.
+
+## Verdicts
+
+`judge` returns one of four verdicts per scenario:
+
+| Verdict         | Meaning                                                                 |
+| --------------- | ----------------------------------------------------------------------- |
+| `PASS`          | The evidence shows the expected state.                                  |
+| `FAIL`          | The evidence contradicts the expectation. Feed it to `report`.          |
+| `MANUAL_REVIEW` | Live state is plausible but uncertain — a human should look. Not a bug. |
+| `SKIP`          | The scenario was blocked or skipped on live (see `@qa-live-policy`).    |
+
+Unclear states resolve to `MANUAL_REVIEW`; they are never forced into pass or fail.
+
+## Project config (`hermes-qa.config.mjs`)
+
+`--page` (and the report/remediate commands) read a project config from the repo
+root. Auto-discovered filenames: `playwright-spec-for-ai-agent.config.mjs`,
+`hermes-qa.config.mjs`, or `playwright-spec-qa.config.mjs` (`.js` / `.cjs` /
+`.json` also work). Override with `--config=<file>`.
+
+```js
+// hermes-qa.config.mjs — every field is optional; defaults shown in comments
+export default {
+  paths: {
+    specDir: "src/page/{page}/__tests__", // where a page's specs live ({page} = --page value)
+    outputDir: "src/page/{page}/__QA__", // generated artifacts
+  },
+  batch: {
+    defaultBaseUrl: "https://staging.example.com", // --base-url default for --page
+  },
+  targetPaths: {
+    dashboard: "/ko/dashboard", // navigation path per page (overrides @qa-page)
+  },
+  staging: {
+    expectedSubscriptionStatus: "INACTIVE", // default account state; --page selects @qa-scenario == this
+  },
+  pages: {
+    dashboard: {
+      specDir: "src/page/dashboard/__tests__", // per-page override of paths.specDir
+      targetPath: "/ko/dashboard", // per-page override of targetPaths
+      expectedSubscriptionStatus: "INACTIVE", // per-page override of staging default
+    },
+  },
+};
+```
+
+With this, `--page=dashboard` runs every `src/page/dashboard/__tests__/*.spec.ts`
+whose `@qa-scenario` is `INACTIVE` (plus any `@qa-always-run`, minus any
+`@qa-live-skip`), navigates to `/ko/dashboard`, and defaults the base URL to
+`staging.example.com`.
+
+## `execute` options
+
+```text
+qa-native execute (--spec=<file> | --page=<name>) [--base-url=<url>] --run-dir=.qa/runs/<id> [options]
+```
+
+| Option                    | Purpose                                                                                        |
+| ------------------------- | ---------------------------------------------------------------------------------------------- |
+| `--spec=<file>`           | Run one spec file (needs `--base-url`). Mutually exclusive with `--page`.                      |
+| `--page=<name>`           | Run the config-designated specs for a page (see above).                                        |
+| `--config=<file>`         | Use a specific project config instead of auto-discovery.                                       |
+| `--base-url=<url>`        | Staging origin. Required with `--spec`; defaults to `batch.defaultBaseUrl` with `--page`.      |
+| `--run-dir=.qa/runs/<id>` | Where evidence is sealed (must not already exist). Required.                                   |
+| `--provider` / `--mode`   | `playwright`/`strict` (default) or `hermes`/`adaptive` — see above.                            |
+| `--storage-state=<file>`  | Signed-in session; auto-discovers `.private/storage-state.json`.                               |
+| `--auth-bootstrap=<file>` | SSO/session-refresh page with origin/endpoint allowlists.                                      |
+| `--allowed-origin=<url>`  | Extra origin(s) the page may read from; comma-separated, up to 7.                                              |
+| `--allow-partial`         | Skip statically un-runnable scenarios instead of failing the whole file (implied by `--page`). |
+| `--budget-actions=<n>`    | Adaptive: max actions (default 32).                                                            |
+| `--budget-turns=<n>`      | Adaptive: max agent turns (default 32).                                                        |
+| `--budget-time-ms=<n>`    | Adaptive: wall-clock budget in ms (default 300000).                                            |
+| `--budget-tokens=<n>`     | Adaptive: max model tokens (default 100000).                                                   |
 
 ## Authenticated pages
 
@@ -273,6 +360,36 @@ replay and remediation. Run `qa-native --help` for full flags.
 Report, publish, and remediate commands take `--repository-root=.` and `--revision=<commit>`;
 publication commands also take `--repository=<owner/repo>`. Select one result of a multi-failure run
 with `--judgment=<result.json>`.
+
+## Environment variables
+
+| Variable                    | Required for            | Purpose                                                                          |
+| --------------------------- | ----------------------- | -------------------------------------------------------------------------------- |
+| `QA_NATIVE_INTEGRITY_KEY`   | `execute`, `judge`, all | 32-byte base64 key that seals and verifies evidence. Keep it stable in CI.       |
+| `QA_NATIVE_PUBLICATION_KEY` | `publish-issue` etc.    | 32-byte base64 key for idempotent Issue fingerprints. Keep it stable in CI.      |
+| `QA_NATIVE_DEBUG`           | debugging               | Set to `1` to print the full error stack on stderr instead of just the category. |
+
+Generate a key with:
+
+```bash
+node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64'))"
+```
+
+## What a run leaves behind
+
+Each `execute` writes a sealed, tamper-evident run directory:
+
+```text
+.qa/runs/<id>/
+├── qa-ir.json            # the compiled QA intent
+├── execution-plan.json   # strict mode only
+├── run.json              # runtime outcome
+├── evidence/             # sealed DOM/ARIA/action-log bundles + HMAC manifest
+└── judgments/            # written by `judge`
+```
+
+Evidence is never deleted. A run that fails validation is quarantined to
+`<id>.invalid/` rather than removed. `.qa/` is workspace-local; keep it gitignored.
 
 ## Troubleshooting
 
