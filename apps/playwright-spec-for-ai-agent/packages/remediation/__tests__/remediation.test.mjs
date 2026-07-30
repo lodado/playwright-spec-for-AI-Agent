@@ -187,6 +187,23 @@ describe("repository-aware remediation vertical slice", () => {
     })).toThrow(/does not match Judge evidence/);
   });
 
+  it("classifies contradictions in a semantic-judgment scenario as TEST_DATA origin", () => {
+    const qa = { ...qaIr(), extensions: { semanticJudgmentScenarioIds: ["scenario-dashboard"] } };
+    const evidence = evidenceBundle();
+    const judgment = judgeResult();
+    const diagnosis = diagnoseFailure({ qaIr: qa, judgeResult: judgment, evidenceBundle: evidence });
+    expect(diagnosis).toMatchObject({ origin: "TEST_DATA", remediationEligible: true });
+    expect(diagnosis.likelyCause).toContain("mock data");
+  });
+
+  it("keeps the same contradiction outside a semantic-judgment scenario as PRODUCT_CODE", () => {
+    const qa = { ...qaIr(), extensions: { semanticJudgmentScenarioIds: ["other-scenario"] } };
+    const evidence = evidenceBundle();
+    const judgment = judgeResult();
+    const diagnosis = diagnoseFailure({ qaIr: qa, judgeResult: judgment, evidenceBundle: evidence });
+    expect(diagnosis).toMatchObject({ origin: "PRODUCT_CODE" });
+  });
+
   it("rejects runtime errors and invented evidence instead of diagnosing them as product failures", () => {
     expect(() => diagnoseFailure({
       qaIr: qaIr(),

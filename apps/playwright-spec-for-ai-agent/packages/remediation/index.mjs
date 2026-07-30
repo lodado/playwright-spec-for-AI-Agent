@@ -51,7 +51,9 @@ export function diagnoseFailure({ qaIr, judgeResult, evidenceBundle, secrets = [
   const failed = input.judgeResult.expectationResults.filter((item) => item.status === "CONTRADICTED");
   const unresolved = input.judgeResult.expectationResults.filter((item) => ["NOT_OBSERVED", "AMBIGUOUS"].includes(item.status));
   const supportingEvidenceRefs = unique([...failed, ...unresolved].flatMap((item) => item.evidenceRefs));
-  const origin = classifyOrigin(input.evidenceBundle, supportingEvidenceRefs, failed.length > 0);
+  const semanticScenarioIds = input.qaIr?.extensions?.semanticJudgmentScenarioIds ?? [];
+  const isSemanticJudgment = semanticScenarioIds.includes(input.evidenceBundle.scenarioId);
+  const origin = classifyOrigin(input.evidenceBundle, supportingEvidenceRefs, failed.length > 0, isSemanticJudgment);
   const remediationEligible = !["UNKNOWN", "ENVIRONMENT", "THIRD_PARTY"].includes(origin);
   const manualReviewReasons = remediationEligible ? [] : [manualReviewReason(origin, input.judgeResult.verdict)];
   const symptom = failed.length > 0
@@ -688,12 +690,12 @@ export function decidePublication({ repository, publicationFingerprint, diagnosi
   return snapshotContract("PublicationDecision", { ...body, decisionId: stableId("publication-decision", body) });
 }
 
-function classifyOrigin(bundle, evidenceRefs, hasContradiction) {
+function classifyOrigin(bundle, evidenceRefs, hasContradiction, isSemanticJudgment) {
   const referenced = new Set(evidenceRefs);
   for (const fact of bundle.facts) {
     if (referenced.has(fact.id) && ORIGIN_BY_FACT_KIND.has(fact.kind)) return ORIGIN_BY_FACT_KIND.get(fact.kind);
   }
-  return hasContradiction ? "PRODUCT_CODE" : "UNKNOWN";
+  return hasContradiction ? (isSemanticJudgment ? "TEST_DATA" : "PRODUCT_CODE") : "UNKNOWN";
 }
 
 function verificationPolicy(value) {
@@ -1185,6 +1187,7 @@ function likelyCause(origin, failed) {
     const rationale = failed.map((item) => item.rationale).filter(Boolean).join(" ").slice(0, 1_000);
     return rationale || "Observed product behavior contradicts the QA expectation.";
   }
+  if (origin === "TEST_DATA") return "Expectation was authored against mock data; live values differ.";
   if (origin === "UNKNOWN") return "Available evidence does not identify a reliable owner or root cause.";
   return `Structured evidence attributes the failure to ${origin.toLowerCase().replaceAll("_", " ")}.`;
 }
