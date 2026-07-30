@@ -59,14 +59,21 @@ function clickableQaIr(action = "CLICK") {
   return input;
 }
 
-function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccessCode=short-secret#short-secret", text = "Dashboard SESSION-SECRET", dom = "<main>Dashboard SESSION-SECRET</main>", clickError, onClick, onGoto, closeDelayMs = 0, elementCount = 1, visible = true, waitForVisible = visible, elementDetached = false } = {}) {
+function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccessCode=short-secret#short-secret", text = "Dashboard SESSION-SECRET", dom = "<main>Dashboard SESSION-SECRET</main>", clickError, onClick, onGoto, closeDelayMs = 0, elementCount = 1, visible = true, waitForVisible = visible, elementDetached = false, appearsAfterWait = false } = {}) {
   const calls = [];
   let routeHandler;
   let webSocketHandler;
+  let appeared = false;
   // Model a mount/entry animation: `isVisible()` is the instant snapshot, `waitFor({state:"visible"})` resolves once the element becomes visible (or rejects if it never does).
+  // `appearsAfterWait` models a page still rendering at observation time: count() is 0 until the
+  // observer waits for the element to appear.
   const visibility = {
     async isVisible() { return visible; },
     async waitFor(options) {
+      if (appearsAfterWait) {
+        appeared = true;
+        return;
+      }
       if (options?.state === "visible" && !waitForVisible) {
         // Real Playwright blocks for the full timeout before rejecting — model that, it is the race.
         await new Promise((resolve) => setTimeout(resolve, options?.timeout ?? 0));
@@ -74,6 +81,7 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
       }
     },
   };
+  const countNow = async () => (appearsAfterWait && !appeared ? 0 : elementCount);
   const page = {
     async goto(url) { calls.push(["goto", url]); await onGoto?.({ url, routeHandler }); },
     locator(selector) {
@@ -87,7 +95,7 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
     getByTestId(value) {
       return {
         ...visibility,
-        async count() { return elementCount; },
+        async count() { return countNow(); },
         async evaluate(_callback, argument, options) {
           if (elementDetached) {
             // Real Playwright waits the full timeout for a detached element to re-attach.
@@ -104,10 +112,10 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
       };
     },
     getByText(value) {
-      return { ...visibility, async count() { return elementCount; }, async evaluate() { return text; }, async click() { calls.push(["click:text", value]); } };
+      return { ...visibility, async count() { return countNow(); }, async evaluate() { return text; }, async click() { calls.push(["click:text", value]); } };
     },
     getByRole(role, options) {
-      return { ...visibility, async count() { return elementCount; }, async evaluate(_callback, argument) { return typeof argument === "number" ? text.slice(0, argument + 1) : { anchor: false, form: false, editable: false }; }, async click() { calls.push(["click:role", role, options]); } };
+      return { ...visibility, async count() { return countNow(); }, async evaluate(_callback, argument) { return typeof argument === "number" ? text.slice(0, argument + 1) : { anchor: false, form: false, editable: false }; }, async click() { calls.push(["click:role", role, options]); } };
     },
     url() { return pageUrl; },
     viewportSize() { return { width: 1280, height: 720 }; },
@@ -237,6 +245,19 @@ describe("readonly Playwright execution provider", () => {
 
     expect(result.outcome).toMatchObject({ type: "COMPLETED" });
     expect(result.bundles[0].facts[0]).toMatchObject({ kind: "ELEMENT_OBSERVATION", value: { expectationId: "heading-visible", resolution: "FOUND", visible: false } });
+  });
+
+  it("waits for a VISIBLE target still rendering at observation time instead of recording MISSING", async () => {
+    // Playwright assertions retry for their declared timeout; an observation taken mid-render must
+    // do the same for appearance, or a loading page becomes a MISSING fact and a false verdict.
+    const input = qaIr();
+    input.suites[0].scenarios[0].expectations = [{ id: "heading-visible", kind: "VISIBLE", target: { testId: "heading" }, provenance: [] }];
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities(), timeoutPolicy: { perNodeMs: 400, runMs: 5_000 } });
+    const fixture = fakeBrowser({ text: "Dashboard", appearsAfterWait: true });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-late-render", browserType: fixture.browserType });
+
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    expect(result.bundles[0].facts[0]).toMatchObject({ kind: "ELEMENT_OBSERVATION", value: { expectationId: "heading-visible", resolution: "FOUND", visible: true } });
   });
 
   it("records a detached element as MISSING instead of timing out the run", async () => {

@@ -1039,8 +1039,15 @@ async function observeExpectations(page, expectations, nodeId, timeout) {
     if (!["CONTAINS_TEXT", "VISIBLE", "NOT_VISIBLE", "PRESENT"].includes(expectation.kind)) continue;
     const locator = semanticLocator(page, expectation.target, { allowUnsupported: true });
     if (!locator) continue;
-    const count = await locator.count();
+    const expectsVisible = ["CONTAINS_TEXT", "VISIBLE"].includes(expectation.kind);
+    let count = await locator.count();
     const id = `${nodeId}:element:${expectation.id}`;
+    if (count === 0 && expectsVisible) {
+      // Playwright assertions retry for their declared timeout; mirror that for appearance so an
+      // observation taken mid-render doesn't turn a still-loading page into a MISSING fact.
+      const appeared = await locator.waitFor({ state: "visible", timeout: Math.max(1, visibilityDeadline - Date.now()) }).then(() => true, () => false);
+      if (appeared) count = await locator.count();
+    }
     if (count === 0) {
       facts.push({ id, kind: "ELEMENT_OBSERVATION", value: { expectationId: expectation.id, resolution: "MISSING" } });
       continue;
@@ -1059,7 +1066,7 @@ async function observeExpectations(page, expectations, nodeId, timeout) {
       continue;
     }
     if (typeof captured !== "string") throw providerError("EVIDENCE_STORAGE_FAILED");
-    const visible = ["CONTAINS_TEXT", "VISIBLE"].includes(expectation.kind)
+    const visible = expectsVisible
       ? await locator.waitFor({ state: "visible", timeout: Math.max(1, visibilityDeadline - Date.now()) }).then(() => true, () => locator.isVisible().then((state) => state === true, () => false))
       : await locator.isVisible().then((state) => state === true, () => false);
     const value = { expectationId: expectation.id, resolution: "FOUND", visible };
