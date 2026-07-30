@@ -15,6 +15,11 @@ required before every `minor` or larger release of `playwright-spec-for-ai-agent
 runbook is the only check against a real staging environment, real Hermes CLI,
 and real credentials.
 
+The strict track must pass **three consecutive runs without any debug or trace
+flags** (`DEBUG`, `QA_NATIVE_TRACE_TIMING` unset). Logging changes the event
+scheduling enough to mask timing races — a green run with logging enabled is
+not evidence of a green run.
+
 ## 1. Hermes Agent CLI compatibility
 
 QA Native calls Hermes through the legacy `--query`/`--max_turns` contract. Install
