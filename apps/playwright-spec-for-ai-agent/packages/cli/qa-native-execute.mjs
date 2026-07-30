@@ -2,7 +2,7 @@ import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, rmSy
 import { basename, join, relative } from "node:path";
 import { compilePlaywrightSpec } from "../adapter-playwright/index.mjs";
 import { RUNTIME_OUTCOME_VERSION, validateContract } from "../contracts/index.mjs";
-import { createAdaptiveExecutionInput, createExecutionPlan } from "../core/index.mjs";
+import { createAdaptiveExecutionInput, createExecutionPlan, DEFAULT_ADAPTIVE_BUDGET } from "../core/index.mjs";
 import { writeEvidenceArchive } from "../evidence/index.mjs";
 import { createHermesExecutionProposer } from "../provider-hermes/index.mjs";
 import { assertPlaywrightAdaptiveExecution, executeWithPlaywright, playwrightExecutionCapabilities, runAdaptiveSuiteWithPlaywright } from "../provider-playwright/index.mjs";
@@ -13,7 +13,7 @@ import { createExclusiveQaDirectory, writePrivateJsonExclusive } from "./qa-nati
 const MAX_SPEC_BYTES = 4 * 1024 * 1024;
 const MAX_AUTH_BOOTSTRAP_BYTES = 64 * 1024;
 
-export async function executeQaNative({ specPath, baseUrl, runDirectory, integrityKey, cwd, provider = "playwright", mode = "strict", storageStatePath, authBootstrapPath, allowedOrigins, allowExternalRead, allowPartial = false }, overrides = {}) {
+export async function executeQaNative({ specPath, baseUrl, runDirectory, integrityKey, cwd, provider = "playwright", mode = "strict", storageStatePath, authBootstrapPath, allowedOrigins, allowExternalRead, allowPartial = false, budgetOverrides = {} }, overrides = {}) {
   const compile = overrides.compile ?? compilePlaywrightSpec;
   const reportDiagnostics = overrides.reportDiagnostics ?? defaultReportDiagnostics;
   const reportSummary = overrides.reportSummary ?? defaultReportSummary;
@@ -45,7 +45,8 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
       const scenarios = qaIr.suites.flatMap((suite) => suite.scenarios);
       if (scenarios.length === 0) throw new Error("adaptive execution requires at least one scenario");
       const runId = basename(runDirectory);
-      agentInputs = scenarios.map((scenario) => createAdaptiveInput({ qaIr, scenarioId: scenario.id, baseUrl, runId, ...(allowedOrigins === undefined ? {} : { allowedOrigins }), ...(allowExternalRead === true ? { allowExternalRead: true } : {}) }));
+      const budget = { ...DEFAULT_ADAPTIVE_BUDGET, ...budgetOverrides };
+      agentInputs = scenarios.map((scenario) => createAdaptiveInput({ qaIr, scenarioId: scenario.id, baseUrl, runId, budget, ...(allowedOrigins === undefined ? {} : { allowedOrigins }), ...(allowExternalRead === true ? { allowExternalRead: true } : {}) }));
       execution = await executeAdaptive({ inputs: agentInputs, proposeAction: createProposer(), storageStatePath, authBootstrap });
       assertPlaywrightAdaptiveExecution(execution);
       agentOutcomes = execution.executions.map((entry, index) => validateContract("ExecutionAgentOutcome", entry.outcome, { input: agentInputs[index] }));

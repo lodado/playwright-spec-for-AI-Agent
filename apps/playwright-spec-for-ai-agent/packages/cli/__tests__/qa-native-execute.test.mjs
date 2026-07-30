@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_AGENT_INPUT_VERSION, RUNTIME_OUTCOME_VERSION, validateContract } from "../../contracts/index.mjs";
+import { createAdaptiveExecutionInput, DEFAULT_ADAPTIVE_BUDGET } from "../../core/index.mjs";
 import { createInMemoryEvidenceStore, readEvidenceArchive } from "../../evidence/index.mjs";
 import { playwrightExecutionCapabilities, runAdaptiveSuiteWithPlaywright, runAdaptiveWithPlaywright } from "../../provider-playwright/index.mjs";
 import { executeQaNative } from "../qa-native-execute.mjs";
@@ -159,6 +160,51 @@ describe("qa-native execute persistence", () => {
     expect(existsSync(join(runDirectory, "execution-plan.json"))).toBe(false);
     const replay = readEvidenceArchive({ directory: join(runDirectory, "evidence"), integrityKey });
     expect(new Set(replay.bundles.map((bundle) => bundle.scenarioId)).size).toBe(3);
+  });
+
+  it("threads --budget-actions overrides through to the adaptive execution input, defaulting the rest", async () => {
+    const cwd = project(multiSource);
+    const server = createServer((_request, response) => response.end("<!doctype html><button>Dashboard</button>"));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    let proposalId = 0;
+    const createProposer = vi.fn(() => async (input) => ({ tokensUsed: 0, proposal: { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: `p-${++proposalId}`, runId: input.runId, scenarioId: input.scenarioId, milestoneId: input.currentMilestoneId, leaseId: input.capabilityLease.leaseId, action: "observe_dom", parameters: {} } }));
+    const createAdaptiveInput = vi.fn((args) => createAdaptiveExecutionInput(args));
+    let status;
+    try {
+      status = await runQaNative(["execute", "--spec=dashboard.spec.ts", `--base-url=http://127.0.0.1:${address.port}`, "--run-dir=.qa/runs/adaptive-budget", "--provider=hermes", "--mode=adaptive", "--budget-actions=3"], {
+        cwd,
+        env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+        handlers: { execute: (args) => executeQaNative(args, { createAdaptiveInput, createProposer, executeAdaptive: (options) => runAdaptiveSuiteWithPlaywright({ ...options, browserType: chromium }) }) },
+        stdout: vi.fn(),
+        stderr: vi.fn(),
+      });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+
+    expect(status).toBe(0);
+    expect(createAdaptiveInput).toHaveBeenCalled();
+    for (const call of createAdaptiveInput.mock.calls) {
+      expect(call[0].budget).toEqual({ ...DEFAULT_ADAPTIVE_BUDGET, actions: 3 });
+    }
+  });
+
+  it("rejects a non-positive-integer --budget-actions value before executing", async () => {
+    const cwd = project();
+    const handler = vi.fn();
+    const stderr = vi.fn();
+    const status = await runQaNative(["execute", "--spec=dashboard.spec.ts", "--base-url=https://example.test", "--run-dir=.qa/runs/invalid-budget", "--provider=hermes", "--mode=adaptive", "--budget-actions=0"], {
+      cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+      handlers: { execute: handler },
+      stdout: vi.fn(),
+      stderr,
+    });
+
+    expect(status).toBe(1);
+    expect(handler).not.toHaveBeenCalled();
+    expect(stderr).toHaveBeenCalledWith("qa-native: budget actions must be a positive integer\n");
   });
 
   it("seals partial evidence and reports the non-completed scenario when one exhausts its budget", async () => {

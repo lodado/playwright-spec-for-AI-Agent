@@ -15,7 +15,7 @@ const PUBLISH_ISSUE_OPTIONS = new Set([...REPORT_OPTIONS, "repository"]);
 const REMEDIATION_OPTIONS = new Set([...PUBLISH_ISSUE_OPTIONS, "publish"]);
 const PUBLICATION_COMMANDS = new Set(["publish-issue", "publish", "remediate"]);
 const COMMAND_OPTIONS = Object.freeze({
-  execute: new Set(["spec", "base-url", "run-dir", "provider", "mode", "storage-state", "auth-bootstrap", "allowed-origin", "allow-partial"]),
+  execute: new Set(["spec", "base-url", "run-dir", "provider", "mode", "storage-state", "auth-bootstrap", "allowed-origin", "allow-partial", "budget-actions", "budget-turns", "budget-time-ms", "budget-tokens"]),
   judge: new Set(["run-dir"]),
   replay: new Set(["run-dir"]),
   diagnose: REPORT_OPTIONS,
@@ -28,7 +28,7 @@ const COMMAND_OPTIONS = Object.freeze({
   remediate: REMEDIATION_OPTIONS,
 });
 const COMMAND_USAGE = Object.freeze({
-  execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> [--storage-state=<file> (default .private/storage-state.json when present) --auth-bootstrap=.private/auth-bootstrap.json --allowed-origin=https://api.example.com --provider=playwright --mode=strict | --provider=hermes --mode=adaptive --allow-partial]",
+  execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> [--storage-state=<file> (default .private/storage-state.json when present) --auth-bootstrap=.private/auth-bootstrap.json --allowed-origin=https://api.example.com --provider=playwright --mode=strict | --provider=hermes --mode=adaptive --allow-partial --budget-actions=<n> --budget-turns=<n> --budget-time-ms=<n> --budget-tokens=<n>]",
   judge: "qa-native judge --run-dir=.qa/runs/<id>",
   replay: "qa-native replay --run-dir=.qa/runs/<id>",
   diagnose: "qa-native diagnose --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
@@ -226,6 +226,10 @@ function parseRequest(argv) {
         "auth-bootstrap": { type: "string" },
         "allowed-origin": { type: "string" },
         "allow-partial": { type: "boolean" },
+        "budget-actions": { type: "string" },
+        "budget-turns": { type: "string" },
+        "budget-time-ms": { type: "string" },
+        "budget-tokens": { type: "string" },
       },
     });
   } catch {
@@ -254,6 +258,12 @@ function normalizeRequest(request, cwd) {
     const authBootstrapPath = request.options["auth-bootstrap"] === undefined
       ? undefined
       : resolveRegularInput(request.options["auth-bootstrap"], { root: cwd, label: "auth bootstrap" });
+    const budgetOverrides = {
+      ...(request.options["budget-actions"] === undefined ? {} : { actions: safePositiveInteger(request.options["budget-actions"], "budget actions") }),
+      ...(request.options["budget-turns"] === undefined ? {} : { turns: safePositiveInteger(request.options["budget-turns"], "budget turns") }),
+      ...(request.options["budget-time-ms"] === undefined ? {} : { timeMs: safePositiveInteger(request.options["budget-time-ms"], "budget time") }),
+      ...(request.options["budget-tokens"] === undefined ? {} : { tokens: safePositiveInteger(request.options["budget-tokens"], "budget tokens") }),
+    };
     return Object.freeze({
       command: request.command,
       cwd,
@@ -266,6 +276,7 @@ function normalizeRequest(request, cwd) {
       ...(authBootstrapPath === undefined ? {} : { authBootstrapPath }),
       ...(request.options["allowed-origin"] === undefined ? {} : { allowedOrigins: parseAllowedOrigins(request.options["allowed-origin"]) }),
       ...(request.options["allow-partial"] ? { allowPartial: true } : {}),
+      ...(Object.keys(budgetOverrides).length === 0 ? {} : { budgetOverrides }),
     });
   }
 
@@ -298,6 +309,11 @@ function parseAllowedOrigins(value) {
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.pathname !== "/" || url.search || url.hash) throw new CliError("allowed origin is invalid");
   }
   return Object.freeze(origins);
+}
+
+function safePositiveInteger(value, label) {
+  if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) throw new CliError(`${label} must be a positive integer`);
+  return Number(value);
 }
 
 function safePublishMode(value) {
