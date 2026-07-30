@@ -59,6 +59,7 @@
   "devDependencies": {
     "@persona-runtime/contracts": "workspace:*",
     "@persona-runtime/evaluator": "workspace:*",
+    "@persona-runtime/hermes-transport": "workspace:*",
     "@persona-runtime/persona-policy": "workspace:*",
     "@persona-runtime/reporter-html": "workspace:*",
     "@persona-runtime/runtime-core": "workspace:*",

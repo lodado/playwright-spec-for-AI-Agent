@@ -1,7 +1,7 @@
 import { canonicalHash } from "@persona-runtime/contracts";
 import { PRESETS, deriveSessionSeed, sampleBehaviorPolicy } from "@persona-runtime/persona-policy";
 import { RUNTIME_ERROR_CODES, RuntimeCoreError } from "@persona-runtime/runtime-core";
-import { readHermesModelConfig, redactSensitiveText, runHermes } from "../../playwright-spec-for-ai-agent/scripts/hermes-runner.mjs";
+import { readHermesModelConfig, redactSensitiveText, runHermes } from "@persona-runtime/hermes-transport";
 
 export const HERMES_ACTION_PROMPT_VERSION = "personaut-hermes-action/0.1";
 const MODEL_DEADLINE_MS = 30_000;
