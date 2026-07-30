@@ -159,6 +159,58 @@ describe("adaptive policy matrix", () => {
     expect(new Set(replay.bundles.map((bundle) => bundle.scenarioId)).size).toBe(5);
   }, 30_000);
 
+  it("completes a lazy-rendered expectation by scrolling before re-observing", async () => {
+    // Virtual lists and IntersectionObserver-gated sections do not exist in the DOM until the
+    // page scrolls; the scroll_view action is how an adaptive run unlocks them. This exercises
+    // proposer → authorizer → gateway wheel → re-observe → evidence validator end to end.
+    const lazySource = `// @qa-scenario: DASHBOARD_LAZY
+test.describe("lazy dashboard", () => {
+  // @qa-live-policy: readonly
+  test("shows lazy metrics", async ({ page }) => {
+    await expect(page.getByText("Lazy Loaded Metrics")).toBeVisible();
+  });
+});
+`;
+    const lazyHtml = '<!doctype html><h1>Dashboard</h1><div style="height:4000px"></div><div id="lazy"></div><script>addEventListener("wheel", () => { document.getElementById("lazy").textContent = "Lazy Loaded Metrics"; }, { once: true });</script>';
+    const cwd = project(lazySource);
+    const server = createServer((_request, response) => {
+      response.setHeader("content-type", "text/html");
+      response.end(lazyHtml);
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    let proposalId = 0;
+    const scrolled = new Set();
+    const createProposer = () => async (input) => {
+      const base = {
+        schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION,
+        proposalId: `p-${++proposalId}`,
+        runId: input.runId,
+        scenarioId: input.scenarioId,
+        milestoneId: input.currentMilestoneId,
+        leaseId: input.capabilityLease.leaseId,
+      };
+      const observedUnsatisfied = input.recentObservations.some((observation) => !observation.satisfiedMilestoneIds.includes(input.currentMilestoneId));
+      if (observedUnsatisfied && !scrolled.has(input.scenarioId)) {
+        scrolled.add(input.scenarioId);
+        return { tokensUsed: 0, proposal: { ...base, action: "scroll_view", parameters: { deltaX: 0, deltaY: 4_000 } } };
+      }
+      return { tokensUsed: 0, proposal: { ...base, action: "observe_dom", parameters: {} } };
+    };
+    let status;
+    try {
+      status = await executeMatrix({ cwd, baseUrl: `http://127.0.0.1:${address.port}`, runDir: ".qa/runs/lazy", proposer: createProposer });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+
+    expect(status).toBe(0);
+    const outcomes = outcomesOf(cwd, ".qa/runs/lazy");
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0].type).toBe("COMPLETED");
+    expect(scrolled.size).toBe(1);
+  }, 30_000);
+
   it("keeps the run and its sealed evidence when one scenario exhausts its budget", async () => {
     const cwd = project();
     await withServer(async (baseUrl) => {
