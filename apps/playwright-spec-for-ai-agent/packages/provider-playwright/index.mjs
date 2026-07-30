@@ -2,6 +2,7 @@ import {
   EXECUTION_ACTION_RESULT_VERSION,
   EXECUTION_AGENT_OUTCOME_VERSION,
   RUNTIME_OUTCOME_VERSION,
+  auditArtifactShape,
   canonicalHash,
   snapshotContract,
   validateContract,
@@ -590,13 +591,15 @@ function captureGatewayArtifacts(store, proposal, before, after, satisfiedMilest
     url.hash = "";
     auditProposal.parameters.url = url.href;
   }
-  return [
-    store.captureArtifact({ id: `${proposal.proposalId}:before:dom`, type: "DOM_SNAPSHOT", contentType: "text/html", content: before.dom }),
-    store.captureArtifact({ id: `${proposal.proposalId}:before:aria`, type: "ARIA_SNAPSHOT", contentType: "text/plain", content: before.aria }),
-    store.captureArtifact({ id: `${proposal.proposalId}:action`, type: "ACTION_LOG", contentType: "application/json", content: JSON.stringify({ proposal: auditProposal, status: "ACCEPTED", before: before.page, after: after.page, satisfiedMilestoneIds }) }),
-    store.captureArtifact({ id: `${proposal.proposalId}:after:dom`, type: "DOM_SNAPSHOT", contentType: "text/html", content: after.dom }),
-    store.captureArtifact({ id: `${proposal.proposalId}:after:aria`, type: "ARIA_SNAPSHOT", contentType: "text/plain", content: after.aria }),
-  ];
+  const content = {
+    "before:dom": { contentType: "text/html", content: before.dom },
+    "before:aria": { contentType: "text/plain", content: before.aria },
+    action: { contentType: "application/json", content: JSON.stringify({ proposal: auditProposal, status: "ACCEPTED", before: before.page, after: after.page, satisfiedMilestoneIds }) },
+    "after:dom": { contentType: "text/html", content: after.dom },
+    "after:aria": { contentType: "text/plain", content: after.aria },
+  };
+  return auditArtifactShape(proposal.action).required.map((entry) =>
+    store.captureArtifact({ id: `${proposal.proposalId}:${entry.suffix}`, type: entry.type, ...content[entry.suffix] }));
 }
 
 function gatewayUrl(page, allowedOrigins) {

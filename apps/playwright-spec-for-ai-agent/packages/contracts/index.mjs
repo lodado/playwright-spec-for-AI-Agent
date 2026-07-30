@@ -48,6 +48,23 @@ export const ADAPTIVE_ACTIONS = Object.freeze([
   "reload_page",
   "report_blocked",
 ]);
+// Single definition of what a sealed adaptive audit looks like. The provider builds each audit
+// from this shape and the evidence validator counts against it — neither side keeps its own copy
+// of "exactly five snapshots plus, for report_blocked, one VISIBLE_TEXT". Optional types are
+// per-audit 0-or-1.
+const AUDIT_REQUIRED_ARTIFACTS = Object.freeze([
+  Object.freeze({ suffix: "before:dom", type: "DOM_SNAPSHOT" }),
+  Object.freeze({ suffix: "before:aria", type: "ARIA_SNAPSHOT" }),
+  Object.freeze({ suffix: "action", type: "ACTION_LOG" }),
+  Object.freeze({ suffix: "after:dom", type: "DOM_SNAPSHOT" }),
+  Object.freeze({ suffix: "after:aria", type: "ARIA_SNAPSHOT" }),
+]);
+
+export function auditArtifactShape(action) {
+  const optional = action === "report_blocked" ? Object.freeze(["VISIBLE_TEXT"]) : Object.freeze([]);
+  return Object.freeze({ required: AUDIT_REQUIRED_ARTIFACTS, optional });
+}
+
 export const RUNTIME_ERROR_CODES = Object.freeze([
   "BROWSER_START_FAILED",
   "AUTHENTICATION_FAILED",

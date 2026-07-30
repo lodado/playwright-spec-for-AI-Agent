@@ -4,9 +4,29 @@ import {
   EXECUTION_ACTION_RESULT_VERSION,
   EXECUTION_AGENT_INPUT_VERSION,
   EXECUTION_AGENT_OUTCOME_VERSION,
+  auditArtifactShape,
   snapshotContract,
   validateContract,
 } from "../index.mjs";
+
+describe("auditArtifactShape", () => {
+  it("requires the five snapshot artifacts for every action", () => {
+    const shape = auditArtifactShape("click_observed_element");
+    expect(shape.required.map((entry) => entry.type)).toEqual(
+      ["DOM_SNAPSHOT", "ARIA_SNAPSHOT", "ACTION_LOG", "DOM_SNAPSHOT", "ARIA_SNAPSHOT"]);
+    expect(shape.optional).toEqual([]);
+  });
+
+  it("allows report_blocked one extra VISIBLE_TEXT artifact", () => {
+    expect(auditArtifactShape("report_blocked").optional).toEqual(["VISIBLE_TEXT"]);
+  });
+
+  it("freezes its result", () => {
+    const shape = auditArtifactShape("observe_dom");
+    expect(Object.isFrozen(shape)).toBe(true);
+    expect(Object.isFrozen(shape.required)).toBe(true);
+  });
+});
 
 export function executionAgentInput() {
   return {
