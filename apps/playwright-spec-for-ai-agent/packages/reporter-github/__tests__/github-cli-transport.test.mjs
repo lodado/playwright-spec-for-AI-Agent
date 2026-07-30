@@ -30,7 +30,9 @@ describe("GitHub CLI Issue transport", () => {
     expect(await transport.createIssue({ repository: "owner/example", title: "[QA] Dashboard", body: "## Failure", labels: ["qa-runtime"] })).toEqual({ number: 42, url: "https://github.com/owner/example/issues/42" });
     expect(spawn.mock.calls[1][1]).toContain("repos/owner/example/contents/src/Dashboard.jsx");
     expect(spawn.mock.calls[2][1]).toEqual(expect.arrayContaining(["issue", "create", "--label", "qa-runtime"]));
-    expect(spawn.mock.calls[2][2].input).toBe("## Failure");
+    // Node 24 rejects string input combined with encoding:"buffer" (ERR_UNKNOWN_ENCODING) —
+    // payloads must reach spawnSync as buffers.
+    expect(spawn.mock.calls[2][2].input).toEqual(Buffer.from("## Failure", "utf8"));
     expect(spawn.mock.calls[2][2].env).toMatchObject({ GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" });
     expect(spawn.mock.calls[2][2].env.QA_NATIVE_INTEGRITY_KEY).toBeUndefined();
     expect(spawn.mock.calls[2][2].env.QA_NATIVE_PUBLICATION_KEY).toBeUndefined();
