@@ -16,6 +16,7 @@
     "pack:compat": "pnpm --filter playwright-spec-for-ai-agent pack",
     "package:smoke": "node scripts/package-smoke.mjs && node scripts/personaut-package-smoke.mjs",
     "personaut": "pnpm --filter @lodado/personaut build && node apps/personaut/bin/personaut.mjs",
+    "design-convergence": "node apps/design-convergence/dist/cli.js",
     "fixture:hidden-cta": "node fixtures/hidden-below-fold-cta/server.mjs"
   },
   "devDependencies": {
