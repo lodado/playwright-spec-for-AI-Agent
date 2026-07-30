@@ -62,6 +62,13 @@ export function createGitHubCliIssueTransport({ spawn = spawnSync } = {}) {
       const target = repositorySlug(repository);
       if (typeof title !== "string" || title.length === 0 || title.length > 240 || typeof body !== "string" || body.length === 0 || body.length > 65_536) throw new Error("GitHub Issue request is invalid");
       const safeLabels = validateLabels(labels, []);
+      // Labels are metadata, not policy: ensure each one exists (idempotently — an "already
+      // exists" failure is ignored, existing labels are never modified) instead of failing the
+      // whole publication on repositories that have never seen qa-native. Dynamic labels like
+      // scenario:<id> cannot be pre-created by operators.
+      for (const label of safeLabels) {
+        spawn("gh", ["label", "create", label, "--repo", target, "--color", "ededed", "--description", "qa-native"], { encoding: "buffer", maxBuffer: MAX_GITHUB_RESPONSE_BYTES, env: githubEnvironment() });
+      }
       const args = ["issue", "create", "--repo", target, "--title", title, "--body-file", "-"];
       for (const label of safeLabels) args.push("--label", label);
       const url = runGh(spawn, args, body).toString("utf8").trim();
@@ -621,7 +628,16 @@ function verifyStableId(prefix, idKey, value) { const { [idKey]: id, ...body } =
 function jsonSnapshot(value) { const serialized = JSON.stringify(value); if (serialized === undefined) throw new Error("GitHub publication input must be JSON-serializable"); return JSON.parse(serialized); }
 // Input must be a Buffer: Node 24 rejects string input combined with encoding:"buffer"
 // (ERR_UNKNOWN_ENCODING inside spawnSync).
-function runGh(spawn, args, input) { const result = spawn("gh", args, { encoding: "buffer", maxBuffer: MAX_GITHUB_RESPONSE_BYTES, env: githubEnvironment(), ...(input === undefined ? {} : { input: Buffer.isBuffer(input) ? input : Buffer.from(String(input), "utf8") }) }); if (!result || result.status !== 0 || !(result.stdout instanceof Uint8Array) || result.stdout.byteLength > MAX_GITHUB_RESPONSE_BYTES) throw new Error("GitHub CLI request failed"); return Buffer.from(result.stdout); }
+function runGh(spawn, args, input) {
+  const result = spawn("gh", args, { encoding: "buffer", maxBuffer: MAX_GITHUB_RESPONSE_BYTES, env: githubEnvironment(), ...(input === undefined ? {} : { input: Buffer.isBuffer(input) ? input : Buffer.from(String(input), "utf8") }) });
+  if (!result || result.status !== 0 || !(result.stdout instanceof Uint8Array) || result.stdout.byteLength > MAX_GITHUB_RESPONSE_BYTES) {
+    // Diagnostics must never be swallowed: gh's stderr names the real failure (missing label,
+    // auth, rate limit) and is reachable on demand without leaking into default output.
+    if (process.env.QA_NATIVE_DEBUG && result?.stderr) process.stderr.write(`qa-native gh debug: ${Buffer.from(result.stderr).toString("utf8").slice(0, 2_000)}\n`);
+    throw new Error("GitHub CLI request failed");
+  }
+  return Buffer.from(result.stdout);
+}
 function runGit(spawn, root, args) { const result = spawn("git", ["-C", root, ...args], { encoding: "buffer", maxBuffer: MAX_GITHUB_RESPONSE_BYTES, env: gitPublicationEnvironment() }); if (!result || result.status !== 0 || !(result.stdout instanceof Uint8Array) || result.stdout.byteLength > MAX_GITHUB_RESPONSE_BYTES) throw new Error("GitHub Draft PR git operation failed"); return Buffer.from(result.stdout); }
 function assertDraftDiff(spawn, root, range, files, expectedHash) { const args = ["diff", "--no-ext-diff", "--no-renames", ...range, "--"]; const diff = runGit(spawn, root, args); const names = runGit(spawn, root, ["diff", "--name-only", "--no-renames", ...range, "--"]).toString("utf8").trim().split("\n").filter(Boolean).sort(); const expected = [...files].sort(); if (`sha256:${createHash("sha256").update(diff).digest("hex")}` !== expectedHash || names.length !== expected.length || names.some((path, index) => path !== expected[index])) throw new Error("GitHub Draft PR diff does not match the verified application"); }
 function readDraftHead(spawn, repository, target) { if (!target || target.publication !== "DRAFT_PR" || !Number.isSafeInteger(target.number)) throw new Error("GitHub Draft PR target is invalid"); const branch = runGh(spawn, ["pr", "view", String(target.number), "--repo", repository, "--json", "headRefName", "--jq", ".headRefName"]).toString("utf8").trim(); if (!/^qa\/fix-[a-z0-9-]+$/.test(branch)) throw new Error("GitHub Draft PR head branch is not managed"); return branch; }

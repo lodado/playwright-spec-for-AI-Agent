@@ -19,24 +19,30 @@ describe("GitHub CLI Issue transport", () => {
     vi.stubEnv("APP_BROWSER_PASSWORD", "browser-secret");
     const revision = "a".repeat(40);
     const content = Buffer.from("export const dashboard = true;\n");
-    const spawn = vi.fn()
-      .mockReturnValueOnce({ status: 0, stdout: Buffer.from(`${revision}\n`) })
-      .mockReturnValueOnce({ status: 0, stdout: content })
-      .mockReturnValueOnce({ status: 0, stdout: Buffer.from("https://github.com/owner/example/issues/42\n") });
+    const spawn = vi.fn((command, args) => {
+      if (args[0] === "label") return { status: 1, stdout: Buffer.alloc(0), stderr: Buffer.from("already exists") };
+      if (args[0] === "issue") return { status: 0, stdout: Buffer.from("https://github.com/owner/example/issues/42\n") };
+      if (args.some((value) => String(value).includes("/contents/"))) return { status: 0, stdout: content };
+      return { status: 0, stdout: Buffer.from(`${revision}\n`) };
+    });
     const transport = createGitHubCliIssueTransport({ spawn });
     const files = [{ path: "src/Dashboard.jsx", contentHash: `sha256:${createHash("sha256").update(content).digest("hex")}` }];
 
     expect(await transport.verifyCodeContext({ repository: "owner/example", revision, files })).toBe(true);
-    expect(await transport.createIssue({ repository: "owner/example", title: "[QA] Dashboard", body: "## Failure", labels: ["qa-runtime"] })).toEqual({ number: 42, url: "https://github.com/owner/example/issues/42" });
-    expect(spawn.mock.calls[1][1]).toContain("repos/owner/example/contents/src/Dashboard.jsx");
-    expect(spawn.mock.calls[2][1]).toEqual(expect.arrayContaining(["issue", "create", "--label", "qa-runtime"]));
+    expect(await transport.createIssue({ repository: "owner/example", title: "[QA] Dashboard", body: "## Failure", labels: ["qa-runtime", "scenario:dashboard"] })).toEqual({ number: 42, url: "https://github.com/owner/example/issues/42" });
+    // Labels are ensured idempotently before the issue call — a pre-existing label (non-zero
+    // exit) must not fail the publication.
+    const labelCalls = spawn.mock.calls.filter(([, args]) => args[0] === "label");
+    expect(labelCalls.map(([, args]) => args[2])).toEqual(["qa-runtime", "scenario:dashboard"]);
+    const issueCall = spawn.mock.calls.find(([, args]) => args[0] === "issue");
+    expect(issueCall[1]).toEqual(expect.arrayContaining(["issue", "create", "--label", "qa-runtime", "--label", "scenario:dashboard"]));
     // Node 24 rejects string input combined with encoding:"buffer" (ERR_UNKNOWN_ENCODING) —
     // payloads must reach spawnSync as buffers.
-    expect(spawn.mock.calls[2][2].input).toEqual(Buffer.from("## Failure", "utf8"));
-    expect(spawn.mock.calls[2][2].env).toMatchObject({ GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" });
-    expect(spawn.mock.calls[2][2].env.QA_NATIVE_INTEGRITY_KEY).toBeUndefined();
-    expect(spawn.mock.calls[2][2].env.QA_NATIVE_PUBLICATION_KEY).toBeUndefined();
-    expect(spawn.mock.calls[2][2].env.APP_BROWSER_PASSWORD).toBeUndefined();
+    expect(issueCall[2].input).toEqual(Buffer.from("## Failure", "utf8"));
+    expect(issueCall[2].env).toMatchObject({ GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" });
+    expect(issueCall[2].env.QA_NATIVE_INTEGRITY_KEY).toBeUndefined();
+    expect(issueCall[2].env.QA_NATIVE_PUBLICATION_KEY).toBeUndefined();
+    expect(issueCall[2].env.APP_BROWSER_PASSWORD).toBeUndefined();
   });
 
   it("fails closed on content drift and CLI errors", async () => {
