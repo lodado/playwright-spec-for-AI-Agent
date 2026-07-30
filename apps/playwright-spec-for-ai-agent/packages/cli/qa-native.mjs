@@ -16,7 +16,7 @@ const REMEDIATION_OPTIONS = new Set([...PUBLISH_ISSUE_OPTIONS, "publish"]);
 const PUBLICATION_COMMANDS = new Set(["publish-issue", "publish", "remediate"]);
 const COMMAND_OPTIONS = Object.freeze({
   execute: new Set(["spec", "base-url", "run-dir", "provider", "mode", "storage-state", "auth-bootstrap", "allowed-origin", "allow-partial", "budget-actions", "budget-turns", "budget-time-ms", "budget-tokens"]),
-  judge: new Set(["run-dir"]),
+  judge: new Set(["run-dir", "fail-on"]),
   replay: new Set(["run-dir"]),
   diagnose: REPORT_OPTIONS,
   "suggest-fix": REPORT_OPTIONS,
@@ -29,7 +29,7 @@ const COMMAND_OPTIONS = Object.freeze({
 });
 const COMMAND_USAGE = Object.freeze({
   execute: "qa-native execute --spec=<file> --base-url=<url> --run-dir=.qa/runs/<id> [--storage-state=<file> (default .private/storage-state.json when present) --auth-bootstrap=.private/auth-bootstrap.json --allowed-origin=https://api.example.com --provider=playwright --mode=strict | --provider=hermes --mode=adaptive --allow-partial --budget-actions=<n> --budget-turns=<n> --budget-time-ms=<n> --budget-tokens=<n>]",
-  judge: "qa-native judge --run-dir=.qa/runs/<id>",
+  judge: "qa-native judge --run-dir=.qa/runs/<id> [--fail-on=fail|manual-review]",
   replay: "qa-native replay --run-dir=.qa/runs/<id>",
   diagnose: "qa-native diagnose --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
   "suggest-fix": "qa-native suggest-fix --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
@@ -226,6 +226,7 @@ function parseRequest(argv) {
         "auth-bootstrap": { type: "string" },
         "allowed-origin": { type: "string" },
         "allow-partial": { type: "boolean" },
+        "fail-on": { type: "string" },
         "budget-actions": { type: "string" },
         "budget-turns": { type: "string" },
         "budget-time-ms": { type: "string" },
@@ -281,7 +282,10 @@ function normalizeRequest(request, cwd) {
   }
 
   assertPrivateDirectory(runDirectory);
-  if (!REPORT_COMMANDS.has(request.command) && !PUBLICATION_COMMANDS.has(request.command)) return Object.freeze({ command: request.command, cwd, runDirectory });
+  if (!REPORT_COMMANDS.has(request.command) && !PUBLICATION_COMMANDS.has(request.command)) {
+    const failOn = request.options["fail-on"] === undefined ? undefined : safeFailOn(request.options["fail-on"]);
+    return Object.freeze({ command: request.command, cwd, runDirectory, ...(failOn === undefined ? {} : { failOn }) });
+  }
   const repositoryRoot = resolveRepositoryRoot(request.options["repository-root"], cwd);
   const judgmentPath = request.options.judgment === undefined ? undefined : resolveRegularInput(request.options.judgment, { root: runDirectory, label: "judgment" });
   return Object.freeze({
@@ -314,6 +318,11 @@ function parseAllowedOrigins(value) {
 function safePositiveInteger(value, label) {
   if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) throw new CliError(`${label} must be a positive integer`);
   return Number(value);
+}
+
+function safeFailOn(value) {
+  if (value !== "fail" && value !== "manual-review") throw new CliError("fail-on must be fail or manual-review");
+  return value;
 }
 
 function safePublishMode(value) {

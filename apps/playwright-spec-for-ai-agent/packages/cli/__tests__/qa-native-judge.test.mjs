@@ -155,16 +155,78 @@ describe("qa-native offline judge", () => {
     expect(await dispatch(fixture.cwd)).toBe(1);
     expect(readdirSync(directory).sort()).toEqual(before);
   });
+
+  it("reports a per-scenario verdict summary with totals", async () => {
+    const fixture = persistedRun({ scenarioCount: 2, deterministic: false });
+    const [scenarioA, scenarioB] = fixture.qaIr.suites[0].scenarios;
+    const reportVerdicts = vi.fn();
+
+    expect(await dispatch(fixture.cwd, { judge: mixedVerdictJudge(fixture, scenarioA), reportVerdicts })).toBe(0);
+
+    expect(reportVerdicts).toHaveBeenCalledWith({
+      perScenario: expect.arrayContaining([
+        { scenarioId: scenarioA.id, verdict: "PASS", confidence: 0.8 },
+        { scenarioId: scenarioB.id, verdict: "FAIL", confidence: 0.8 },
+      ]),
+      totals: { pass: 1, fail: 1, manualReview: 0 },
+    });
+  });
+
+  it("writes the default verdict summary to stdout", async () => {
+    const fixture = persistedRun({ scenarioCount: 2, deterministic: false });
+    const [scenarioA, scenarioB] = fixture.qaIr.suites[0].scenarios;
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    let output;
+    try {
+      expect(await dispatch(fixture.cwd, { judge: mixedVerdictJudge(fixture, scenarioA) })).toBe(0);
+      output = write.mock.calls.map(([chunk]) => chunk).join("");
+    } finally {
+      write.mockRestore();
+    }
+    expect(output).toContain(`qa-native judge: ${scenarioA.id} PASS (confidence 0.8)`);
+    expect(output).toContain(`qa-native judge: ${scenarioB.id} FAIL (confidence 0.8)`);
+    expect(output).toContain("verdicts: 1 pass, 1 fail, 0 manual-review\n");
+  });
+
+  it("returns exit code 1 under --fail-on=fail when a scenario fails, and 0 without the flag", async () => {
+    const withoutFlag = persistedRun({ scenarioCount: 2, deterministic: false });
+    const [withoutFlagScenarioA] = withoutFlag.qaIr.suites[0].scenarios;
+    expect(await dispatch(withoutFlag.cwd, { judge: mixedVerdictJudge(withoutFlag, withoutFlagScenarioA) })).toBe(0);
+
+    const withFlag = persistedRun({ scenarioCount: 2, deterministic: false });
+    const [withFlagScenarioA] = withFlag.qaIr.suites[0].scenarios;
+    expect(await dispatch(withFlag.cwd, { judge: mixedVerdictJudge(withFlag, withFlagScenarioA) }, { failOn: "fail" })).toBe(1);
+  });
 });
 
-async function dispatch(cwd, overrides = {}, { key = integrityKey, stderr = vi.fn() } = {}) {
-  return runQaNative(["judge", "--run-dir=.qa/runs/run-1"], {
+async function dispatch(cwd, overrides = {}, { key = integrityKey, stderr = vi.fn(), stdout = vi.fn(), failOn } = {}) {
+  return runQaNative(["judge", "--run-dir=.qa/runs/run-1", ...(failOn ? [`--fail-on=${failOn}`] : [])], {
     cwd,
     env: { QA_NATIVE_INTEGRITY_KEY: key.toString("base64") },
     handlers: { judge: (args) => judgeQaNative(args, overrides) },
-    stdout: vi.fn(),
+    stdout,
     stderr,
   });
+}
+
+// One PASS + one FAIL: routes both scenarios' single expectation through Hermes text-only judgment
+// (deterministic:false forces the semantic path) and tells the two scenarios apart by the visible-text
+// evidence content the transport stub receives, which embeds the scenario's own id.
+function mixedVerdictJudge(fixture, scenarioA) {
+  const transport = vi.fn(async (query) => {
+    const isFirst = query.includes(scenarioA.id);
+    return {
+      expectationResults: [{
+        expectationId: isFirst ? fixture.expectationIds[0] : fixture.expectationIds[1],
+        status: isFirst ? "MATCHED" : "CONTRADICTED",
+        confidence: 0.8,
+        evidenceRefs: [isFirst ? fixture.bundles[0].artifacts[0].id : fixture.bundles[1].artifacts[0].id],
+        rationale: isFirst ? "Visible evidence supports the expectation." : "Visible evidence contradicts the expectation.",
+      }],
+      uncertainty: [],
+    };
+  });
+  return (args) => judgeWithHermes({ ...args, transport, model: "hermes-test" });
 }
 
 function persistedRun({ scenarioCount = 1, checkpointsPerScenario = 1, deterministic, adaptive = false, errorScenarioIndices = [] }) {

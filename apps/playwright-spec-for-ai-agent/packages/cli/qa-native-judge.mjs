@@ -7,8 +7,9 @@ import { validateAdaptiveExecutionEvidence } from "./qa-native-adaptive-evidence
 import { readAuthenticatedRunEnvelope, verifyRunEnvelopeBindings } from "./qa-native-run-envelope.mjs";
 import { createExclusiveQaDirectory, readPrivateJson, writePrivateJsonExclusive } from "./qa-native.mjs";
 
-export async function judgeQaNative({ runDirectory, integrityKey, cwd }, overrides = {}) {
+export async function judgeQaNative({ runDirectory, integrityKey, cwd, failOn }, overrides = {}) {
   const judge = overrides.judge ?? judgeWithHermes;
+  const reportVerdicts = overrides.reportVerdicts ?? defaultReportVerdicts;
   const outcome = readPrivateJson(relative(cwd, join(runDirectory, "run.json")), { cwd });
   validateContract("RuntimeOutcome", outcome);
   if (outcome.stage !== "execute" || outcome.type !== "COMPLETED") throw new Error("QA execution is incomplete");
@@ -44,11 +45,13 @@ export async function judgeQaNative({ runDirectory, integrityKey, cwd }, overrid
     verifyRunEnvelopeBindings({ envelope, runId: envelope.runId, mode: "strict", qaIr, runtimeOutcome: outcome, evidenceManifest: archive.manifest, executionPlan });
   }
   const results = [];
+  const perScenario = [];
   for (const bundle of bundles) {
     const result = await judge({ qaIr, bundle, manifest: archive.manifest, readBlob: archive.readBlob });
     if (result?.type === "ERROR") throw new Error("QA judgment failed");
     validateContract("JudgeResult", result, { qaIr, evidenceBundle: bundle });
     results.push(result);
+    perScenario.push({ scenarioId: bundle.scenarioId, verdict: result.verdict, confidence: result.confidence });
   }
   if (results.length === 0) throw new Error("QA evidence is empty");
 
@@ -70,11 +73,29 @@ export async function judgeQaNative({ runDirectory, integrityKey, cwd }, overrid
       stage: "judge",
       type: "COMPLETED",
     }, { cwd });
+    const totals = perScenario.reduce((counts, { verdict }) => ({
+      pass: counts.pass + (verdict === "PASS" ? 1 : 0),
+      fail: counts.fail + (verdict === "FAIL" ? 1 : 0),
+      manualReview: counts.manualReview + (verdict === "MANUAL_REVIEW" ? 1 : 0),
+    }), { pass: 0, fail: 0, manualReview: 0 });
+    reportVerdicts({ perScenario, totals });
+    if (failOn === "fail" && totals.fail > 0) return 1;
+    if (failOn === "manual-review" && (totals.fail > 0 || totals.manualReview > 0)) return 1;
     return 0;
   } catch (error) {
     if (created) rmSync(judgmentDirectory, { recursive: true, force: true });
     throw error;
   }
+}
+
+// A run's judgment was previously silent (exit 0, no output) regardless of how many scenarios failed,
+// leaving CI and operators to dig through JSON to learn the outcome. Emit one line per scenario plus a
+// totals line, and let --fail-on turn FAIL/MANUAL_REVIEW verdicts into a nonzero exit for CI gating.
+function defaultReportVerdicts({ perScenario, totals }) {
+  for (const { scenarioId, verdict, confidence } of perScenario) {
+    process.stdout.write(`qa-native judge: ${scenarioId} ${verdict} (confidence ${confidence})\n`);
+  }
+  process.stdout.write(`verdicts: ${totals.pass} pass, ${totals.fail} fail, ${totals.manualReview} manual-review\n`);
 }
 
 function shortHash(value) {
