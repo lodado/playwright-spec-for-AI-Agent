@@ -1,0 +1,13 @@
+{
+  "figma": { "fileKey": "k" },
+  "execution": { "allowProjectCode": true },
+  "cases": [
+    {
+      "id": "pricing-desktop",
+      "route": "/pricing",
+      "viewport": { "width": 1440, "height": 900 },
+      "figmaRootNodeId": "1:2",
+      "readySelector": "[data-page-ready=\"true\"]"
+    }
+  ]
+}
