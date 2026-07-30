@@ -1,0 +1,18 @@
+{
+  "name": "@persona-runtime/hermes-transport",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-contained Hermes Agent CLI transport (stateless spawn, redaction, JSON extraction) shared by personaut and qa-native.",
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "files": [
+    "index.mjs"
+  ],
+  "scripts": {
+    "build": "node --check index.mjs",
+    "typecheck": "node --check index.mjs",
+    "test": "node --check index.mjs"
+  }
+}

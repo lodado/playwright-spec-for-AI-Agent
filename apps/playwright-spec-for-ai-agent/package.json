@@ -63,6 +63,7 @@
     "packages/reporter-markdown/index.mjs"
   ],
   "scripts": {
+    "prepack": "esbuild scripts/hermes-runner.mjs --bundle --platform=node --format=esm --outfile=scripts/hermes-runner.mjs --allow-overwrite",
     "test": "vitest run",
     "prepublishOnly": "npm test"
   },
@@ -78,7 +79,9 @@
     "typescript": "^5.9.3"
   },
   "devDependencies": {
+    "@persona-runtime/hermes-transport": "workspace:*",
     "@playwright/test": "^1.60.0",
+    "esbuild": "^0.28.1",
     "vitest": "^3.2.7"
   },
   "engines": {
