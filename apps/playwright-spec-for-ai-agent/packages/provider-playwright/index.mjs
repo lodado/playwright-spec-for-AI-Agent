@@ -10,6 +10,7 @@ import {
   advanceAdaptiveMilestone,
   createAdaptiveActionAuthorizer,
   executePlan,
+  observationSettleBudget,
   providerCapabilities,
   validateExecutionPlanBinding,
 } from "../core/index.mjs";
@@ -40,12 +41,6 @@ const GATEWAY_ARIA_LIMIT = 512 * 1024;
 const GATEWAY_MAX_ELEMENTS = 128;
 const GATEWAY_ELEMENT_TEXT_LIMIT = 1024;
 const GATEWAY_CLEANUP_TIMEOUT_MS = 1_000;
-// Hydration settle after adaptive navigation — SSR HTML can lack testids the client only
-// attaches after hydration, so evidence sealed at domcontentloaded misleads the judge. The
-// page counts as settled once it is fully loaded and the DOM stays quiet; the cap keeps the
-// wait bounded when an app mutates forever (carousels, polling).
-const GATEWAY_NAVIGATION_SETTLE_MS = 5_000;
-const GATEWAY_NAVIGATION_SETTLE_QUIET_MS = 300;
 const GATEWAY_ACTIONS = Object.freeze(["get_current_url", "observe_dom", "observe_aria", "navigate", "go_back", "reload_page", "click_observed_element", "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state", "report_blocked"]);
 const adaptiveExecutions = new WeakSet();
 
@@ -361,34 +356,44 @@ export async function openPlaywrightBrowserToolGateway({
   }
 }
 
-async function settleGatewayDom(page, timing) {
-  // The wait runs in the browser and stays bounded below the remaining budget; it must end as
-  // a no-op under budget pressure, never as a run-killing timeout.
+// Shared observation settle: both the strict OBSERVE node and the adaptive gateway route every
+// evidence capture through this wait. SSR HTML can lack testids the client only attaches after
+// hydration, so evidence sealed at domcontentloaded misleads the judge. The page counts as
+// settled once it is fully loaded and the DOM stays quiet; the cap (core's observationSettleBudget)
+// keeps the wait bounded when an app mutates forever (carousels, polling). Never throws — under
+// budget pressure or an evaluate/navigation race the capture proceeds with the DOM as-is.
+async function settleDomForObservation(page, remainingMs) {
+  const budget = observationSettleBudget(remainingMs);
+  if (budget === undefined) return;
   try {
-    await runGatewayBrowserOperation(timing, (remaining) => {
-      const capMs = Math.min(GATEWAY_NAVIGATION_SETTLE_MS, remaining - 1_000);
-      if (capMs <= 0) return undefined;
-      return page.evaluate(({ capMs: cap, quietMs }) => new Promise((resolve) => {
-        let timer;
-        const finish = () => {
-          observer.disconnect();
-          document.removeEventListener("readystatechange", arm);
-          clearTimeout(timer);
-          resolve();
-        };
-        const arm = () => {
-          clearTimeout(timer);
-          timer = setTimeout(() => (document.readyState === "complete" ? finish() : arm()), quietMs);
-        };
-        const observer = new MutationObserver(arm);
-        observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
-        document.addEventListener("readystatechange", arm);
-        setTimeout(finish, cap);
-        arm();
-      }), { capMs, quietMs: GATEWAY_NAVIGATION_SETTLE_QUIET_MS });
-    });
+    await page.evaluate(({ capMs, quietMs }) => new Promise((resolve) => {
+      let timer;
+      const finish = () => {
+        observer.disconnect();
+        document.removeEventListener("readystatechange", arm);
+        clearTimeout(timer);
+        resolve();
+      };
+      const arm = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => (document.readyState === "complete" ? finish() : arm()), quietMs);
+      };
+      const observer = new MutationObserver(arm);
+      observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+      document.addEventListener("readystatechange", arm);
+      setTimeout(finish, capMs);
+      arm();
+    }), budget);
   } catch {
     // Budget exhausted or evaluate raced a navigation; capture proceeds with the DOM as-is.
+  }
+}
+
+async function settleGatewayDom(page, timing) {
+  try {
+    await runGatewayBrowserOperation(timing, (remaining) => settleDomForObservation(page, remaining));
+  } catch {
+    // Gateway time budget exhausted; capture proceeds with the DOM as-is.
   }
 }
 
@@ -953,6 +958,7 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       assertPageOrigin(page, base);
       const state = observationState(observations, node.scenarioId);
       try {
+        await settleDomForObservation(page, nodeTimeoutMs);
         const captured = [];
         for (const type of node.evidence) {
           if (type === "ELEMENT_OBSERVATION") {

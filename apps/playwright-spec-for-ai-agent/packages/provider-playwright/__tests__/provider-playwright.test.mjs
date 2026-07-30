@@ -85,6 +85,9 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
   let gotoCount = 0;
   const page = {
     async goto(url) { gotoCount += 1; calls.push(["goto", url]); await onGoto?.({ url, routeHandler }); },
+    // DOM settle (observationSettleBudget) runs a browser-side quiet-wait; the fake resolves it
+    // immediately and records the call so tests can assert it happens before evidence capture.
+    async evaluate(_callback, argument) { calls.push(["page-evaluate", argument]); },
     locator(selector) {
       return {
         async evaluate(_callback, maxChars) {
@@ -190,8 +193,10 @@ describe("readonly Playwright execution provider", () => {
     });
 
     expect(result.outcome).toMatchObject({ stage: "execute", type: "COMPLETED" });
+    // "page-evaluate" is the DOM settle: it runs at the top of the OBSERVE node, after navigation
+    // and before any evidence capture, so snapshots seal the settled DOM rather than pre-hydration markup.
     expect(fixture.calls.map(([name]) => name)).toEqual([
-      "launch", "newContext", "route", "routeWebSocket", "newPage", "goto", "evaluate:html", "evaluate:body", "close",
+      "launch", "newContext", "route", "routeWebSocket", "newPage", "goto", "page-evaluate", "evaluate:html", "evaluate:body", "close",
     ]);
     expect(result.bundles).toHaveLength(1);
     expect(result.bundles[0].artifacts.map((artifact) => artifact.type)).toEqual(["DOM_SNAPSHOT", "VISIBLE_TEXT"]);
