@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.0
+
+### Minor Changes
+
+- Move AI reasoning into the execution path so non-deterministic live behavior is judged, not literal-matched. Adaptive scenario failures and budget exhaustion now record ERROR/BLOCKED outcomes and keep their sealed evidence instead of throwing and deleting it; `@qa-live-policy: mock-judgment` scenarios route to observe-only milestones and carry a `SEMANTIC` hint so the judge rules on structural equivalence; a `report_blocked` terminal action lets the agent surrender an unreachable milestone with sealed, judge-verified evidence; element observation waits for visibility instead of snapshotting; mock-judgment contradictions classify as `TEST_DATA`; and `execute` gains `--budget-*` flags while `judge` gains a verdict summary and `--fail-on` exit codes.
+
 ## 2.2.0
 
 ### Minor Changes
