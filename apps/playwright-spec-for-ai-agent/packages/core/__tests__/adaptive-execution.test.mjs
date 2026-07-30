@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_ACTION_RESULT_VERSION, EXECUTION_AGENT_INPUT_VERSION } from "../../contracts/index.mjs";
+import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_ACTION_RESULT_VERSION, EXECUTION_AGENT_INPUT_VERSION, EXECUTION_AGENT_OUTCOME_VERSION } from "../../contracts/index.mjs";
 import { advanceAdaptiveMilestone, createAdaptiveActionAuthorizer, createAdaptiveExecutionInput } from "../index.mjs";
 
 function executionAgentInput() {
@@ -246,7 +246,69 @@ describe("adaptive execution authorization", () => {
     });
     expect(transition.outcome).not.toHaveProperty("verdict");
   });
+
+  it("replaces literal expectations with a single observe-only milestone for semantic-judgment scenarios", () => {
+    const qaIr = semanticJudgmentQaIr();
+    qaIr.suites[0].scenarios[0].expectations = [
+      { id: "greets-user", kind: "CONTAINS_TEXT", target: { testId: "greeting" }, expected: { kind: "literal", value: "dev-user님은" }, provenance: [] },
+    ];
+
+    const input = createAdaptiveExecutionInput({ qaIr, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-semantic" });
+
+    expect(input.milestones.filter((milestone) => milestone.expectation !== undefined)).toEqual([]);
+    const observeOnly = input.milestones.filter((milestone) => milestone.class === "REQUIRED_SEMANTIC_MILESTONE" && milestone.target === undefined && milestone.expectation === undefined);
+    expect(observeOnly).toHaveLength(1);
+    expect(observeOnly[0]).toMatchObject({ status: "PENDING", description: "Observe the page and collect visible text and ARIA evidence for semantic judgment." });
+    expect(observeOnly[0].id).toMatch(/^evidence-/);
+    expect(input.milestones).toEqual(expect.arrayContaining([expect.objectContaining({ id: "click-settings", class: "REQUIRED_EXACT_ACTION" })]));
+  });
+
+  it("skips the unsupported-expectation gate for semantic-judgment scenarios", () => {
+    const qaIr = semanticJudgmentQaIr();
+    qaIr.suites[0].scenarios[0].expectations[0].kind = "ATTRIBUTE";
+    expect(() => createAdaptiveExecutionInput({ qaIr, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-semantic-unsupported" })).not.toThrow();
+  });
+
+  it("completes an observe-only semantic milestone from any fresh accepted observation", () => {
+    const qaIr = semanticJudgmentQaIr();
+    qaIr.suites[0].scenarios[0].steps = qaIr.suites[0].scenarios[0].steps.filter((step) => step.kind !== "INTERACT");
+    const input = createAdaptiveExecutionInput({ qaIr, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-observe-only" });
+    const evidence = input.milestones.find((milestone) => milestone.id.startsWith("evidence-"));
+    expect(input.currentMilestoneId).toBe(evidence.id);
+
+    const observe = {
+      schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION,
+      proposalId: "proposal-observe-evidence",
+      runId: input.runId,
+      scenarioId: input.scenarioId,
+      milestoneId: evidence.id,
+      leaseId: input.capabilityLease.leaseId,
+      action: "observe_dom",
+      parameters: {},
+    };
+    const observation = {
+      observationId: "observation-evidence",
+      pageId: input.currentPage.pageId,
+      domGeneration: input.currentPage.domGeneration,
+      elements: [{ elementId: "element-any", milestoneIds: [], allowedActions: [] }],
+    };
+
+    const transition = advanceAdaptiveMilestone({ input, proposal: observe, result: acceptedResult(input, observe), observation });
+    expect(transition.outcome).toEqual({
+      schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION,
+      runId: input.runId,
+      scenarioId: input.scenarioId,
+      type: "COMPLETED",
+      completedMilestoneIds: [evidence.id],
+    });
+  });
 });
+
+function semanticJudgmentQaIr() {
+  const qaIr = adaptiveQaIr();
+  qaIr.extensions = { semanticJudgmentScenarioIds: ["scenario-settings"] };
+  return qaIr;
+}
 
 function adaptiveQaIr() {
   return {

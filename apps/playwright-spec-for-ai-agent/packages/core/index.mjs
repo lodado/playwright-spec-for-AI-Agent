@@ -151,27 +151,41 @@ export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId,
   if (scenario.policy.readDom !== true) throw policyError("execute", "adaptive DOM observation is blocked by scenario policy");
   if (navigationStep && scenario.policy.navigation !== "ALLOWED") throw policyError("execute", "adaptive startup navigation is blocked by scenario policy");
   if (interactionSteps.length > 0 && !["SAFE_ONLY", "ALL"].includes(scenario.policy.click)) throw policyError("execute", "adaptive interaction is blocked by scenario policy");
-  const unsupportedExpectations = scenario.expectations.filter((expectation) => !adaptiveSemanticExpectation(expectation));
-  if (unsupportedExpectations.length > 0) throw contractError("execute", `adaptive execution does not support expectation ${unsupportedExpectations[0].kind}`);
+  const isSemantic = (qaIrSnapshot.extensions?.semanticJudgmentScenarioIds ?? []).includes(scenario.id);
+  if (!isSemantic) {
+    const unsupportedExpectations = scenario.expectations.filter((expectation) => !adaptiveSemanticExpectation(expectation));
+    if (unsupportedExpectations.length > 0) throw contractError("execute", `adaptive execution does not support expectation ${unsupportedExpectations[0].kind}`);
+  }
   const startUrl = adaptiveStartUrl(baseUrl, navigationStep);
   const leaseOrigins = adaptiveAllowedOrigins(startUrl, allowedOrigins);
-  const milestones = [
-    ...interactionSteps.map((step) => {
-      if (step.action !== "CLICK") throw contractError("execute", `${step.action} is not supported by adaptive execution`);
-      return { id: step.id, class: step.milestoneClass, status: "PENDING", description: `Perform required ${step.action.toLowerCase()} action.`, requiredAction: "click_observed_element", target: structuredClone(step.target) };
-    }),
-    ...scenario.expectations.map((expectation) => ({
-      id: expectation.id,
-      class: "REQUIRED_SEMANTIC_MILESTONE",
-      status: "PENDING",
-      description: `Observe required ${expectation.kind.toLowerCase()} target.`,
-      target: structuredClone(expectation.target),
-      expectation: {
-        kind: expectation.kind,
-        ...(expectation.expected === undefined ? {} : { expected: structuredClone(expectation.expected) }),
-      },
-    })),
-  ];
+  const interactionMilestones = interactionSteps.map((step) => {
+    if (step.action !== "CLICK") throw contractError("execute", `${step.action} is not supported by adaptive execution`);
+    return { id: step.id, class: step.milestoneClass, status: "PENDING", description: `Perform required ${step.action.toLowerCase()} action.`, requiredAction: "click_observed_element", target: structuredClone(step.target) };
+  });
+  const milestones = isSemantic
+    ? [
+        ...interactionMilestones,
+        {
+          id: `evidence-${canonicalHash({ runId, scenarioId: scenario.id }).slice("sha256:".length, "sha256:".length + 16)}`,
+          class: "REQUIRED_SEMANTIC_MILESTONE",
+          status: "PENDING",
+          description: "Observe the page and collect visible text and ARIA evidence for semantic judgment.",
+        },
+      ]
+    : [
+        ...interactionMilestones,
+        ...scenario.expectations.map((expectation) => ({
+          id: expectation.id,
+          class: "REQUIRED_SEMANTIC_MILESTONE",
+          status: "PENDING",
+          description: `Observe required ${expectation.kind.toLowerCase()} target.`,
+          target: structuredClone(expectation.target),
+          expectation: {
+            kind: expectation.kind,
+            ...(expectation.expected === undefined ? {} : { expected: structuredClone(expectation.expected) }),
+          },
+        })),
+      ];
   if (milestones.length === 0) throw contractError("execute", "scenario has no adaptive milestones");
   const actions = ["observe_dom", "observe_aria", "get_current_url", "scroll_view", "wait_for_element_state"];
   if (scenario.policy.navigation === "ALLOWED") actions.push("navigate", "go_back", "reload_page");
@@ -235,12 +249,13 @@ export function advanceAdaptiveMilestone({ input, proposal, result, observation 
   }).recentObservations[0];
   const milestone = inputSnapshot.milestones.find((item) => item.id === inputSnapshot.currentMilestoneId);
   const boundElement = referencedMilestoneElement(inputSnapshot, proposalSnapshot, milestone.id);
+  const observeOnly = milestone.target === undefined && milestone.expectation === undefined;
   const matchedObservation = ["observe_dom", "observe_aria"].includes(proposalSnapshot.action)
     && observationSnapshot?.pageId === inputSnapshot.currentPage.pageId
     && observationSnapshot.domGeneration === inputSnapshot.currentPage.domGeneration
-    && (milestone.expectation === undefined
+    && (observeOnly ? true : (milestone.expectation === undefined
       ? observationSnapshot.elements.some((element) => element.milestoneIds.includes(milestone.id))
-      : observationSnapshot.satisfiedMilestoneIds?.includes(milestone.id) === true);
+      : observationSnapshot.satisfiedMilestoneIds?.includes(milestone.id) === true));
   const acceptedBoundAction = ["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposalSnapshot.action) && boundElement !== undefined;
   const satisfied = resultSnapshot.accepted && (
     (milestone.class === "REQUIRED_EXACT_ACTION" && proposalSnapshot.action === milestone.requiredAction && (!["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposalSnapshot.action) || boundElement !== undefined))
