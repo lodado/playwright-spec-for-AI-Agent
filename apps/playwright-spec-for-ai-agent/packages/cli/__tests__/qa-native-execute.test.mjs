@@ -260,6 +260,75 @@ describe("qa-native execute persistence", () => {
     expect(reportScenario).toHaveBeenCalledWith(expect.objectContaining({ type: "ERROR", reason: expect.stringMatching(/^BUDGET_EXHAUSTED/) }));
   }, 30_000);
 
+  it("accepts an adaptive run whose startup navigation redirected within the capability lease", async () => {
+    const cwd = project(multiSource);
+    const server = createServer((request, response) => {
+      if (request.url === "/") {
+        response.statusCode = 302;
+        response.setHeader("location", "/home");
+        response.end();
+        return;
+      }
+      response.end("<!doctype html><button>Dashboard</button>");
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    let proposalId = 0;
+    const createProposer = vi.fn(() => async (input) => ({ tokensUsed: 0, proposal: { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: `p-${++proposalId}`, runId: input.runId, scenarioId: input.scenarioId, milestoneId: input.currentMilestoneId, leaseId: input.capabilityLease.leaseId, action: "observe_dom", parameters: {} } }));
+    let status;
+    try {
+      status = await runQaNative(["execute", "--spec=dashboard.spec.ts", `--base-url=http://127.0.0.1:${address.port}`, "--run-dir=.qa/runs/redirected", "--provider=hermes", "--mode=adaptive"], {
+        cwd,
+        env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+        handlers: { execute: (args) => executeQaNative(args, { createProposer, executeAdaptive: (options) => runAdaptiveSuiteWithPlaywright({ ...options, browserType: chromium }) }) },
+        stdout: vi.fn(),
+        stderr: vi.fn(),
+      });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+
+    expect(status).toBe(0);
+    const runDirectory = join(cwd, ".qa", "runs", "redirected");
+    expect(existsSync(join(runDirectory, "run.json"))).toBe(true);
+    expect(existsSync(`${runDirectory}.invalid`)).toBe(false);
+  });
+
+  it("accepts a semantic scenario completed by an observe-only evidence milestone", async () => {
+    const semanticSource = `// @qa-scenario: DASHBOARD_SEMANTIC
+test.describe("dashboard", () => {
+  // @qa-live-policy: mock-judgment
+  test("renders localized dashboard", async ({ page }) => {
+    await expect(page.getByText("Dashboard")).toBeVisible();
+  });
+});
+`;
+    const cwd = project(semanticSource);
+    const server = createServer((_request, response) => response.end("<!doctype html><button>Dashboard</button>"));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    let proposalId = 0;
+    const createProposer = vi.fn(() => async (input) => ({ tokensUsed: 0, proposal: { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: `p-${++proposalId}`, runId: input.runId, scenarioId: input.scenarioId, milestoneId: input.currentMilestoneId, leaseId: input.capabilityLease.leaseId, action: "observe_dom", parameters: {} } }));
+    let status;
+    try {
+      status = await runQaNative(["execute", "--spec=dashboard.spec.ts", `--base-url=http://127.0.0.1:${address.port}`, "--run-dir=.qa/runs/semantic", "--provider=hermes", "--mode=adaptive"], {
+        cwd,
+        env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+        handlers: { execute: (args) => executeQaNative(args, { createProposer, executeAdaptive: (options) => runAdaptiveSuiteWithPlaywright({ ...options, browserType: chromium }) }) },
+        stdout: vi.fn(),
+        stderr: vi.fn(),
+      });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+
+    expect(status).toBe(0);
+    const runDirectory = join(cwd, ".qa", "runs", "semantic");
+    const outcomes = JSON.parse(readFileSync(join(runDirectory, "execution-agent-outcomes.json"), "utf8"));
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0].type).toBe("COMPLETED");
+  });
+
   it("preserves sealed evidence as <run-dir>.invalid when adaptive evidence validation rejects the run", async () => {
     const cwd = project(multiSource);
     const server = createServer((_request, response) => response.end("<!doctype html><button>Dashboard</button>"));
