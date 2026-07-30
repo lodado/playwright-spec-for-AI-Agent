@@ -9,3 +9,6 @@ Fix the strict one-shot race, surface failure detail, and stop deleting failed-r
 - `qa-native report` prints a one-line summary and treats an all-pass run as success (exit 0) instead of erroring with "no failing judgments".
 - Failure diagnosis classifies judge-flagged context/auth mismatches as ENVIRONMENT (manual review, never the patch pipeline), and code location ranks the executed spec file first among pure route matches.
 - `QA_NATIVE_TRACE_TIMING=1` prints one start/done line per strict node to locate hangs.
+- Strict runs now allow page-initiated same-site (registrable domain) GET/HEAD requests before any interaction, so apps serving their API from a sibling origin render fully; mutations, foreign-site reads, and the stricter post-interaction same-origin rule are unchanged.
+- Observation waits for VISIBLE/CONTAINS_TEXT targets still rendering (mirrors Playwright's retrying assertions), and NAVIGATE retries once when the landing bounces off the target path.
+- The judge skips empty evidence items (a page observed before render sealed an empty VISIBLE_TEXT artifact and made the run unjudgeable), resamples the model once when a decision violates the SemanticJudgeDecision contract, names the failing scenario and outcome code in errors, and surfaces the underlying error with `QA_NATIVE_DEBUG`.

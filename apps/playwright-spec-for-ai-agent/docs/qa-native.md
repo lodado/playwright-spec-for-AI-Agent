@@ -28,7 +28,7 @@ npx qa-native execute \
 npx qa-native judge --run-dir=.qa/runs/dashboard-1
 ```
 
-`execute` writes an authenticated evidence archive. `judge` runs deterministic checks first and sends only unresolved semantic expectations to Hermes in text-only mode. Hermes adaptive runs allow every page-initiated API request and WebSocket connection. Direct browser navigation remains limited to the configured target origin.
+`execute` writes an authenticated evidence archive. `judge` runs deterministic checks first and sends only unresolved semantic expectations to Hermes in text-only mode. Hermes adaptive runs allow every page-initiated API request and WebSocket connection. Strict runs allow page-initiated read-only (GET/HEAD) requests within the target's registrable domain — sibling API origins like `api.example.com` work — and block every mutation and foreign-site request. Direct browser navigation remains limited to the configured target origin.
 
 ## Adaptive execution
 
