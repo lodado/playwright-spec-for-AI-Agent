@@ -19,7 +19,10 @@ export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, man
     const domArtifacts = verified.bundle.artifacts.filter((artifact) => artifact.type === "DOM_SNAPSHOT");
     const ariaArtifacts = verified.bundle.artifacts.filter((artifact) => artifact.type === "ARIA_SNAPSHOT");
     const actionArtifacts = verified.bundle.artifacts.filter((artifact) => artifact.type === "ACTION_LOG");
-    if (verified.bundle.artifacts.length !== 5 || domArtifacts.length !== 2 || ariaArtifacts.length !== 2 || actionArtifacts.length !== 1) throw new Error("adaptive checkpoint evidence is incomplete");
+    // report_blocked audits seal one extra VISIBLE_TEXT artifact (the page the agent claims is
+    // blocked); every other action seals exactly the five pre/post snapshots plus the action log.
+    const visibleTextArtifacts = verified.bundle.artifacts.filter((artifact) => artifact.type === "VISIBLE_TEXT");
+    if (verified.bundle.artifacts.length !== 5 + visibleTextArtifacts.length || visibleTextArtifacts.length > 1 || domArtifacts.length !== 2 || ariaArtifacts.length !== 2 || actionArtifacts.length !== 1) throw new Error("adaptive checkpoint evidence is incomplete");
     let audit;
     try {
       audit = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(verified.readBlob(actionArtifacts[0].storageRef)));
@@ -30,6 +33,7 @@ export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, man
     const invalidSatisfiedMilestones = audit.satisfiedMilestoneIds !== undefined && (!Array.isArray(audit.satisfiedMilestoneIds) || audit.satisfiedMilestoneIds.some((id) => !input.milestones.some((milestone) => milestone.id === id)));
     if (audit.status !== "ACCEPTED" || invalidSatisfiedMilestones) throw new Error("adaptive action evidence is invalid");
     const proposal = validateContract("ExecutionActionProposal", audit.proposal);
+    if (visibleTextArtifacts.length === 1 && proposal.action !== "report_blocked") throw new Error("adaptive checkpoint evidence is incomplete");
     if (proposal.runId !== input.runId || proposal.scenarioId !== input.scenarioId || proposal.leaseId !== input.capabilityLease.leaseId || !input.capabilityLease.actions.includes(proposal.action)) throw new Error("adaptive action evidence is bound to a different execution");
     if (!input.milestones.some((milestone) => milestone.id === proposal.milestoneId) || verified.bundle.checkpointId !== proposal.proposalId) throw new Error("adaptive action evidence is bound to an unknown milestone");
     validateAuditPage(audit.before, input.capabilityLease.allowedOrigins);
