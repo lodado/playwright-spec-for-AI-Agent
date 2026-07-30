@@ -107,7 +107,7 @@ describe("qa-native repository report", () => {
     const stderr = vi.fn();
     expect(await dispatch(wrongKey.cwd, { key: Buffer.alloc(32, 0x64), stderr })).toBe(1);
     expect(existsSync(join(wrongKey.runDirectory, "reports"))).toBe(false);
-    expect(stderr).toHaveBeenCalledWith("qa-native: command failed\n");
+    expect(stderr).toHaveBeenCalledWith("qa-native: report failed: Error\n");
 
     const fixture = persistedFailedRun();
     expect(await dispatch(fixture.cwd)).toBe(0);

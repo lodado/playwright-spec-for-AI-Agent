@@ -451,7 +451,7 @@ test.describe("dashboard", () => {
 
     expect(status).toBe(1);
     expect(existsSync(join(cwd, ".qa", "runs", "failed"))).toBe(false);
-    expect(stderr).toHaveBeenCalledWith("qa-native: command failed\n");
+    expect(stderr).toHaveBeenCalledWith("qa-native: execute failed: Error\n");
     expect(JSON.stringify(stderr.mock.calls)).not.toContain("archive-secret");
   });
 

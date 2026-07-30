@@ -152,6 +152,7 @@ export async function runQaNative(argv, {
 } = {}) {
   let integrityKey;
   let publicationKey;
+  let commandLabel = "command";
   const restoreProcessKey = env !== process.env;
   const previousProcessKey = restoreProcessKey ? process.env[INTEGRITY_KEY_ENV] : undefined;
   const previousPublicationKey = restoreProcessKey ? process.env[PUBLICATION_KEY_ENV] : undefined;
@@ -161,6 +162,7 @@ export async function runQaNative(argv, {
       stdout(helpText(Object.keys(handlers)));
       return 0;
     }
+    if (typeof request.command === "string") commandLabel = request.command;
     const handler = handlers[request.command];
     if (typeof handler !== "function") throw new CliError("command is not available");
     if (platform === "win32") throw new CliError("command is not supported on this platform");
@@ -172,15 +174,19 @@ export async function runQaNative(argv, {
     const status = await handler({ ...normalized, integrityKey, ...(publicationKey === undefined ? {} : { publicationKey }) });
     return Number.isInteger(status) ? status : 0;
   } catch (error) {
-    // CliError messages are user-facing. Internal errors stay opaque by default because their
-    // message may embed sensitive data (e.g. evidence bytes); set QA_NATIVE_DEBUG to surface the
-    // full stack when a failure needs diagnosing. The default is a secret-safe control, not an
-    // integrity one — the debug escape hatch keeps failures debuggable without leaking by default.
-    const detail = error instanceof CliError
-      ? error.message
-      : env[DEBUG_ENV]
-        ? (error?.stack ?? String(error?.message ?? error))
-        : "command failed";
+    // CliError messages are user-facing. For internal errors we surface the failure category — the
+    // error's stable .code or its class name, both free of payload — so a failure is never silently
+    // swallowed (AGENTS.md §3-4), while the raw message/stack (which may embed sensitive data such as
+    // evidence bytes) stays behind QA_NATIVE_DEBUG.
+    let detail;
+    if (error instanceof CliError) {
+      detail = error.message;
+    } else if (env[DEBUG_ENV]) {
+      detail = error?.stack ?? String(error?.message ?? error);
+    } else {
+      const cause = typeof error?.code === "string" ? error.code : (error?.constructor?.name ?? "Error");
+      detail = `${commandLabel} failed: ${cause}`;
+    }
     stderr(`qa-native: ${detail}\n`);
     return 1;
   } finally {
