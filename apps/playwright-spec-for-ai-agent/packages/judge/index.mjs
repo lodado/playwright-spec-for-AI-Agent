@@ -90,7 +90,8 @@ export async function judgeEvidence({ qaIr, bundle, manifest, readBlob, semantic
   let semanticInput;
   try {
     semanticInput = buildSemanticInput(qaIrSnapshot, verified, evaluation, secretList);
-  } catch {
+  } catch (error) {
+    debugJudgeFailure(error);
     return runtimeError(CONTRACT_VIOLATION, "Semantic judge input violated its contract");
   }
   if (semanticInput.evidence.length === 0) {
@@ -100,9 +101,22 @@ export async function judgeEvidence({ qaIr, bundle, manifest, readBlob, semantic
   try {
     const scenario = findScenario(qaIrSnapshot, verified.bundle.scenarioId);
     const byExpectation = new Map(evaluation.resolvedChecks.map((check) => [check.expectationId, withConfidence(check, 1)]));
-    const semanticDecision = redactValue(jsonSnapshot(await semanticJudge(semanticInput), "semantic judge decision"), secretList);
-    validateContract("SemanticJudgeDecision", semanticDecision, { semanticJudgeInput: semanticInput });
-    assertCompleteDecision(semanticInput, semanticDecision);
+    // Models occasionally emit a decision outside the contract (invalid status enum, missing
+    // expectation). One fresh sample recovers the judgment without weakening it: an invalid
+    // decision is discarded, never coerced, and two invalid samples still fail the judge.
+    let semanticDecision;
+    let lastDecisionError;
+    for (let attempt = 0; attempt < 2 && semanticDecision === undefined; attempt += 1) {
+      try {
+        const candidate = redactValue(jsonSnapshot(await semanticJudge(semanticInput), "semantic judge decision"), secretList);
+        validateContract("SemanticJudgeDecision", candidate, { semanticJudgeInput: semanticInput });
+        assertCompleteDecision(semanticInput, candidate);
+        semanticDecision = candidate;
+      } catch (decisionError) {
+        lastDecisionError = decisionError;
+      }
+    }
+    if (semanticDecision === undefined) throw lastDecisionError;
     for (const check of semanticDecision.expectationResults) byExpectation.set(check.expectationId, check);
     const expectationResults = scenario.expectations.map((expectation) => byExpectation.get(expectation.id));
     if (expectationResults.some((item) => item === undefined)) throw new Error("Every expectation requires a judgment");
@@ -114,9 +128,16 @@ export async function judgeEvidence({ qaIr, bundle, manifest, readBlob, semantic
       uncertainty: semanticDecision.uncertainty,
       inputHash: canonicalHash(semanticInput),
     });
-  } catch {
+  } catch (error) {
+    debugJudgeFailure(error);
     return runtimeError("MODEL_PROVIDER_FAILED", "Semantic judge provider failed");
   }
+}
+
+// Diagnostics must never be swallowed: the public outcome stays a redacted enumeration, but the
+// underlying error (which separates a model outage from a protocol bug) is reachable on demand.
+function debugJudgeFailure(error) {
+  if (process.env.QA_NATIVE_DEBUG) process.stderr.write(`qa-native judge debug: ${error?.stack ?? String(error?.message ?? error)}\n`);
 }
 
 function deterministicCheck(expectation, bundle, readBlob) {

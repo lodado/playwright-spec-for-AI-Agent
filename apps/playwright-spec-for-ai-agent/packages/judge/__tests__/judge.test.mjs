@@ -282,6 +282,25 @@ describe("offline judge runtime", () => {
     expect(semanticJudge.mock.calls[0][0].expectations.map((item) => item.id)).toEqual(["visual"]);
   });
 
+  it("resamples the model once when a decision violates the contract", async () => {
+    // gpt-class models occasionally emit a status outside the enum; one fresh sample recovers the
+    // judgment without weakening it — an invalid decision is discarded, never coerced.
+    const evidence = fixture();
+    let calls = 0;
+    const semanticJudge = vi.fn(async (input) => {
+      calls += 1;
+      if (calls === 1) {
+        const invalid = semanticDecision(input);
+        return { ...invalid, expectationResults: invalid.expectationResults.map((item) => ({ ...item, status: "PASSED" })) };
+      }
+      return semanticDecision(input);
+    });
+    const result = await judgeEvidence({ qaIr: qaIr(), ...evidence, semanticJudge });
+
+    expect(semanticJudge).toHaveBeenCalledTimes(2);
+    expect(result.verdict).toBe("PASS");
+  });
+
   it("keeps model/provider failures separate from product verdicts", async () => {
     const evidence = fixture();
     const providerFailure = await judgeEvidence({
