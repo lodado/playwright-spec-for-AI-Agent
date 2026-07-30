@@ -1,0 +1,26 @@
+{
+  "name": "Design Convergence Fixture (unsupported features)",
+  "nodes": {
+    "2:1": {
+      "document": {
+        "id": "2:1",
+        "name": "Gradient Card",
+        "type": "FRAME",
+        "visible": true,
+        "opacity": 1,
+        "absoluteBoundingBox": { "x": 0, "y": 0, "width": 200, "height": 200 },
+        "cornerRadius": 0,
+        "fills": [
+          {
+            "type": "GRADIENT_MESH",
+            "visible": true,
+            "gradientStops": [{ "position": 0 }, { "position": 1 }]
+          }
+        ],
+        "effects": [
+          { "type": "LAYER_BLUR", "visible": true, "radius": 8 }
+        ]
+      }
+    }
+  }
+}
