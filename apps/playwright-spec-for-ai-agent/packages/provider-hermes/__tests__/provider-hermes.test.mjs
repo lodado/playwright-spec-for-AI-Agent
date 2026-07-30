@@ -321,6 +321,8 @@ describe("Hermes judge provider", () => {
     expect(query).toContain("evidence-only");
     expect(query).toContain("no browsing");
     expect(query).toContain("JSON only");
+    expect(query).toContain('Expectations marked judgment:"SEMANTIC" were authored against mock data');
+    expect(query).toContain("Judge structural equivalence: MATCHED");
     expect(() => buildHermesJudgeQuery({ evidence: "x".repeat(70_000) })).toThrow(/size limit/);
   });
 });

@@ -34,7 +34,7 @@ const provenance = [{
   contentHash: "sha256:source",
 }];
 
-function qaIr({ semantic = true } = {}) {
+function qaIr({ semantic = true, semanticJudgment = false } = {}) {
   const expectations = [
     { id: "url", kind: "URL", expected: { kind: "literal", value: "/dashboard" } },
     { id: "text", kind: "CONTAINS_TEXT", target: { testId: "heading" }, expected: { kind: "literal", value: "Dashboard" } },
@@ -63,6 +63,7 @@ function qaIr({ semantic = true } = {}) {
         provenance,
       }],
     }],
+    ...(semanticJudgment ? { extensions: { semanticJudgmentScenarioIds: ["scenario-dashboard"] } } : {}),
   };
 }
 
@@ -189,6 +190,29 @@ describe("deterministic evidence evaluation", () => {
 
     expect(evaluation.unresolvedChecks.map(item => item.expectationId)).toContain("text");
     expect(evaluation.resolvedChecks.some(item => item.expectationId === "text")).toBe(false);
+  });
+});
+
+describe("semantic-judgment routing", () => {
+  it("marks routed expectations judgment SEMANTIC when the scenario is listed", () => {
+    const evidence = fixture({ text: "Overview panel" });
+    const ir = qaIr({ semantic: false, semanticJudgment: true });
+    const evaluation = evaluateDeterministically({ qaIr: ir, ...evidence });
+    const input = buildSemanticJudgeInput({ qaIr: ir, ...evidence, evaluation });
+
+    expect(input.expectations.map((item) => item.id)).toContain("text");
+    expect(input.expectations.every((item) => item.judgment === "SEMANTIC")).toBe(true);
+    expect(validateContract("SemanticJudgeInput", input)).toBe(input);
+  });
+
+  it("leaves routed expectations without a judgment key when the scenario is not listed", () => {
+    const evidence = fixture({ text: "Overview panel" });
+    const ir = qaIr({ semantic: false });
+    const evaluation = evaluateDeterministically({ qaIr: ir, ...evidence });
+    const input = buildSemanticJudgeInput({ qaIr: ir, ...evidence, evaluation });
+
+    expect(input.expectations.map((item) => item.id)).toContain("text");
+    expect(input.expectations.every((item) => item.judgment === undefined)).toBe(true);
   });
 });
 

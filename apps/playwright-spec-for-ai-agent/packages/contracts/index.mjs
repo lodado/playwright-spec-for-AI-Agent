@@ -17,7 +17,7 @@ export const DETERMINISTIC_EVALUATION_VERSION = "deterministic-evaluation/0.1";
 export const EVIDENCE_BUNDLE_VERSION = "evidence-bundle/0.1";
 export const EVIDENCE_MANIFEST_VERSION = "evidence-manifest/0.1";
 export const JUDGE_RESULT_VERSION = "judge-result/0.1";
-export const SEMANTIC_JUDGE_INPUT_VERSION = "semantic-judge-input/0.1";
+export const SEMANTIC_JUDGE_INPUT_VERSION = "semantic-judge-input/0.2";
 export const SEMANTIC_JUDGE_DECISION_VERSION = "semantic-judge-decision/0.1";
 export const FAILURE_DIAGNOSIS_VERSION = "failure-diagnosis/0.1";
 export const CODE_CONTEXT_VERSION = "code-context/0.1";
@@ -735,11 +735,12 @@ function validateSemanticJudgeInput(value, path) {
   value.expectations.forEach((item, index) => {
     const itemPath = `${path}.expectations[${index}]`;
     object(item, itemPath, "SemanticJudgeInput");
-    allowedKeys(item, ["id", "kind", "target", "expected", "text", "attribute"], itemPath, "SemanticJudgeInput");
+    allowedKeys(item, ["id", "kind", "target", "expected", "text", "attribute", "judgment"], itemPath, "SemanticJudgeInput");
     string(item.id, `${itemPath}.id`, "SemanticJudgeInput");
     if (expectationIds.has(item.id)) fail("SemanticJudgeInput", `${itemPath}.id`, "must be unique");
     expectationIds.add(item.id);
     string(item.kind, `${itemPath}.kind`, "SemanticJudgeInput");
+    if (item.judgment !== undefined) exact(item.judgment, "SEMANTIC", `${itemPath}.judgment`, "SemanticJudgeInput");
     if (item.target !== undefined) validatePromptSemanticTarget(item.target, `${itemPath}.target`);
     for (const key of ["expected", "text", "attribute"]) if (item[key] !== undefined) present(item[key], `${itemPath}.${key}`, "SemanticJudgeInput");
   });

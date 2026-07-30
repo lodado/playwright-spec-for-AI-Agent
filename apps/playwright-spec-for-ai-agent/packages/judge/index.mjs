@@ -224,6 +224,7 @@ function withConfidence(check, confidence) {
 
 function buildSemanticInput(qaIr, verified, evaluation, secrets) {
   const scenario = findScenario(qaIr, verified.bundle.scenarioId);
+  const isSemantic = (qaIr.extensions?.semanticJudgmentScenarioIds ?? []).includes(scenario.id);
   const unresolved = new Set(evaluation.unresolvedChecks.map((check) => check.expectationId));
   const candidates = [];
 
@@ -258,7 +259,7 @@ function buildSemanticInput(qaIr, verified, evaluation, secrets) {
     qaIrId: qaIr.id,
     evidenceBundleId: verified.bundle.bundleId,
     scenario: { id: scenario.id, title: scenario.title },
-    expectations: scenario.expectations.filter((expectation) => unresolved.has(expectation.id)).map(copyExpectationForPrompt),
+    expectations: scenario.expectations.filter((expectation) => unresolved.has(expectation.id)).map((expectation) => copyExpectationForPrompt(expectation, isSemantic)),
     evidence,
   }, secrets);
   const validated = validateContract("SemanticJudgeInput", input);
@@ -274,7 +275,7 @@ function assertCompleteDecision(input, decision) {
   }
 }
 
-function copyExpectationForPrompt(expectation) {
+function copyExpectationForPrompt(expectation, isSemantic) {
   const copy = Object.fromEntries(
     ["id", "kind", "target", "expected", "text", "attribute"]
       .filter((key) => expectation[key] !== undefined)
@@ -287,6 +288,7 @@ function copyExpectationForPrompt(expectation) {
         .map((key) => [key, copy.target[key]]),
     );
   }
+  if (isSemantic) copy.judgment = "SEMANTIC";
   return copy;
 }
 
