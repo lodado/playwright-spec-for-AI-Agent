@@ -325,7 +325,7 @@ describe("adaptive Playwright runner", () => {
     }
   }, 30_000);
 
-  it("aborts on the failing scenario and names it", async () => {
+  it("records a failing scenario as an ERROR outcome and continues the suite", async () => {
     const server = createServer((_request, response) => response.end('<!doctype html><main data-testid="dashboard">Enterprise Dashboard</main>'));
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const url = `http://127.0.0.1:${server.address().port}/`;
@@ -335,7 +335,38 @@ describe("adaptive Playwright runner", () => {
       return { tokensUsed: 0, proposal: { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: `proposal-${++proposalId}`, runId: agentInput.runId, scenarioId: agentInput.scenarioId, milestoneId: agentInput.currentMilestoneId, leaseId: agentInput.capabilityLease.leaseId, action: "observe_dom", parameters: {} } };
     };
     try {
-      await expect(runAdaptiveSuiteWithPlaywright({ inputs: ["s1", "s2", "s3"].map((id) => suiteScenario(url, id)), proposeAction, browserType: chromium })).rejects.toThrow(/s2/);
+      const suite = await runAdaptiveSuiteWithPlaywright({ inputs: ["s1", "s2", "s3"].map((id) => suiteScenario(url, id)), proposeAction, browserType: chromium });
+      expect(suite.executions.map((entry) => entry.scenarioId)).toEqual(["s1", "s2", "s3"]);
+      expect(suite.executions[0].outcome.type).toBe("COMPLETED");
+      expect(suite.executions[1].outcome.type).toBe("ERROR");
+      expect(suite.executions[1].outcome.reason).toContain("proposer refused");
+      expect(suite.executions[1].bundleIds).toEqual([]);
+      expect(suite.executions[2].outcome.type).toBe("COMPLETED");
+      expect(suite.outcome).toBe(suite.executions[2].outcome);
+      expect(() => assertPlaywrightAdaptiveExecution(suite)).not.toThrow();
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }, 30_000);
+
+  it("records a budget-exhausted scenario as an ERROR outcome and keeps its evidence", async () => {
+    const server = createServer((_request, response) => response.end('<!doctype html><main data-testid="dashboard">Enterprise Dashboard</main>'));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${server.address().port}/`;
+    const exhausting = suiteScenario(url, "s1");
+    exhausting.milestones = [{ id: "never", class: "REQUIRED_SEMANTIC_MILESTONE", status: "PENDING", description: "A milestone observe_dom can never satisfy.", target: { testId: "dashboard" }, expectation: { kind: "CONTAINS_TEXT", expected: { kind: "literal", value: "Never Present Text" } } }];
+    exhausting.currentMilestoneId = "never";
+    const completing = suiteScenario(url, "s2");
+    let proposalId = 0;
+    const proposeAction = async (agentInput) => ({ tokensUsed: 0, proposal: { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: `proposal-${++proposalId}`, runId: agentInput.runId, scenarioId: agentInput.scenarioId, milestoneId: agentInput.currentMilestoneId, leaseId: agentInput.capabilityLease.leaseId, action: "observe_dom", parameters: {} } });
+    try {
+      const suite = await runAdaptiveSuiteWithPlaywright({ inputs: [exhausting, completing], proposeAction, browserType: chromium });
+      expect(suite.executions[0].outcome.type).toBe("ERROR");
+      expect(suite.executions[0].outcome.reason).toMatch(/^BUDGET_EXHAUSTED/);
+      expect(suite.executions[0].bundleIds.length).toBeGreaterThan(0);
+      expect(suite.executions[1].outcome.type).toBe("COMPLETED");
+      expect(suite.bundles.length).toBeGreaterThan(suite.executions[1].bundleIds.length);
+      expect(suite.outcome).toBe(suite.executions[1].outcome);
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }

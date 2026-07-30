@@ -1,5 +1,6 @@
 import {
   EXECUTION_ACTION_RESULT_VERSION,
+  EXECUTION_AGENT_OUTCOME_VERSION,
   RUNTIME_OUTCOME_VERSION,
   canonicalHash,
   snapshotContract,
@@ -589,6 +590,12 @@ function redactGatewayValue(value, secrets) {
   return value;
 }
 
+function budgetSummary(initialBudget, remainingBudget) {
+  return ["actions", "turns", "timeMs", "tokens"]
+    .map((key) => `${key} ${initialBudget[key] - remainingBudget[key]}/${initialBudget[key]}`)
+    .join(" ");
+}
+
 export async function runAdaptiveWithPlaywright({
   input,
   proposeAction,
@@ -611,6 +618,17 @@ export async function runAdaptiveWithPlaywright({
   try {
     while (outcome === undefined) {
       const proposerInput = gateway.agentInput();
+      if (Object.values(proposerInput.remainingBudget).some((value) => value < 1)) {
+        outcome = snapshotContract("ExecutionAgentOutcome", {
+          schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION,
+          runId: input.runId,
+          scenarioId: input.scenarioId,
+          type: "ERROR",
+          completedMilestoneIds: proposerInput.milestones.filter((milestone) => milestone.status === "COMPLETED").map((milestone) => milestone.id),
+          reason: `BUDGET_EXHAUSTED: ${budgetSummary(input.remainingBudget, proposerInput.remainingBudget)}`,
+        });
+        break;
+      }
       const proposed = await runGatewayBrowserOperation({ deadline: readFiniteClock(clock) + proposerInput.remainingBudget.timeMs, clock }, () => proposeAction(proposerInput));
       if (!proposed?.proposal || typeof proposed.proposal !== "object") throw new Error("adaptive proposer must return a proposal and token usage");
       if (!Number.isInteger(proposed.tokensUsed) || proposed.tokensUsed < 0) throw new Error("adaptive proposer token usage must be a non-negative integer");
@@ -639,11 +657,23 @@ export async function runAdaptiveSuiteWithPlaywright({ inputs, proposeAction, ..
     try {
       execution = await runAdaptiveWithPlaywright({ input, proposeAction, store, priorManifest: manifest, ...options });
     } catch (error) {
-      throw new Error(`adaptive scenario ${input.scenarioId} failed: ${error.message}`, { cause: error });
+      executions.push(Object.freeze({
+        scenarioId: input.scenarioId,
+        input,
+        outcome: snapshotContract("ExecutionAgentOutcome", {
+          schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION,
+          runId: input.runId,
+          scenarioId: input.scenarioId,
+          type: "ERROR",
+          completedMilestoneIds: [],
+          reason: String(error.message).slice(0, 4_096),
+        }),
+        bundleIds: Object.freeze([]),
+      }));
+      continue;
     }
-    if (execution.outcome.type !== "COMPLETED") throw new Error(`adaptive scenario ${input.scenarioId} did not complete`);
     bundles.push(...execution.bundles);
-    manifest = execution.manifest;
+    manifest = execution.manifest ?? manifest;
     executions.push(Object.freeze({ scenarioId: input.scenarioId, input, outcome: execution.outcome, bundleIds: Object.freeze(execution.bundles.map((bundle) => bundle.bundleId)) }));
   }
   const suite = Object.freeze({ outcome: executions[executions.length - 1].outcome, bundles: Object.freeze(bundles), manifest, readBlob: store.readBlob, executions: Object.freeze(executions) });
