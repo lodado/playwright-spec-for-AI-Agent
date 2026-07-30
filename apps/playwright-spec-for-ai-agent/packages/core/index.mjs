@@ -15,6 +15,20 @@ export const DEFAULT_RETRY_POLICY = Object.freeze({ maxAttempts: 1 });
 export const DEFAULT_TIMEOUT_POLICY = Object.freeze({ perNodeMs: 30000, runMs: 120000 });
 export const DEFAULT_ADAPTIVE_BUDGET = Object.freeze({ actions: 32, turns: 32, timeMs: 300_000, tokens: 100_000 });
 
+// Single observation-settle policy: how long any evidence capture (a strict OBSERVE node or an
+// adaptive snapshot) may wait for the DOM to fall quiet before sealing. Execution lives in the
+// provider; the numbers and the clamp rule live here so runtime, validator docs, and prompts can
+// never disagree about them. Returns undefined when the remaining budget cannot fund a settle —
+// callers must treat that as "capture as-is", never as an error (a bounded wait must never become
+// a run-killing timeout).
+export const OBSERVATION_SETTLE_POLICY = Object.freeze({ capMs: 5_000, quietMs: 300, reserveMs: 1_000 });
+
+export function observationSettleBudget(remainingMs, policy = OBSERVATION_SETTLE_POLICY) {
+  if (!Number.isFinite(remainingMs)) return undefined;
+  const capMs = Math.min(policy.capMs, remainingMs - policy.reserveMs);
+  return capMs > 0 ? { capMs, quietMs: policy.quietMs } : undefined;
+}
+
 const INTERNAL_ERROR = Symbol("core.internalError");
 const REQUIRED_ACTIONS = Object.freeze({
   NAVIGATE: "NAVIGATE",
