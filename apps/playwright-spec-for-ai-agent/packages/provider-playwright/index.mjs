@@ -474,7 +474,11 @@ async function evaluateSemanticMilestones(page, milestones, timing) {
     const count = await runGatewayBrowserOperation(timing, () => locator.count());
     if (!Number.isInteger(count) || count < 0 || count > GATEWAY_MAX_ELEMENTS) throw new Error("gateway semantic observation exceeds its bound");
     const visible = [];
-    for (let index = 0; index < count; index += 1) visible.push(await runGatewayBrowserOperation(timing, () => locator.nth(index).isVisible()));
+    // Tolerate mount/entry animations: wait for visibility, bounded so it does not eat the adaptive time budget. `remaining` is the gateway op's own deadline, so the waitFor always settles before the wrapper times out.
+    for (let index = 0; index < count; index += 1) {
+      const element = locator.nth(index);
+      visible.push(await runGatewayBrowserOperation(timing, (remaining) => element.waitFor({ state: "visible", timeout: Math.min(remaining, 2000) }).then(() => true, () => false)));
+    }
     const kind = milestone.expectation.kind;
     if (kind === "NOT_VISIBLE" && visible.every((value) => value === false)) {
       satisfied.push(milestone.id);
@@ -1012,7 +1016,8 @@ async function observeExpectations(page, expectations, nodeId, timeout) {
     }
     const captured = await locator.evaluate((element, maxChars) => (element.textContent ?? "").slice(0, maxChars + 1), ELEMENT_TEXT_LIMIT, { timeout });
     if (typeof captured !== "string") throw providerError("EVIDENCE_STORAGE_FAILED");
-    const value = { expectationId: expectation.id, resolution: "FOUND", visible: await locator.isVisible({ timeout }) };
+    const visible = await locator.waitFor({ state: "visible", timeout }).then(() => true, () => false);
+    const value = { expectationId: expectation.id, resolution: "FOUND", visible };
     if (captured.length <= ELEMENT_TEXT_LIMIT) Object.assign(value, { text: captured, textTruncated: false });
     facts.push({ id, kind: "ELEMENT_OBSERVATION", value });
   }

@@ -59,10 +59,15 @@ function clickableQaIr(action = "CLICK") {
   return input;
 }
 
-function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccessCode=short-secret#short-secret", text = "Dashboard SESSION-SECRET", dom = "<main>Dashboard SESSION-SECRET</main>", clickError, onClick, onGoto, closeDelayMs = 0, elementCount = 1 } = {}) {
+function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccessCode=short-secret#short-secret", text = "Dashboard SESSION-SECRET", dom = "<main>Dashboard SESSION-SECRET</main>", clickError, onClick, onGoto, closeDelayMs = 0, elementCount = 1, visible = true, waitForVisible = visible } = {}) {
   const calls = [];
   let routeHandler;
   let webSocketHandler;
+  // Model a mount/entry animation: `isVisible()` is the instant snapshot, `waitFor({state:"visible"})` resolves once the element becomes visible (or rejects if it never does).
+  const visibility = {
+    async isVisible() { return visible; },
+    async waitFor(options) { if (options?.state === "visible" && !waitForVisible) throw new Error("waitFor: element never became visible"); },
+  };
   const page = {
     async goto(url) { calls.push(["goto", url]); await onGoto?.({ url, routeHandler }); },
     locator(selector) {
@@ -75,8 +80,8 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
     },
     getByTestId(value) {
       return {
+        ...visibility,
         async count() { return elementCount; },
-        async isVisible() { return true; },
         async evaluate(_callback, argument) {
           return typeof argument === "number" ? text.slice(0, argument + 1) : { anchor: false, form: false, editable: false };
         },
@@ -88,10 +93,10 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
       };
     },
     getByText(value) {
-      return { async count() { return elementCount; }, async isVisible() { return true; }, async evaluate() { return text; }, async click() { calls.push(["click:text", value]); } };
+      return { ...visibility, async count() { return elementCount; }, async evaluate() { return text; }, async click() { calls.push(["click:text", value]); } };
     },
     getByRole(role, options) {
-      return { async count() { return elementCount; }, async isVisible() { return true; }, async evaluate(_callback, argument) { return typeof argument === "number" ? text.slice(0, argument + 1) : { anchor: false, form: false, editable: false }; }, async click() { calls.push(["click:role", role, options]); } };
+      return { ...visibility, async count() { return elementCount; }, async evaluate(_callback, argument) { return typeof argument === "number" ? text.slice(0, argument + 1) : { anchor: false, form: false, editable: false }; }, async click() { calls.push(["click:role", role, options]); } };
     },
     url() { return pageUrl; },
     viewportSize() { return { width: 1280, height: 720 }; },
@@ -180,6 +185,20 @@ describe("readonly Playwright execution provider", () => {
     expect(JSON.stringify(result)).not.toContain("SESSION-SECRET");
     expect(JSON.stringify(result)).not.toContain("short-secret");
     expect(verifyStoredEvidence({ bundle: result.bundles[0], manifest: result.manifest, readBlob: result.readBlob }).bundle).toEqual(result.bundles[0]);
+  });
+
+  it("waits for entry-animated elements to become visible instead of snapshotting them hidden", async () => {
+    const input = qaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    // Element is present but hidden at t=0 (opacity:0/visibility:hidden mount animation) and becomes visible shortly after.
+    const fixture = fakeBrowser({ text: "Dashboard", visible: false, waitForVisible: true });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-visibility-wait", browserType: fixture.browserType });
+
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    expect(result.bundles[0].facts).toMatchObject([
+      { kind: "ELEMENT_OBSERVATION", value: { expectationId: "heading", resolution: "FOUND", visible: true } },
+      { kind: "URL" },
+    ]);
   });
 
   it("keeps ambiguous semantic targets unresolved instead of inventing a deterministic result", async () => {
