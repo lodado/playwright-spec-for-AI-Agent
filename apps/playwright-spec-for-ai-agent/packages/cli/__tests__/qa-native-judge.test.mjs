@@ -95,6 +95,17 @@ describe("qa-native offline judge", () => {
     expect(resultFiles).toHaveLength(3);
   });
 
+  it("judges the sealed bundles of a failed adaptive scenario alongside the completed ones", async () => {
+    const fixture = persistedRun({ scenarioCount: 2, checkpointsPerScenario: 1, deterministic: true, adaptive: true, errorScenarioIndices: [1] });
+    const judge = vi.fn((args) => judgeWithHermes({ ...args, transport: vi.fn(), model: "hermes-test" }));
+
+    expect(await dispatch(fixture.cwd, { judge })).toBe(0);
+
+    expect(judge).toHaveBeenCalledTimes(2);
+    const resultFiles = readdirSync(completedJudgmentDirectory(fixture.runDirectory)).filter((file) => file.startsWith("judge-result-"));
+    expect(resultFiles).toHaveLength(2);
+  });
+
   it("rejects unauthenticated evidence and multi-bundle provider failures without partial output", async () => {
     const unauthenticated = persistedRun({ deterministic: true });
     const stderr = vi.fn();
@@ -156,7 +167,7 @@ async function dispatch(cwd, overrides = {}, { key = integrityKey, stderr = vi.f
   });
 }
 
-function persistedRun({ scenarioCount = 1, checkpointsPerScenario = 1, deterministic, adaptive = false }) {
+function persistedRun({ scenarioCount = 1, checkpointsPerScenario = 1, deterministic, adaptive = false, errorScenarioIndices = [] }) {
   const cwd = mkdtempSync(join(tmpdir(), "qa-native-judge-"));
   temporaryDirectories.push(cwd);
   const runDirectory = createExclusiveQaDirectory(".qa/runs/run-1", { cwd });
@@ -208,7 +219,9 @@ function persistedRun({ scenarioCount = 1, checkpointsPerScenario = 1, determini
   const runtimeOutcome = { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "execute", type: "COMPLETED" };
   writePrivateJsonExclusive(".qa/runs/run-1/run.json", runtimeOutcome, { cwd });
   if (adaptive) {
-    const agentOutcomes = adaptiveInputs.map((input) => ({ schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION, runId: "run-1", scenarioId: input.scenarioId, type: "COMPLETED", completedMilestoneIds: input.milestones.map((milestone) => milestone.id) }));
+    const agentOutcomes = adaptiveInputs.map((input, index) => errorScenarioIndices.includes(index)
+      ? { schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION, runId: "run-1", scenarioId: input.scenarioId, type: "ERROR", completedMilestoneIds: [], reason: "BUDGET_EXHAUSTED: actions 2/2 turns 2/2 timeMs 5/300000 tokens 3/100000" }
+      : { schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION, runId: "run-1", scenarioId: input.scenarioId, type: "COMPLETED", completedMilestoneIds: input.milestones.map((milestone) => milestone.id) });
     writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-inputs.json", adaptiveInputs, { cwd });
     writePrivateJsonExclusive(".qa/runs/run-1/execution-agent-outcomes.json", agentOutcomes, { cwd });
     writeAuthenticatedRunEnvelope({ runDirectory, cwd, integrityKey, runId: "run-1", mode: "adaptive", qaIr, runtimeOutcome, evidenceManifest: manifest, executionAgentInputs: adaptiveInputs, executionAgentOutcomes: agentOutcomes });

@@ -17,6 +17,7 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
   const compile = overrides.compile ?? compilePlaywrightSpec;
   const reportDiagnostics = overrides.reportDiagnostics ?? defaultReportDiagnostics;
   const reportSummary = overrides.reportSummary ?? defaultReportSummary;
+  const reportScenario = overrides.reportScenario ?? defaultReportScenario;
   const plan = overrides.plan ?? createExecutionPlan;
   const execute = overrides.execute ?? executeWithPlaywright;
   const createAdaptiveInput = overrides.createAdaptiveInput ?? createAdaptiveExecutionInput;
@@ -47,11 +48,7 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
       agentInputs = scenarios.map((scenario) => createAdaptiveInput({ qaIr, scenarioId: scenario.id, baseUrl, runId, ...(allowedOrigins === undefined ? {} : { allowedOrigins }), ...(allowExternalRead === true ? { allowExternalRead: true } : {}) }));
       execution = await executeAdaptive({ inputs: agentInputs, proposeAction: createProposer(), storageStatePath, authBootstrap });
       assertPlaywrightAdaptiveExecution(execution);
-      agentOutcomes = execution.executions.map((entry, index) => {
-        const outcome = validateContract("ExecutionAgentOutcome", entry.outcome, { input: agentInputs[index] });
-        if (outcome.type !== "COMPLETED") throw new Error(`adaptive scenario ${entry.scenarioId} failed`);
-        return outcome;
-      });
+      agentOutcomes = execution.executions.map((entry, index) => validateContract("ExecutionAgentOutcome", entry.outcome, { input: agentInputs[index] }));
       execution.executions.forEach((entry, index) => validateAdaptiveExecutionEvidence({
         input: agentInputs[index],
         outcome: agentOutcomes[index],
@@ -95,7 +92,9 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
     });
     const executed = qaIr.suites.reduce((total, suite) => total + suite.scenarios.length, 0);
     const compiled = compileResult.qaIr.suites.reduce((total, suite) => total + suite.scenarios.length, 0);
-    reportSummary({ runDirectory: relative(cwd, runDirectory), provider, mode, executed, skipped: compiled - executed });
+    const nonCompleted = (agentOutcomes ?? []).filter((outcome) => outcome.type !== "COMPLETED");
+    for (const outcome of nonCompleted) reportScenario({ scenarioId: outcome.scenarioId, type: outcome.type, reason: outcome.reason });
+    reportSummary({ runDirectory: relative(cwd, runDirectory), provider, mode, executed, skipped: compiled - executed, nonCompleted: nonCompleted.length });
     return 0;
   } catch (error) {
     if (created) rmSync(runDirectory, { recursive: true, force: true });
@@ -111,9 +110,16 @@ function defaultReportDiagnostics(diagnostics) {
 
 // A successful run was previously silent (exit 0, no output), leaving CI and operators unable to
 // tell what ran. Emit a one-line summary of executed vs. skipped scenarios and the artifact path.
-function defaultReportSummary({ runDirectory, provider, mode, executed, skipped }) {
+function defaultReportSummary({ runDirectory, provider, mode, executed, skipped, nonCompleted = 0 }) {
+  const nonCompletedNote = nonCompleted > 0 ? `, ${nonCompleted} budget-exhausted` : "";
   const skippedNote = skipped > 0 ? `, skipped ${skipped} blocked` : "";
-  process.stdout.write(`qa-native: ${provider}/${mode} executed ${executed} scenario(s)${skippedNote} → ${runDirectory}\n`);
+  process.stdout.write(`qa-native: ${provider}/${mode} executed ${executed} scenario(s)${nonCompletedNote}${skippedNote} → ${runDirectory}\n`);
+}
+
+// Adaptive scenarios that ended ERROR/BLOCKED still sealed evidence; surface each one's outcome and
+// consumption (the reason string carries the per-scenario turns/seconds/tokens from budget exhaustion).
+function defaultReportScenario({ scenarioId, type, reason }) {
+  process.stderr.write(`qa-native: scenario ${scenarioId} ${type} — ${reason}\n`);
 }
 
 // Return a QA IR without the scenarios the adapter marked as statically un-runnable, so

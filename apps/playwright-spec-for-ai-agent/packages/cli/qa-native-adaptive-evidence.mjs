@@ -49,7 +49,9 @@ export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, man
       while (milestone.class === "REQUIRED_SEMANTIC_MILESTONE" && requiredMilestones[milestoneIndex]?.class === "REQUIRED_SEMANTIC_MILESTONE" && audit.satisfiedMilestoneIds?.includes(requiredMilestones[milestoneIndex].id)) milestoneIndex += 1;
     }
   }
-  if (milestoneIndex !== requiredMilestones.length || requiredMilestones.some((milestone) => !outcome.completedMilestoneIds.includes(milestone.id))) throw new Error("adaptive milestone completion lacks accepted evidence");
+  // Non-COMPLETED outcomes (ERROR/BLOCKED) seal only partial evidence: their bundle integrity and
+  // sequencing above are still verified, but they need not cover every required milestone.
+  if (outcome.type === "COMPLETED" && (milestoneIndex !== requiredMilestones.length || requiredMilestones.some((milestone) => !outcome.completedMilestoneIds.includes(milestone.id)))) throw new Error("adaptive milestone completion lacks accepted evidence");
 }
 
 function isExactObject(value, keys) {

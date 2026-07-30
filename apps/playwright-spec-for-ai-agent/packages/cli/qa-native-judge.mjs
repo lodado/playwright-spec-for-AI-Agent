@@ -24,18 +24,20 @@ export async function judgeQaNative({ runDirectory, integrityKey, cwd }, overrid
     if (!Array.isArray(agentInputs) || !Array.isArray(agentOutcomes) || agentInputs.length === 0 || agentInputs.length !== agentOutcomes.length) throw new Error("adaptive execution metadata is invalid");
     agentInputs.forEach((agentInput, index) => {
       validateContract("ExecutionAgentInput", agentInput);
-      const agentOutcome = validateContract("ExecutionAgentOutcome", agentOutcomes[index], { input: agentInput });
-      if (agentOutcome.type !== "COMPLETED") throw new Error("adaptive execution is incomplete");
+      validateContract("ExecutionAgentOutcome", agentOutcomes[index], { input: agentInput });
       if (agentInput.runId !== archive.manifest.runId) throw new Error("adaptive execution metadata does not match evidence");
     });
     verifyRunEnvelopeBindings({ envelope, runId: envelope.runId, mode: "adaptive", qaIr, runtimeOutcome: outcome, evidenceManifest: archive.manifest, executionAgentInputs: agentInputs, executionAgentOutcomes: agentOutcomes });
     const finalBundles = agentInputs.map((agentInput, index) => {
       const scenarioBundles = archive.bundles.filter((bundle) => bundle.scenarioId === agentInput.scenarioId);
+      // A non-COMPLETED scenario may have failed before sealing any evidence — there is nothing to
+      // judge, so skip it rather than failing the whole judgment.
+      if (scenarioBundles.length === 0 && agentOutcomes[index].type !== "COMPLETED") return undefined;
       validateAdaptiveExecutionEvidence({ input: agentInput, outcome: agentOutcomes[index], bundles: scenarioBundles, manifest: archive.manifest, readBlob: archive.readBlob });
       const finalBundle = scenarioBundles.at(-1);
       if (finalBundle === undefined) throw new Error("adaptive final evidence is missing");
       return finalBundle;
-    });
+    }).filter((bundle) => bundle !== undefined);
     bundles = finalBundles;
   } else {
     const executionPlan = readPrivateJson(relative(cwd, join(runDirectory, "execution-plan.json")), { cwd });

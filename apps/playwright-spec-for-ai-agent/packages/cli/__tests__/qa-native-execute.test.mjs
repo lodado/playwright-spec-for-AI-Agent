@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EXECUTION_ACTION_PROPOSAL_VERSION, RUNTIME_OUTCOME_VERSION, validateContract } from "../../contracts/index.mjs";
+import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_AGENT_INPUT_VERSION, RUNTIME_OUTCOME_VERSION, validateContract } from "../../contracts/index.mjs";
 import { createInMemoryEvidenceStore, readEvidenceArchive } from "../../evidence/index.mjs";
 import { playwrightExecutionCapabilities, runAdaptiveSuiteWithPlaywright, runAdaptiveWithPlaywright } from "../../provider-playwright/index.mjs";
 import { executeQaNative } from "../qa-native-execute.mjs";
@@ -34,6 +34,19 @@ test.describe("dashboard", () => {
   });
   // @qa-live-policy: readonly
   test("hides sign in", async ({ page }) => {
+    await expect(page.getByText("Dashboard")).toBeVisible();
+  });
+});
+`;
+
+const pairSource = `// @qa-scenario: DASHBOARD_READONLY
+test.describe("dashboard", () => {
+  // @qa-live-policy: readonly
+  test("completes", async ({ page }) => {
+    await expect(page.getByText("Dashboard")).toBeVisible();
+  });
+  // @qa-live-policy: readonly
+  test("exhausts", async ({ page }) => {
     await expect(page.getByText("Dashboard")).toBeVisible();
   });
 });
@@ -147,6 +160,59 @@ describe("qa-native execute persistence", () => {
     const replay = readEvidenceArchive({ directory: join(runDirectory, "evidence"), integrityKey });
     expect(new Set(replay.bundles.map((bundle) => bundle.scenarioId)).size).toBe(3);
   });
+
+  it("seals partial evidence and reports the non-completed scenario when one exhausts its budget", async () => {
+    const cwd = project(pairSource);
+    const server = createServer((_request, response) => response.end('<!doctype html><main data-testid="dashboard">Enterprise Dashboard</main>'));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${server.address().port}/`;
+    const origin = new URL(url).origin;
+    let call = 0;
+    const createAdaptiveInput = ({ scenarioId, runId }) => {
+      const exhaust = call++ === 1;
+      return {
+        schemaVersion: EXECUTION_AGENT_INPUT_VERSION,
+        runId,
+        scenarioId,
+        goal: { id: `goal-${scenarioId}`, description: "Observe the dashboard." },
+        milestones: [{ id: "contains", class: "REQUIRED_SEMANTIC_MILESTONE", status: "PENDING", description: "Dashboard text is present.", target: { testId: "dashboard" }, expectation: { kind: "CONTAINS_TEXT", expected: { kind: "literal", value: exhaust ? "Never Present Text" : "Dashboard" } } }],
+        currentMilestoneId: "contains",
+        currentPage: { pageId: `page-${scenarioId}`, domGeneration: 1, url },
+        recentObservations: [],
+        capabilityLease: { leaseId: `lease-${scenarioId}`, actions: ["observe_dom"], allowedOrigins: [origin] },
+        remainingBudget: { actions: 2, turns: 2, timeMs: 30_000, tokens: 2 },
+      };
+    };
+    let proposalId = 0;
+    const createProposer = () => async (input) => ({ tokensUsed: 0, proposal: { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: `p-${++proposalId}`, runId: input.runId, scenarioId: input.scenarioId, milestoneId: input.currentMilestoneId, leaseId: input.capabilityLease.leaseId, action: "observe_dom", parameters: {} } });
+    const reportSummary = vi.fn();
+    const reportScenario = vi.fn();
+    let status;
+    try {
+      status = await runQaNative(["execute", "--spec=dashboard.spec.ts", `--base-url=${url}`, "--run-dir=.qa/runs/partial-adaptive", "--provider=hermes", "--mode=adaptive"], {
+        cwd,
+        env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+        handlers: { execute: (args) => executeQaNative(args, { createAdaptiveInput, createProposer, executeAdaptive: (options) => runAdaptiveSuiteWithPlaywright({ ...options, browserType: chromium }), reportSummary, reportScenario }) },
+        stdout: vi.fn(),
+        stderr: vi.fn(),
+      });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+
+    expect(status).toBe(0);
+    const runDirectory = join(cwd, ".qa", "runs", "partial-adaptive");
+    expect(existsSync(runDirectory)).toBe(true);
+    const outcomes = JSON.parse(readFileSync(join(runDirectory, "execution-agent-outcomes.json"), "utf8"));
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes.map((outcome) => outcome.type).sort()).toEqual(["COMPLETED", "ERROR"]);
+    expect(outcomes.find((outcome) => outcome.type === "ERROR").reason).toMatch(/^BUDGET_EXHAUSTED/);
+    const replay = readEvidenceArchive({ directory: join(runDirectory, "evidence"), integrityKey });
+    expect(replay.bundles.length).toBeGreaterThan(0);
+    expect(reportSummary).toHaveBeenCalledWith(expect.objectContaining({ executed: 2, nonCompleted: 1, provider: "hermes", mode: "adaptive" }));
+    expect(reportScenario).toHaveBeenCalledTimes(1);
+    expect(reportScenario).toHaveBeenCalledWith(expect.objectContaining({ type: "ERROR", reason: expect.stringMatching(/^BUDGET_EXHAUSTED/) }));
+  }, 30_000);
 
   it("removes the run directory when a later adaptive scenario fails", async () => {
     const cwd = project(multiSource);
