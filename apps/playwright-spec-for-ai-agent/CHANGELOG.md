@@ -1,11 +1,22 @@
 # Changelog
 
+## 2.5.0
+
+### Minor Changes
+
+- Fix the strict one-shot race, surface failure detail, and stop deleting failed-run evidence.
+  - Strict element observation no longer races the node timeout: visibility waits apply only to VISIBLE/CONTAINS_TEXT expectations under a bounded shared budget, NOT_VISIBLE/PRESENT targets snapshot `isVisible()` immediately, and an element detached mid-observation records a MISSING fact. Consumer reproduction: strict one-shot 0/4 → 5/5 consecutive no-DEBUG runs.
+  - Strict runs allow page-initiated same-site (registrable domain) GET/HEAD requests before any interaction, so apps serving their API from a sibling origin render fully; mutations, foreign-site reads, and the stricter post-interaction same-origin rule are unchanged. Observation also waits for VISIBLE/CONTAINS_TEXT targets still rendering, and NAVIGATE retries once when the landing bounces off the target path.
+  - Execution failures print the runtime outcome (`type=… code=… message=… bundles=N`) instead of an opaque "QA execution failed", and every failed run — strict or adaptive — is quarantined as `<run-dir>.invalid` with its sealed partial evidence instead of being deleted (POLICY_VIOLATION evidence stays withheld).
+  - The judge skips empty evidence items, resamples the model once when a decision violates the SemanticJudgeDecision contract (never coerced), names the failing scenario and outcome code in errors, and surfaces underlying errors with `QA_NATIVE_DEBUG`.
+  - `qa-native report` prints a one-line summary and treats an all-pass run as success; failure diagnosis classifies judge-flagged context/auth mismatches as ENVIRONMENT; code location ranks the executed spec file first among pure route matches; `QA_NATIVE_TRACE_TIMING=1` prints per-node timing.
+  - GitHub publication works against current gh and fresh repositories: payloads reach spawnSync as buffers (Node 24), issue labels are created idempotently (including dynamic `scenario:<id>` labels), `--jq` is no longer combined with `--slurp`, and jq's null-for-absent `pull_request` no longer misclassifies issues as draft PRs.
+
 ## 2.4.0
 
 ### Minor Changes
 
 - Sync the adaptive evidence validator with the runtime and preserve rejected evidence.
-
   - Fix three validator/runtime divergences that made adaptive runs reject their own output: the startup-navigation URL rewrite vs the first-audit page equality check, sealed empty `satisfiedMilestoneIds` vs observe-only milestone completion, and `report_blocked`'s sixth VISIBLE_TEXT artifact vs the exact-five artifact count. Completion semantics now live in a single exported `milestoneCompletionRule` shared by the runtime and the validator.
   - A run whose sealed adaptive evidence fails validation is no longer deleted: it is quarantined as `<run-dir>.invalid` with the evidence archive inside, and every qa-native command refuses to read `.invalid` paths.
   - New adaptive policy-matrix fixture suite (semantic / readonly / safe-interaction / report_blocked / budget-exhausted) guards the protocol in CI without a model or network.
@@ -21,7 +32,6 @@
 ### Minor Changes
 
 - Make `execute --allow-partial` work on real specs and surface run outcomes.
-
   - Attribute AST-level compile diagnostics (opaque/dynamic assertion and action targets) to the owning test by source range, so a single unparseable scenario blocks only itself instead of failing the whole file closed.
   - Record live-policy blocked scenarios (skip, auth-mock, subscription-mutation) as blocked so `--allow-partial` prunes them, instead of exploding `createExecutionPlan` on a NAVIGATE step under a blocked policy.
   - Surface internal failure detail (message + stack) under `QA_NATIVE_DEBUG`; the default stays a secret-safe opaque message.
