@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  ACTION_SPECS,
+  ADAPTIVE_ACTIONS,
+  ELEMENT_BOUND_ACTIONS,
   EXECUTION_ACTION_PROPOSAL_VERSION,
   EXECUTION_ACTION_RESULT_VERSION,
   EXECUTION_AGENT_INPUT_VERSION,
@@ -8,6 +11,45 @@ import {
   snapshotContract,
   validateContract,
 } from "../index.mjs";
+
+describe("ACTION_SPECS derivations (behaviour-invariance locks)", () => {
+  it("keeps the exact 12-action vocabulary and order", () => {
+    expect(ADAPTIVE_ACTIONS).toEqual([
+      "observe_dom", "observe_aria", "get_current_url", "navigate", "click_observed_element",
+      "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state",
+      "go_back", "reload_page", "report_blocked",
+    ]);
+  });
+
+  it("derives the pre-refactor safe-recovery set in the same order", () => {
+    expect(ADAPTIVE_ACTIONS.filter((action) => ACTION_SPECS[action].recovery)).toEqual([
+      "observe_dom", "observe_aria", "get_current_url", "click_observed_element", "press_key",
+      "hover_observed_element", "scroll_view", "wait_for_element_state", "report_blocked",
+    ]);
+  });
+
+  it("derives the pre-refactor element-bound set in the same order", () => {
+    expect(ELEMENT_BOUND_ACTIONS).toEqual(["click_observed_element", "hover_observed_element", "wait_for_element_state"]);
+  });
+
+  it("reproduces the pre-refactor lease order for each policy combination", () => {
+    const allows = (policy, action) => {
+      const requires = ACTION_SPECS[action].requiresPolicy;
+      if (requires === "navigation") return policy.navigation === "ALLOWED";
+      if (requires === "click") return ["SAFE_ONLY", "ALL"].includes(policy.click);
+      return true;
+    };
+    const group = (policy, requires) => ADAPTIVE_ACTIONS.filter((action) => ACTION_SPECS[action].requiresPolicy === requires && allows(policy, action));
+    const lease = (policy) => [...group(policy, undefined), ...group(policy, "navigation"), ...group(policy, "click")];
+    expect(lease({ navigation: "BLOCKED", click: "NONE" })).toEqual([
+      "observe_dom", "observe_aria", "get_current_url", "scroll_view", "wait_for_element_state", "report_blocked",
+    ]);
+    expect(lease({ navigation: "ALLOWED", click: "SAFE_ONLY" })).toEqual([
+      "observe_dom", "observe_aria", "get_current_url", "scroll_view", "wait_for_element_state", "report_blocked",
+      "navigate", "go_back", "reload_page", "click_observed_element", "press_key", "hover_observed_element",
+    ]);
+  });
+});
 
 describe("auditArtifactShape", () => {
   it("requires the five snapshot artifacts for every action", () => {

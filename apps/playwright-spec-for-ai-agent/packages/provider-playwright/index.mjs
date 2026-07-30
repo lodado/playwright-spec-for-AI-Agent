@@ -1,4 +1,5 @@
 import {
+  ADAPTIVE_ACTIONS,
   EXECUTION_ACTION_RESULT_VERSION,
   EXECUTION_AGENT_OUTCOME_VERSION,
   RUNTIME_OUTCOME_VERSION,
@@ -42,7 +43,6 @@ const GATEWAY_ARIA_LIMIT = 512 * 1024;
 const GATEWAY_MAX_ELEMENTS = 128;
 const GATEWAY_ELEMENT_TEXT_LIMIT = 1024;
 const GATEWAY_CLEANUP_TIMEOUT_MS = 1_000;
-const GATEWAY_ACTIONS = Object.freeze(["get_current_url", "observe_dom", "observe_aria", "navigate", "go_back", "reload_page", "click_observed_element", "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state", "report_blocked"]);
 const adaptiveExecutions = new WeakSet();
 
 export function normalizeAuthBootstrap(value, baseUrl) {
@@ -102,7 +102,7 @@ export function playwrightExecutionCapabilities() {
 export function playwrightBrowserToolCapabilities() {
   return providerCapabilities({
     providerId: GATEWAY_PROVIDER_ID,
-    actions: [...GATEWAY_ACTIONS],
+    actions: [...ADAPTIVE_ACTIONS],
     evidence: ["DOM_SNAPSHOT", "ARIA_SNAPSHOT", "VISIBLE_TEXT", "ACTION_LOG"],
   });
 }
@@ -201,7 +201,7 @@ export async function openPlaywrightBrowserToolGateway({
       if (closed || failed) throw new Error("browser tool gateway is closed");
       if (executing) throw new Error("browser tool gateway already has an action in progress");
       if (usedProposalIds.has(proposal?.proposalId)) throw new Error("action proposal was already consumed");
-      if (!GATEWAY_ACTIONS.includes(proposal?.action)) throw new Error("browser tool is not implemented by this gateway slice");
+      if (!ADAPTIVE_ACTIONS.includes(proposal?.action)) throw new Error("browser tool is not implemented by this gateway slice");
       executing = true;
       let operationStarted = false;
       try {

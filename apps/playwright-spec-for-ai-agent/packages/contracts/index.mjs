@@ -34,20 +34,39 @@ export const GITHUB_PUBLICATION_RESULT_VERSION = "github-publication-result/0.2"
 export const VERDICTS = Object.freeze(["PASS", "FAIL", "SKIP", "MANUAL_REVIEW"]);
 export const EXPECTATION_STATUSES = Object.freeze(["MATCHED", "CONTRADICTED", "NOT_OBSERVED", "AMBIGUOUS", "NOT_APPLICABLE"]);
 export const MILESTONE_CLASSES = Object.freeze(["REQUIRED_EXACT_ACTION", "REQUIRED_SEMANTIC_MILESTONE", "OPTIONAL_HINT"]);
-export const ADAPTIVE_ACTIONS = Object.freeze([
-  "observe_dom",
-  "observe_aria",
-  "get_current_url",
-  "navigate",
-  "click_observed_element",
-  "press_key",
-  "hover_observed_element",
-  "scroll_view",
-  "wait_for_element_state",
-  "go_back",
-  "reload_page",
-  "report_blocked",
-]);
+// The single adaptive action vocabulary. Every consumer derives from this table instead of
+// keeping its own copy of the action names: lease building and safe-recovery filtering (core),
+// milestone semantics (core milestoneCompletionRule via provesSemantic), the gateway dispatch
+// guard (provider-playwright), the prompt prose (provider-hermes via params), parameter key
+// validation (validateAdaptiveActionParameters below), element-bound action lists, and the audit
+// artifact shape (auditArtifactShape via extraArtifacts). Adding an action here reaches all of
+// them; the per-action *value* rules (URL shape, non-zero scroll, etc.) still live in the
+// validator, which is their single authority.
+//   params          — ordered parameter key names (drives allowedKeys + prompt prose)
+//   requiresPolicy  — scenario policy gate for lease inclusion ("navigation" | "click")
+//   recovery        — offered as a safe-recovery action to the authorizer
+//   elementBound    — may be listed as an observed element's allowedAction
+//   provesSemantic  — proves a semantic milestone: true, or the allowed wait states
+//   terminal        — ends the run (report_blocked)
+//   extraArtifacts  — audit artifact types sealed beyond the five snapshots
+const NO_PARAMS = Object.freeze([]);
+const OBSERVED_ELEMENT_PARAMS = Object.freeze(["observationId", "elementId"]);
+export const ACTION_SPECS = Object.freeze({
+  observe_dom:            Object.freeze({ params: NO_PARAMS, recovery: true, provesSemantic: true }),
+  observe_aria:           Object.freeze({ params: NO_PARAMS, recovery: true, provesSemantic: true }),
+  get_current_url:        Object.freeze({ params: NO_PARAMS, recovery: true }),
+  navigate:               Object.freeze({ params: Object.freeze(["url"]), requiresPolicy: "navigation" }),
+  click_observed_element: Object.freeze({ params: OBSERVED_ELEMENT_PARAMS, requiresPolicy: "click", recovery: true, elementBound: true }),
+  press_key:              Object.freeze({ params: Object.freeze(["key"]), requiresPolicy: "click", recovery: true }),
+  hover_observed_element: Object.freeze({ params: OBSERVED_ELEMENT_PARAMS, requiresPolicy: "click", recovery: true, elementBound: true }),
+  scroll_view:            Object.freeze({ params: Object.freeze(["deltaX", "deltaY"]), recovery: true }),
+  wait_for_element_state: Object.freeze({ params: Object.freeze(["observationId", "elementId", "state", "timeoutMs"]), recovery: true, elementBound: true, provesSemantic: Object.freeze(["present", "visible"]) }),
+  go_back:                Object.freeze({ params: NO_PARAMS, requiresPolicy: "navigation" }),
+  reload_page:            Object.freeze({ params: NO_PARAMS, requiresPolicy: "navigation" }),
+  report_blocked:         Object.freeze({ params: Object.freeze(["milestoneId", "reason"]), recovery: true, terminal: true, extraArtifacts: Object.freeze(["VISIBLE_TEXT"]) }),
+});
+export const ADAPTIVE_ACTIONS = Object.freeze(Object.keys(ACTION_SPECS));
+export const ELEMENT_BOUND_ACTIONS = Object.freeze(ADAPTIVE_ACTIONS.filter((action) => ACTION_SPECS[action].elementBound));
 // Single definition of what a sealed adaptive audit looks like. The provider builds each audit
 // from this shape and the evidence validator counts against it — neither side keeps its own copy
 // of "exactly five snapshots plus, for report_blocked, one VISIBLE_TEXT". Optional types are
@@ -61,8 +80,7 @@ const AUDIT_REQUIRED_ARTIFACTS = Object.freeze([
 ]);
 
 export function auditArtifactShape(action) {
-  const optional = action === "report_blocked" ? Object.freeze(["VISIBLE_TEXT"]) : Object.freeze([]);
-  return Object.freeze({ required: AUDIT_REQUIRED_ARTIFACTS, optional });
+  return Object.freeze({ required: AUDIT_REQUIRED_ARTIFACTS, optional: ACTION_SPECS[action]?.extraArtifacts ?? NO_PARAMS });
 }
 
 export const RUNTIME_ERROR_CODES = Object.freeze([
@@ -1570,7 +1588,7 @@ function validateAdaptiveObservation(value, path, contract) {
     if (element.milestoneIds.length > 64) fail(contract, `${elementPath}.milestoneIds`, "must contain at most 64 milestones");
     element.milestoneIds.forEach((id, milestoneIndex) => boundedString(id, 256, `${elementPath}.milestoneIds[${milestoneIndex}]`, contract));
     uniqueStringArray(element.allowedActions, `${elementPath}.allowedActions`, contract);
-    element.allowedActions.forEach((action, actionIndex) => oneOf(action, ["click_observed_element", "hover_observed_element", "wait_for_element_state"], `${elementPath}.allowedActions[${actionIndex}]`, contract));
+    element.allowedActions.forEach((action, actionIndex) => oneOf(action, ELEMENT_BOUND_ACTIONS, `${elementPath}.allowedActions[${actionIndex}]`, contract));
     if (element.role !== undefined) boundedString(element.role, 256, `${elementPath}.role`, contract);
     if (element.accessibleName !== undefined) boundedString(element.accessibleName, 1_024, `${elementPath}.accessibleName`, contract);
     if (element.text !== undefined) boundedString(element.text, 1_024, `${elementPath}.text`, contract);
@@ -1594,50 +1612,29 @@ function validateAdaptiveBudget(value, path, contract) {
 
 function validateAdaptiveActionParameters(action, value, path, contract) {
   object(value, path, contract);
-  if (["observe_dom", "observe_aria", "get_current_url", "go_back", "reload_page"].includes(action)) {
-    allowedKeys(value, [], path, contract);
-    return;
-  }
+  // The permitted key set is the single source in ACTION_SPECS; only the per-action *value* rules
+  // (URL shape, non-zero scroll delta, state enum, string/integer bounds) live here.
+  allowedKeys(value, ACTION_SPECS[action].params, path, contract);
   if (action === "navigate") {
-    allowedKeys(value, ["url"], path, contract);
     httpUrl(value.url, `${path}.url`, contract);
-    return;
-  }
-  if (action === "click_observed_element" || action === "hover_observed_element") {
-    validateObservedElementParameters(value, path, contract);
-    return;
-  }
-  if (action === "press_key") {
-    allowedKeys(value, ["key"], path, contract);
+  } else if (action === "click_observed_element" || action === "hover_observed_element") {
+    boundedString(value.observationId, 256, `${path}.observationId`, contract);
+    boundedString(value.elementId, 256, `${path}.elementId`, contract);
+  } else if (action === "press_key") {
     exact(value.key, "Escape", `${path}.key`, contract);
-    return;
-  }
-  if (action === "scroll_view") {
-    allowedKeys(value, ["deltaX", "deltaY"], path, contract);
+  } else if (action === "scroll_view") {
     boundedInteger(value.deltaX, -4_096, 4_096, `${path}.deltaX`, contract);
     boundedInteger(value.deltaY, -4_096, 4_096, `${path}.deltaY`, contract);
     if (value.deltaX === 0 && value.deltaY === 0) fail(contract, path, "scroll delta must be non-zero");
-    return;
-  }
-  if (action === "wait_for_element_state") {
-    allowedKeys(value, ["observationId", "elementId", "state", "timeoutMs"], path, contract);
+  } else if (action === "wait_for_element_state") {
     boundedString(value.observationId, 256, `${path}.observationId`, contract);
     boundedString(value.elementId, 256, `${path}.elementId`, contract);
     oneOf(value.state, ["present", "absent", "visible", "hidden"], `${path}.state`, contract);
     boundedInteger(value.timeoutMs, 1, 10_000, `${path}.timeoutMs`, contract);
-    return;
-  }
-  if (action === "report_blocked") {
-    allowedKeys(value, ["milestoneId", "reason"], path, contract);
+  } else if (action === "report_blocked") {
     boundedString(value.milestoneId, 256, `${path}.milestoneId`, contract);
     boundedString(value.reason, 4_096, `${path}.reason`, contract);
   }
-}
-
-function validateObservedElementParameters(value, path, contract) {
-  allowedKeys(value, ["observationId", "elementId"], path, contract);
-  boundedString(value.observationId, 256, `${path}.observationId`, contract);
-  boundedString(value.elementId, 256, `${path}.elementId`, contract);
 }
 
 function httpUrl(value, path, contract) {

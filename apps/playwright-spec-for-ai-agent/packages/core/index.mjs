@@ -1,5 +1,8 @@
 import {
+  ACTION_SPECS,
+  ADAPTIVE_ACTIONS,
   CONTRACT_VIOLATION,
+  ELEMENT_BOUND_ACTIONS,
   EXECUTION_AGENT_INPUT_VERSION,
   EXECUTION_AGENT_OUTCOME_VERSION,
   EXECUTION_PLAN_VERSION,
@@ -136,9 +139,9 @@ export function createAdaptiveActionAuthorizer({ input, now = Date.now } = {}) {
     if (proposalSnapshot.action === "report_blocked" && proposalSnapshot.parameters.milestoneId !== inputSnapshot.currentMilestoneId) throw contractError("execute", "report_blocked must target the current milestone");
 
     const milestone = inputSnapshot.milestones.find((item) => item.id === inputSnapshot.currentMilestoneId);
-    const safeRecoveryActions = ["observe_dom", "observe_aria", "get_current_url", "click_observed_element", "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state", "report_blocked"];
+    const safeRecoveryActions = ADAPTIVE_ACTIONS.filter((action) => ACTION_SPECS[action].recovery);
     if (milestone.class === "REQUIRED_EXACT_ACTION" && proposalSnapshot.action !== milestone.requiredAction && !safeRecoveryActions.includes(proposalSnapshot.action)) throw contractError("execute", "action does not match the required exact action");
-    if (["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposalSnapshot.action)) {
+    if (ELEMENT_BOUND_ACTIONS.includes(proposalSnapshot.action)) {
       const observation = inputSnapshot.recentObservations.find((item) => item.observationId === proposalSnapshot.parameters.observationId);
       if (!observation || observation.pageId !== inputSnapshot.currentPage.pageId || observation.domGeneration !== inputSnapshot.currentPage.domGeneration) throw contractError("execute", "stale observation cannot authorize an action");
       const element = observation.elements.find((item) => item.elementId === proposalSnapshot.parameters.elementId);
@@ -202,9 +205,16 @@ export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId,
         })),
       ];
   if (milestones.length === 0) throw contractError("execute", "scenario has no adaptive milestones");
-  const actions = ["observe_dom", "observe_aria", "get_current_url", "scroll_view", "wait_for_element_state", "report_blocked"];
-  if (scenario.policy.navigation === "ALLOWED") actions.push("navigate", "go_back", "reload_page");
-  if (["SAFE_ONLY", "ALL"].includes(scenario.policy.click)) actions.push("click_observed_element", "press_key", "hover_observed_element");
+  // Lease order is base actions, then navigation, then click — grouped, not interleaved — because
+  // the order feeds the leaseId hash and pre-refactor runs relied on this grouping.
+  const leasePolicyAllows = (action) => {
+    const requires = ACTION_SPECS[action].requiresPolicy;
+    if (requires === "navigation") return scenario.policy.navigation === "ALLOWED";
+    if (requires === "click") return ["SAFE_ONLY", "ALL"].includes(scenario.policy.click);
+    return true;
+  };
+  const leaseGroup = (group) => ADAPTIVE_ACTIONS.filter((action) => ACTION_SPECS[action].requiresPolicy === group && leasePolicyAllows(action));
+  const actions = [...leaseGroup(undefined), ...leaseGroup("navigation"), ...leaseGroup("click")];
   return snapshotContract("ExecutionAgentInput", {
     schemaVersion: EXECUTION_AGENT_INPUT_VERSION,
     runId,
@@ -262,8 +272,9 @@ function adaptiveSemanticExpectation(expectation) {
 export function milestoneCompletionRule({ action, parameters, satisfiedMilestoneIds } = {}, milestone) {
   if (milestone.class === "REQUIRED_EXACT_ACTION") return action === milestone.requiredAction;
   if (milestone.class !== "REQUIRED_SEMANTIC_MILESTONE") return false;
-  const observeAction = ["observe_dom", "observe_aria"].includes(action);
-  const waitAction = action === "wait_for_element_state" && ["present", "visible"].includes(parameters?.state);
+  const proof = ACTION_SPECS[action]?.provesSemantic;
+  const observeAction = proof === true;
+  const waitAction = Array.isArray(proof) && proof.includes(parameters?.state);
   if (!observeAction && !waitAction) return false;
   // Milestones without an expectation (observe-only evidence milestones, bare targets) are proven
   // by the observation itself; the gateway seals satisfiedMilestoneIds only for expectation checks.
@@ -296,11 +307,11 @@ export function advanceAdaptiveMilestone({ input, proposal, result, observation 
     });
   }
   const boundElement = referencedMilestoneElement(inputSnapshot, proposalSnapshot, milestone.id);
-  const boundAction = ["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposalSnapshot.action);
+  const boundAction = ELEMENT_BOUND_ACTIONS.includes(proposalSnapshot.action);
   // Live-only bindings on top of milestoneCompletionRule: an observation must describe the page
   // the action ran on (and name the milestone's element when the milestone has a bare target),
   // and element-bound actions must reference an element observed for this milestone.
-  const matchedObservation = ["observe_dom", "observe_aria"].includes(proposalSnapshot.action)
+  const matchedObservation = ACTION_SPECS[proposalSnapshot.action]?.provesSemantic === true
     && observationSnapshot?.pageId === inputSnapshot.currentPage.pageId
     && observationSnapshot.domGeneration === inputSnapshot.currentPage.domGeneration
     && (milestone.expectation === undefined && milestone.target !== undefined
@@ -313,7 +324,7 @@ export function advanceAdaptiveMilestone({ input, proposal, result, observation 
     satisfiedMilestoneIds: observationSnapshot?.satisfiedMilestoneIds,
   }, milestone);
   const satisfied = resultSnapshot.accepted && (
-    (ruleProof && (["observe_dom", "observe_aria"].includes(proposalSnapshot.action) ? matchedObservation : !boundAction || boundElement !== undefined))
+    (ruleProof && (ACTION_SPECS[proposalSnapshot.action]?.provesSemantic === true ? matchedObservation : !boundAction || boundElement !== undefined))
     || (milestone.class === "OPTIONAL_HINT" && acceptedBoundAction)
   );
   if (!satisfied) return undefined;
@@ -355,7 +366,7 @@ function adaptiveTerminalOutcome(input, milestones, reportedReason) {
 }
 
 function referencedMilestoneElement(input, proposal, milestoneId) {
-  if (!["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposal.action)) return undefined;
+  if (!ELEMENT_BOUND_ACTIONS.includes(proposal.action)) return undefined;
   const observation = input.recentObservations.find((item) => item.observationId === proposal.parameters.observationId);
   if (observation?.pageId !== input.currentPage.pageId || observation.domGeneration !== input.currentPage.domGeneration) return undefined;
   return observation.elements.find((item) => item.elementId === proposal.parameters.elementId && item.milestoneIds.includes(milestoneId));

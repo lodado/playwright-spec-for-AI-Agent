@@ -1,4 +1,6 @@
 import {
+  ACTION_SPECS,
+  ADAPTIVE_ACTIONS,
   EXECUTION_ACTION_PROPOSAL_VERSION,
   SEMANTIC_JUDGE_DECISION_VERSION,
   canonicalHash,
@@ -11,7 +13,9 @@ import { readHermesModelConfig, runHermes } from "../../scripts/hermes-runner.mj
 const PROMPT_VERSION = "hermes-evidence-judge/0.1";
 const MAX_TURNS = 3;
 const MAX_QUERY_CHARS = 70_000;
-const EXECUTION_PROMPT_VERSION = "hermes-adaptive-execution/0.1";
+// Pinned to the action vocabulary: any ACTION_SPECS change (new action, changed params) shifts the
+// hash, so runs before and after are never silently compared as if the prompt were unchanged.
+const EXECUTION_PROMPT_VERSION = `hermes-adaptive-execution/0.2+${canonicalHash(ACTION_SPECS).slice("sha256:".length, "sha256:".length + 8)}`;
 const EXECUTION_MAX_TURNS = 1;
 const PATCH_PROMPT_VERSION = "hermes-patch-proposal/0.1";
 const PATCH_MAX_TURNS = 1;
