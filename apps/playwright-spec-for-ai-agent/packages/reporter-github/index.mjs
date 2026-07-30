@@ -81,8 +81,16 @@ export function createGitHubCliIssueTransport({ spawn = spawnSync } = {}) {
       publicationTarget({ repository: target, publication, number, url });
       const login = runGh(spawn, ["api", "--method", "GET", "user", "--jq", ".login"]).toString("utf8").trim();
       if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,98}[A-Za-z0-9])?(?:\[bot\])?$/.test(login)) throw new Error("GitHub authenticated actor is invalid");
-      const records = runGhJson(spawn, ["api", "--method", "GET", `repos/${target}/issues/${number}/comments`, "-f", "per_page=100", "--paginate", "--slurp", "--jq", `[.[][]|select(.user.login==${JSON.stringify(login)} and (.body|contains(\"qa-occurrence:\")))|{id,html_url,body:([.body|split(\"\\n\")[]|select(startswith(\"<!-- qa-occurrence:\"))|.[:2048]][:1]|join(\"\\n\")),created_at}]`]);
-      if (!Array.isArray(records) || records.length > 500) throw new Error("GitHub occurrence search returned invalid data");
+      // gh rejects --jq combined with --slurp, so take the raw paginated pages (one array per
+      // page) and filter client-side; runGh's maxBuffer bounds the response size.
+      const pages = runGhJson(spawn, ["api", "--method", "GET", `repos/${target}/issues/${number}/comments`, "-f", "per_page=100", "--paginate", "--slurp"]);
+      if (!Array.isArray(pages)) throw new Error("GitHub occurrence search returned invalid data");
+      const records = pages.flat().flatMap((comment) => {
+        if (!comment || comment.user?.login !== login || typeof comment.body !== "string" || !comment.body.includes("qa-occurrence:")) return [];
+        const markerBody = comment.body.split("\n").filter((line) => line.startsWith("<!-- qa-occurrence:")).map((line) => line.slice(0, 2_048)).slice(0, 1).join("\n");
+        return [{ id: comment.id, html_url: comment.html_url, body: markerBody, created_at: comment.created_at }];
+      });
+      if (records.length > 500) throw new Error("GitHub occurrence search returned invalid data");
       return records;
     },
     async createOccurrenceRecord({ repository, publication, number, url, body }) {

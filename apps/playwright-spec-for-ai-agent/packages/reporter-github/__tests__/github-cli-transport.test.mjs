@@ -95,19 +95,26 @@ describe("GitHub CLI Issue transport", () => {
   });
 
   it("lists and appends immutable occurrence comments", async () => {
-    const body = "## QA occurrence\n\n<!-- qa-occurrence: c2lnbmVk -->";
+    const marker = "<!-- qa-occurrence: c2lnbmVk -->";
+    const body = `## QA occurrence\n\n${marker}`;
     const created = { id: 123, html_url: "https://github.com/owner/example/issues/4#issuecomment-123", body, created_at: "2026-07-26T00:00:00.000Z" };
+    // gh rejects --jq combined with --slurp, so the transport receives raw paginated pages
+    // (array per page) and filters client-side by the authenticated login.
+    const pages = [[
+      { ...created, user: { login: "qa-runtime-bot[bot]" } },
+      { id: 124, html_url: "https://github.com/owner/example/issues/4#issuecomment-124", body: "unrelated comment", created_at: "2026-07-26T00:00:01.000Z", user: { login: "someone-else" } },
+    ]];
     const spawn = vi.fn()
       .mockReturnValueOnce({ status: 0, stdout: Buffer.from("qa-runtime-bot[bot]\n") })
-      .mockReturnValueOnce({ status: 0, stdout: Buffer.from(JSON.stringify([created])) })
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.from(JSON.stringify(pages)) })
       .mockReturnValueOnce({ status: 0, stdout: Buffer.from(JSON.stringify(created)) });
     const transport = createGitHubCliIssueTransport({ spawn });
     const target = { repository: "owner/example", publication: "ISSUE", number: 4, url: "https://github.com/owner/example/issues/4" };
 
-    expect(await transport.listOccurrenceRecords(target)).toEqual([created]);
+    expect(await transport.listOccurrenceRecords(target)).toEqual([{ id: 123, html_url: created.html_url, body: marker, created_at: created.created_at }]);
     expect(await transport.createOccurrenceRecord({ ...target, body })).toEqual({ id: 123, url: created.html_url, body, createdAt: created.created_at });
     expect(spawn.mock.calls[1][1]).toEqual(expect.arrayContaining(["repos/owner/example/issues/4/comments", "--paginate", "--slurp"]));
-    expect(spawn.mock.calls[1][1].join(" ")).toContain("qa-runtime-bot[bot]");
+    expect(spawn.mock.calls[1][1]).not.toContain("--jq");
     expect(spawn.mock.calls[2][1]).toEqual(expect.arrayContaining(["--method", "POST", "--input", "-"]));
     expect(JSON.parse(spawn.mock.calls[2][2].input.toString())).toEqual({ body });
   });
