@@ -81,7 +81,7 @@ function fixture(options = {}) {
     id: "visible-text",
     type: "VISIBLE_TEXT",
     contentType: "text/plain",
-    content: "Dashboard Save balanced layout stored-secret",
+    content: options.artifactContent ?? "Dashboard Save balanced layout stored-secret",
   });
   const facts = [
     { id: "fact-url", kind: "URL", value: options.url ?? "https://example.test/dashboard" },
@@ -203,6 +203,19 @@ describe("semantic-judgment routing", () => {
     expect(input.expectations.map((item) => item.id)).toContain("text");
     expect(input.expectations.every((item) => item.judgment === "SEMANTIC")).toBe(true);
     expect(validateContract("SemanticJudgeInput", input)).toBe(input);
+  });
+
+  it("omits empty evidence items instead of violating the semantic input contract", () => {
+    // A page observed before it rendered seals an empty VISIBLE_TEXT artifact; an empty item
+    // carries no signal for the judge and must not make the whole run unjudgeable.
+    const evidence = fixture({ omitText: true, artifactContent: "" });
+    const ir = qaIr({ semantic: false });
+    const evaluation = evaluateDeterministically({ qaIr: ir, ...evidence });
+    const input = buildSemanticJudgeInput({ qaIr: ir, ...evidence, evaluation });
+
+    expect(validateContract("SemanticJudgeInput", input)).toBe(input);
+    expect(input.evidence.length).toBeGreaterThan(0);
+    expect(input.evidence.every((item) => item.content.length > 0)).toBe(true);
   });
 
   it("leaves routed expectations without a judgment key when the scenario is not listed", () => {

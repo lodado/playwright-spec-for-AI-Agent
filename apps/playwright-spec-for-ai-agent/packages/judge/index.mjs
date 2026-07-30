@@ -248,7 +248,9 @@ function buildSemanticInput(qaIr, verified, evaluation, secrets) {
   let remaining = MAX_EVIDENCE_CHARS;
   const evidence = [];
   for (const item of candidates.sort((left, right) => left.id.localeCompare(right.id))) {
-    if (remaining === 0 || evidence.some((entry) => entry.id === item.id)) continue;
+    // A page observed before it rendered seals empty artifacts; an empty item carries no signal
+    // for the judge and would violate the SemanticJudgeInput contract, making the run unjudgeable.
+    if (item.content.length === 0 || remaining === 0 || evidence.some((entry) => entry.id === item.id)) continue;
     const length = Math.min(item.content.length, MAX_ITEM_CHARS, remaining);
     evidence.push({ id: item.id, kind: item.kind, content: item.content.slice(0, length), truncated: item.truncated || length < item.content.length });
     remaining -= length;
