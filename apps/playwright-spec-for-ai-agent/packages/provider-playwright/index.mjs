@@ -37,7 +37,7 @@ const GATEWAY_ARIA_LIMIT = 512 * 1024;
 const GATEWAY_MAX_ELEMENTS = 128;
 const GATEWAY_ELEMENT_TEXT_LIMIT = 1024;
 const GATEWAY_CLEANUP_TIMEOUT_MS = 1_000;
-const GATEWAY_ACTIONS = Object.freeze(["get_current_url", "observe_dom", "observe_aria", "navigate", "go_back", "reload_page", "click_observed_element", "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state"]);
+const GATEWAY_ACTIONS = Object.freeze(["get_current_url", "observe_dom", "observe_aria", "navigate", "go_back", "reload_page", "click_observed_element", "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state", "report_blocked"]);
 const adaptiveExecutions = new WeakSet();
 
 export function normalizeAuthBootstrap(value, baseUrl) {
@@ -98,7 +98,7 @@ export function playwrightBrowserToolCapabilities() {
   return providerCapabilities({
     providerId: GATEWAY_PROVIDER_ID,
     actions: [...GATEWAY_ACTIONS],
-    evidence: ["DOM_SNAPSHOT", "ARIA_SNAPSHOT", "ACTION_LOG"],
+    evidence: ["DOM_SNAPSHOT", "ARIA_SNAPSHOT", "VISIBLE_TEXT", "ACTION_LOG"],
   });
 }
 
@@ -207,6 +207,7 @@ export async function openPlaywrightBrowserToolGateway({
         operationStarted = true;
         const before = await captureGatewayPage(page, currentPage, initialInput.capabilityLease.allowedOrigins, { deadline, clock }, secrets);
         let observation;
+        let visibleText;
         if (authorization.proposal.action === "get_current_url") {
           // URL is captured in the mandatory pre/post evidence.
         } else if (authorization.proposal.action === "navigate") {
@@ -260,6 +261,9 @@ export async function openPlaywrightBrowserToolGateway({
           interactionStarted = true;
           await runGatewayBrowserOperation({ deadline, clock }, () => page.keyboard.press("Escape"));
           invalidateGatewayObservations();
+        } else if (authorization.proposal.action === "report_blocked") {
+          // Seal the full page the agent claims is blocked; the reason stays a claim for the judge, never a verdict.
+          visibleText = await captureGatewayVisibleText(page, { deadline, clock }, [...secrets, ...before.sensitiveValues]);
         }
         const nextUrl = gatewayUrl(page, initialInput.capabilityLease.allowedOrigins);
         if (["navigate", "go_back", "reload_page"].includes(authorization.proposal.action) || nextUrl !== currentPage.url) {
@@ -270,7 +274,10 @@ export async function openPlaywrightBrowserToolGateway({
         const after = await captureGatewayPage(page, currentPage, initialInput.capabilityLease.allowedOrigins, { deadline, clock }, secrets);
         currentPage.url = after.page.url;
         remainingBudget.timeMs = Math.min(remainingBudget.timeMs, Math.max(0, Math.floor(deadline - readFiniteClock(clock))));
-        const artifacts = captureGatewayArtifacts(store, authorization.proposal, before, after, observation?.contract.satisfiedMilestoneIds ?? []);
+        const artifacts = [
+          ...captureGatewayArtifacts(store, authorization.proposal, before, after, observation?.contract.satisfiedMilestoneIds ?? []),
+          ...(visibleText === undefined ? [] : [store.captureArtifact({ id: `${authorization.proposal.proposalId}:visible-text`, type: "VISIBLE_TEXT", contentType: "text/plain", content: visibleText })]),
+        ];
         const facts = [
           { id: `${authorization.proposal.proposalId}:url`, kind: "URL", value: after.page.url },
           { id: `${authorization.proposal.proposalId}:audit`, kind: "BROWSER_TOOL_AUDIT", value: { action: authorization.proposal.action, proposalId: authorization.proposal.proposalId, before: before.page, after: after.page, status: "ACCEPTED" } },
@@ -304,7 +311,7 @@ export async function openPlaywrightBrowserToolGateway({
           recentObservations = [];
           handles.clear();
         } else if (transition?.outcome) {
-          milestones = milestones.map((item) => item.id === beforeInput.currentMilestoneId ? { ...item, status: "COMPLETED" } : item);
+          milestones = milestones.map((item) => item.id === beforeInput.currentMilestoneId ? { ...item, status: authorization.proposal.action === "report_blocked" ? "BLOCKED" : "COMPLETED" } : item);
           outcome = transition.outcome;
           recentObservations = [];
           handles.clear();
@@ -394,6 +401,12 @@ async function captureGatewayPage(page, currentPage, allowedOrigins, timing, sec
   const rawAria = await runGatewayBrowserOperation(timing, (timeout) => ariaLocator.ariaSnapshot({ timeout }));
   const aria = boundedText(redactSensitiveText(rawAria, [...secrets, ...capturedDom.sensitiveValues]).replace(/^(\s*-\s*\/url:).*$/gm, "$1 [REDACTED]"), GATEWAY_ARIA_LIMIT, "ARIA_SNAPSHOT");
   return { page: { ...currentPage, url }, dom, aria, sensitiveValues: capturedDom.sensitiveValues };
+}
+
+async function captureGatewayVisibleText(page, timing, secrets) {
+  const raw = await runGatewayBrowserOperation(timing, (timeout) => page.locator("body").evaluate((element, maxChars) => (element.innerText ?? "").slice(0, maxChars), GATEWAY_DOM_LIMIT + 1, { timeout }));
+  if (typeof raw !== "string") throw new Error("browser returned invalid visible text evidence");
+  return boundedText(redactSensitiveText(raw, secrets), GATEWAY_DOM_LIMIT, "VISIBLE_TEXT");
 }
 
 async function observeGatewayElements({ page, input, currentPage, sequence, secrets, deadline, clock }) {

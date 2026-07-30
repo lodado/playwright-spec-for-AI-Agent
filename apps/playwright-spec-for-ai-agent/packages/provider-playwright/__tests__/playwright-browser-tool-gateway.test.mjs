@@ -61,6 +61,7 @@ function fakeBrowser({
   url = "https://example.test/dashboard",
   dom = '<main><button data-testid="settings" role="button">Settings</button></main>',
   aria = '- button "Settings"',
+  visibleText = "Settings dashboard visible text",
   elementText = "Settings",
   protectedElement = false,
   requestAfterClick,
@@ -80,6 +81,7 @@ function fakeBrowser({
   };
   const bodyLocator = {
     ariaSnapshot: vi.fn(async () => aria),
+    evaluate: vi.fn(async () => visibleText),
   };
   const candidate = {
     isVisible: vi.fn(async () => true),
@@ -587,6 +589,38 @@ describe("Playwright browser tool gateway", () => {
       completedMilestoneIds: ["settings-visible"],
     });
     expect(execution.outcome).not.toHaveProperty("verdict");
+    expect(() => gateway.agentInput()).toThrow(/complete/i);
+    await gateway.close();
+  });
+
+  it("seals full page evidence and returns a BLOCKED outcome for report_blocked", async () => {
+    const fixture = fakeBrowser();
+    const input = executionAgentInput();
+    input.milestones = [{
+      id: "settings-visible",
+      class: "REQUIRED_SEMANTIC_MILESTONE",
+      status: "PENDING",
+      description: "Settings entry is visible.",
+      target: { testId: "settings" },
+    }];
+    input.currentMilestoneId = "settings-visible";
+    input.capabilityLease.actions.push("report_blocked");
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
+
+    const execution = await gateway.execute({
+      proposal: proposal(gateway.agentInput(), "report_blocked", { milestoneId: "settings-visible", reason: "The settings entry never appears." }),
+      tokensUsed: 1,
+    });
+
+    expect(execution.result.accepted).toBe(true);
+    expect(execution.bundle.artifacts.map((artifact) => artifact.type)).toEqual(expect.arrayContaining(["VISIBLE_TEXT", "ARIA_SNAPSHOT"]));
+    expect(execution.outcome).toMatchObject({
+      type: "BLOCKED",
+      completedMilestoneIds: [],
+      reason: expect.stringContaining("The settings entry never appears."),
+    });
+    expect(execution.outcome).not.toHaveProperty("verdict");
+    expect(await artifactText(gateway, execution.bundle)).toContain("Settings dashboard visible text");
     expect(() => gateway.agentInput()).toThrow(/complete/i);
     await gateway.close();
   });

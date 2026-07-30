@@ -43,7 +43,33 @@ export function clickProposal() {
   };
 }
 
+function reportBlockedProposal() {
+  return {
+    ...clickProposal(),
+    proposalId: "proposal-report-blocked",
+    action: "report_blocked",
+    parameters: { milestoneId: "open-settings", reason: "Settings entry never renders after repeated observation." },
+  };
+}
+
 describe("adaptive execution contracts", () => {
+  it("validates report_blocked claims with exactly a bounded milestoneId and reason", () => {
+    const proposal = reportBlockedProposal();
+    expect(validateContract("ExecutionActionProposal", proposal)).toBe(proposal);
+
+    const missingReason = reportBlockedProposal();
+    delete missingReason.parameters.reason;
+    expect(() => validateContract("ExecutionActionProposal", missingReason)).toThrow(/reason/);
+
+    const extraKey = reportBlockedProposal();
+    extraKey.parameters.verdict = "FAIL";
+    expect(() => validateContract("ExecutionActionProposal", extraKey)).toThrow(/verdict/);
+
+    const oversizedReason = reportBlockedProposal();
+    oversizedReason.parameters.reason = "x".repeat(4_097);
+    expect(() => validateContract("ExecutionActionProposal", oversizedReason)).toThrow(/reason/);
+  });
+
   it("validates bounded exact input, proposal, result, and non-verdict outcome shapes", () => {
     const input = executionAgentInput();
     const proposal = clickProposal();

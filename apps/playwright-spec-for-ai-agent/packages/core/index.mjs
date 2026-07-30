@@ -119,9 +119,10 @@ export function createAdaptiveActionAuthorizer({ input, now = Date.now } = {}) {
     if (proposalSnapshot.milestoneId !== inputSnapshot.currentMilestoneId) throw contractError("execute", "action proposal does not target the current milestone");
     if (proposalSnapshot.leaseId !== inputSnapshot.capabilityLease.leaseId || !inputSnapshot.capabilityLease.actions.includes(proposalSnapshot.action)) throw contractError("execute", "action is outside the capability lease");
     if (proposalSnapshot.action === "wait_for_element_state" && proposalSnapshot.parameters.timeoutMs > remainingBudget().timeMs) throw contractError("execute", "wait exceeds the remaining time budget");
+    if (proposalSnapshot.action === "report_blocked" && proposalSnapshot.parameters.milestoneId !== inputSnapshot.currentMilestoneId) throw contractError("execute", "report_blocked must target the current milestone");
 
     const milestone = inputSnapshot.milestones.find((item) => item.id === inputSnapshot.currentMilestoneId);
-    const safeRecoveryActions = ["observe_dom", "observe_aria", "get_current_url", "click_observed_element", "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state"];
+    const safeRecoveryActions = ["observe_dom", "observe_aria", "get_current_url", "click_observed_element", "press_key", "hover_observed_element", "scroll_view", "wait_for_element_state", "report_blocked"];
     if (milestone.class === "REQUIRED_EXACT_ACTION" && proposalSnapshot.action !== milestone.requiredAction && !safeRecoveryActions.includes(proposalSnapshot.action)) throw contractError("execute", "action does not match the required exact action");
     if (["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposalSnapshot.action)) {
       const observation = inputSnapshot.recentObservations.find((item) => item.observationId === proposalSnapshot.parameters.observationId);
@@ -187,7 +188,7 @@ export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId,
         })),
       ];
   if (milestones.length === 0) throw contractError("execute", "scenario has no adaptive milestones");
-  const actions = ["observe_dom", "observe_aria", "get_current_url", "scroll_view", "wait_for_element_state"];
+  const actions = ["observe_dom", "observe_aria", "get_current_url", "scroll_view", "wait_for_element_state", "report_blocked"];
   if (scenario.policy.navigation === "ALLOWED") actions.push("navigate", "go_back", "reload_page");
   if (["SAFE_ONLY", "ALL"].includes(scenario.policy.click)) actions.push("click_observed_element", "press_key", "hover_observed_element");
   return snapshotContract("ExecutionAgentInput", {
@@ -248,6 +249,21 @@ export function advanceAdaptiveMilestone({ input, proposal, result, observation 
     recentObservations: [observation],
   }).recentObservations[0];
   const milestone = inputSnapshot.milestones.find((item) => item.id === inputSnapshot.currentMilestoneId);
+  if (proposalSnapshot.action === "report_blocked" && resultSnapshot.accepted) {
+    const milestones = inputSnapshot.milestones.map((item) => item.id === milestone.id ? { ...item, status: "BLOCKED" } : item);
+    const next = milestones.find((item) => item.status === "PENDING" && item.class !== "OPTIONAL_HINT");
+    if (next === undefined) return Object.freeze({ outcome: adaptiveTerminalOutcome(inputSnapshot, milestones, proposalSnapshot.parameters.reason) });
+    return Object.freeze({
+      input: snapshotContract("ExecutionAgentInput", {
+        ...inputSnapshot,
+        milestones,
+        currentMilestoneId: next.id,
+        currentPage: resultSnapshot.page,
+        recentObservations: [],
+        remainingBudget: resultSnapshot.remainingBudget,
+      }),
+    });
+  }
   const boundElement = referencedMilestoneElement(inputSnapshot, proposalSnapshot, milestone.id);
   const observeOnly = milestone.target === undefined && milestone.expectation === undefined;
   const matchedObservation = ["observe_dom", "observe_aria"].includes(proposalSnapshot.action)
@@ -272,17 +288,7 @@ export function advanceAdaptiveMilestone({ input, proposal, result, observation 
     return item;
   });
   const next = milestones.find((item) => item.status === "PENDING" && item.class !== "OPTIONAL_HINT");
-  if (next === undefined) {
-    return Object.freeze({
-      outcome: snapshotContract("ExecutionAgentOutcome", {
-        schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION,
-        runId: inputSnapshot.runId,
-        scenarioId: inputSnapshot.scenarioId,
-        type: "COMPLETED",
-        completedMilestoneIds: milestones.filter((item) => item.status === "COMPLETED").map((item) => item.id),
-      }, { input: inputSnapshot }),
-    });
-  }
+  if (next === undefined) return Object.freeze({ outcome: adaptiveTerminalOutcome(inputSnapshot, milestones) });
   return Object.freeze({
     input: snapshotContract("ExecutionAgentInput", {
       ...inputSnapshot,
@@ -293,6 +299,21 @@ export function advanceAdaptiveMilestone({ input, proposal, result, observation 
       remainingBudget: resultSnapshot.remainingBudget,
     }),
   });
+}
+
+// The reason is the agent's claim, never a verdict — the judge rules on the sealed evidence.
+function adaptiveTerminalOutcome(input, milestones, reportedReason) {
+  const blockedIds = milestones.filter((item) => item.status === "BLOCKED").map((item) => item.id);
+  return snapshotContract("ExecutionAgentOutcome", {
+    schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION,
+    runId: input.runId,
+    scenarioId: input.scenarioId,
+    ...(blockedIds.length === 0 ? { type: "COMPLETED" } : {
+      type: "BLOCKED",
+      reason: `Milestone(s) ${blockedIds.join(", ")} reported blocked by the execution agent${reportedReason === undefined ? "" : `; unverified claim: ${reportedReason}`}`.slice(0, 4_096),
+    }),
+    completedMilestoneIds: milestones.filter((item) => item.status === "COMPLETED").map((item) => item.id),
+  }, { input });
 }
 
 function referencedMilestoneElement(input, proposal, milestoneId) {

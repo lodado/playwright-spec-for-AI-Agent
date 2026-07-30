@@ -46,6 +46,19 @@ function acceptedResult(input, proposal) {
   };
 }
 
+function reportBlockedProposal(input, reason = "Settings entry never renders after repeated observation.") {
+  return {
+    schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION,
+    proposalId: "proposal-report-blocked",
+    runId: input.runId,
+    scenarioId: input.scenarioId,
+    milestoneId: input.currentMilestoneId,
+    leaseId: input.capabilityLease.leaseId,
+    action: "report_blocked",
+    parameters: { milestoneId: input.currentMilestoneId, reason },
+  };
+}
+
 describe("adaptive execution authorization", () => {
   it("compiles deterministic adaptive milestones and leases from QA IR", () => {
     const qaIr = adaptiveQaIr();
@@ -243,6 +256,57 @@ describe("adaptive execution authorization", () => {
       scenarioId: input.scenarioId,
       type: "COMPLETED",
       completedMilestoneIds: ["open-settings", "dialog-visible"],
+    });
+    expect(transition.outcome).not.toHaveProperty("verdict");
+  });
+
+  it("always leases report_blocked so the agent can surrender with sealed evidence", () => {
+    const input = createAdaptiveExecutionInput({ qaIr: adaptiveQaIr(), scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-blocked-lease" });
+    expect(input.capabilityLease.actions).toContain("report_blocked");
+  });
+
+  it("authorizes report_blocked for the current milestone even under a required exact action", () => {
+    const input = executionAgentInput();
+    input.capabilityLease.actions.push("report_blocked");
+    const proposal = reportBlockedProposal(input);
+    expect(createAdaptiveActionAuthorizer({ input }).authorize({ proposal }).proposal).toEqual(proposal);
+
+    const mismatched = reportBlockedProposal(input);
+    mismatched.parameters.milestoneId = "dialog-visible";
+    expect(() => createAdaptiveActionAuthorizer({ input }).authorize({ proposal: mismatched })).toThrow(/current milestone/);
+  });
+
+  it("marks the milestone BLOCKED on report_blocked and advances to the next required milestone", () => {
+    const input = executionAgentInput();
+    input.capabilityLease.actions.push("report_blocked");
+    const proposal = reportBlockedProposal(input);
+
+    const transition = advanceAdaptiveMilestone({ input, proposal, result: acceptedResult(input, proposal) });
+
+    expect(transition.input).toMatchObject({
+      currentMilestoneId: "dialog-visible",
+      milestones: [
+        { id: "open-settings", status: "BLOCKED" },
+        { id: "dialog-visible", status: "PENDING" },
+      ],
+      recentObservations: [],
+    });
+  });
+
+  it("returns a BLOCKED outcome carrying the claim when the last milestone is reported blocked", () => {
+    const input = executionAgentInput();
+    input.milestones[0].status = "COMPLETED";
+    input.currentMilestoneId = "dialog-visible";
+    input.recentObservations = [];
+    input.capabilityLease.actions.push("report_blocked");
+    const proposal = reportBlockedProposal(input, "The dialog cannot be reached.");
+
+    const transition = advanceAdaptiveMilestone({ input, proposal, result: acceptedResult(input, proposal) });
+
+    expect(transition.outcome).toMatchObject({
+      type: "BLOCKED",
+      completedMilestoneIds: ["open-settings"],
+      reason: expect.stringContaining("The dialog cannot be reached."),
     });
     expect(transition.outcome).not.toHaveProperty("verdict");
   });

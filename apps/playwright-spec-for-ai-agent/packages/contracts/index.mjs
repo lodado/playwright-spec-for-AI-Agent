@@ -7,8 +7,8 @@ export const COMPILE_RESULT_VERSION = "compile-result/0.1";
 export const DIAGNOSTIC_VERSION = "diagnostic/0.1";
 export const PROVIDER_CAPABILITIES_VERSION = "provider-capabilities/0.1";
 export const EXECUTION_PLAN_VERSION = "execution-plan/0.2";
-export const EXECUTION_AGENT_INPUT_VERSION = "execution-agent-input/0.2";
-export const EXECUTION_ACTION_PROPOSAL_VERSION = "execution-action-proposal/0.1";
+export const EXECUTION_AGENT_INPUT_VERSION = "execution-agent-input/0.3";
+export const EXECUTION_ACTION_PROPOSAL_VERSION = "execution-action-proposal/0.2";
 export const EXECUTION_ACTION_RESULT_VERSION = "execution-action-result/0.1";
 export const EXECUTION_AGENT_OUTCOME_VERSION = "execution-agent-outcome/0.1";
 export const RUNTIME_OUTCOME_VERSION = "runtime-outcome/0.1";
@@ -46,6 +46,7 @@ export const ADAPTIVE_ACTIONS = Object.freeze([
   "wait_for_element_state",
   "go_back",
   "reload_page",
+  "report_blocked",
 ]);
 export const RUNTIME_ERROR_CODES = Object.freeze([
   "BROWSER_START_FAILED",
@@ -1607,6 +1608,12 @@ function validateAdaptiveActionParameters(action, value, path, contract) {
     boundedString(value.elementId, 256, `${path}.elementId`, contract);
     oneOf(value.state, ["present", "absent", "visible", "hidden"], `${path}.state`, contract);
     boundedInteger(value.timeoutMs, 1, 10_000, `${path}.timeoutMs`, contract);
+    return;
+  }
+  if (action === "report_blocked") {
+    allowedKeys(value, ["milestoneId", "reason"], path, contract);
+    boundedString(value.milestoneId, 256, `${path}.milestoneId`, contract);
+    boundedString(value.reason, 4_096, `${path}.reason`, contract);
   }
 }
 
