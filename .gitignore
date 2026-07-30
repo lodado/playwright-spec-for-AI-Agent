@@ -8,3 +8,5 @@ dist/
 .private/
 **/__QA__/
 .serena/
+.next/
+next-env.d.ts

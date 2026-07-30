@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "bindings": [
+    {
+      "id": "pricing-card-root",
+      "caseIds": ["pricing-desktop"],
+      "figma": { "fileKey": "k", "nodeId": "1:2" },
+      "target": {
+        "kind": "intrinsic-jsx-element",
+        "filePath": "components/PricingCard.tsx",
+        "elementName": "section",
+        "occurrence": 0,
+        "sourceRange": {
+          "startLine": 10,
+          "startColumn": 4,
+          "endLine": 13,
+          "endColumn": 5
+        },
+        "sourceHash": "sha256:a4a0955bad03b9f2b8e4aacbb342c0842ca8510845443647b33cde96d54d2b19"
+      },
+      "runtime": { "attributeName": "data-design-node", "attributeValue": "1:2" },
+      "status": "proposed",
+      "absorbedNodeIds": [],
+      "evidence": {}
+    }
+  ]
+}

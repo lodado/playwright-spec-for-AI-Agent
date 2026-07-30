@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * ponytail: system font stack, not a committed @font-face woff2. Phase 4's
+ * document.fonts.check determinism gate wants a locally committed font file;
+ * add it (and a matching @font-face) when Phase 4 lands. next/font is forbidden
+ * here because babel.config.cjs disables SWC.
+ */
+:root {
+  --font-sans: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+body {
+  font-family: var(--font-sans);
+}

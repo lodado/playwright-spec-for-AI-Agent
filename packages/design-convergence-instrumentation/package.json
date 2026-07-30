@@ -1,11 +1,10 @@
 {
-  "name": "design-convergence",
+  "name": "@design-convergence/instrumentation",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "design-convergence": "./dist/cli.js" },
-  "exports": "./dist/main.js",
-  "types": "./dist/main.d.ts",
+  "exports": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "files": ["dist"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -13,9 +12,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@design-convergence/config": "workspace:*",
-    "@design-convergence/instrumentation": "workspace:*",
-    "@design-convergence/shared": "workspace:*"
+    "@babel/parser": "^7.24.0",
+    "@babel/types": "^7.24.0",
+    "@design-convergence/shared": "workspace:*",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

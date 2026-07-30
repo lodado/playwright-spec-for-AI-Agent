@@ -1,6 +1,7 @@
 packages:
   - "apps/*"
   - "packages/*"
+  - "examples/*"
 
 minimumReleaseAge: 10080
 blockExoticSubdeps: true
