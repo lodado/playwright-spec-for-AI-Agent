@@ -733,10 +733,23 @@ export async function executeWithPlaywright({
     return executionResult(runtimeError("CONTRACT_VIOLATION", "Execution provider input is invalid"));
   }
 
+  // QA_NATIVE_TRACE_TIMING=1 prints one start/done line per node to stderr. This exists to locate
+  // hangs (the start line without a done line names the stuck node); heavyweight logging like
+  // DEBUG=pw:api changes scheduling enough to mask races, so keep this the only sanctioned probe.
+  const traceTiming = process.env.QA_NATIVE_TRACE_TIMING === "1";
+  const executeNode = !traceTiming ? runtime.executeNode : async (node) => {
+    const startedAt = performance.now();
+    process.stderr.write(`qa-native timing: ${node.nodeId} ${node.kind} start\n`);
+    try {
+      return await runtime.executeNode(node);
+    } finally {
+      process.stderr.write(`qa-native timing: ${node.nodeId} ${node.kind} ${Math.round(performance.now() - startedAt)}ms\n`);
+    }
+  };
   let outcome = await executePlan({
     plan,
     providerCapabilities: runtime.capabilities,
-    executeNode: runtime.executeNode,
+    executeNode,
   });
   if (outcome.type === "COMPLETED" && !runtime.hasCompleteEvidence()) {
     outcome = runtimeError("EVIDENCE_STORAGE_FAILED", "Execution completed without complete sealed evidence");
@@ -1013,6 +1026,15 @@ function semanticLocator(page, target, { requireAccessibleName = false, allowUns
 
 async function observeExpectations(page, expectations, nodeId, timeout) {
   const facts = [];
+  // Entry-animation waits (VISIBLE/CONTAINS_TEXT targets that mount hidden) share one budget with
+  // headroom under the node timeout: a still-hidden element must end as an observed visible:false
+  // fact, never as a node timeout that kills the whole run. NOT_VISIBLE/PRESENT expectations take
+  // an instant snapshot — waiting for a deliberately hidden element to become visible was the
+  // strict one-shot race (element in DOM but hidden → full-timeout wait → run death).
+  // 0.8 × 30s = 24s covers the 20s assertion timeouts consumer specs declare while leaving
+  // headroom under the node timeout; an element still hidden past the spec's own wait would fail
+  // the real Playwright test too, so recording visible:false there is spec-faithful.
+  const visibilityDeadline = Date.now() + Math.max(1, Math.floor(timeout * 0.8));
   for (const expectation of expectations) {
     if (!["CONTAINS_TEXT", "VISIBLE", "NOT_VISIBLE", "PRESENT"].includes(expectation.kind)) continue;
     const locator = semanticLocator(page, expectation.target, { allowUnsupported: true });
@@ -1027,9 +1049,19 @@ async function observeExpectations(page, expectations, nodeId, timeout) {
       facts.push({ id, kind: "ELEMENT_OBSERVATION", value: { expectationId: expectation.id, resolution: "AMBIGUOUS", count } });
       continue;
     }
-    const captured = await locator.evaluate((element, maxChars) => (element.textContent ?? "").slice(0, maxChars + 1), ELEMENT_TEXT_LIMIT, { timeout });
+    let captured;
+    try {
+      // Hydration re-renders can detach the element between count() and evaluate(); a bounded
+      // re-attach wait that ends as a MISSING fact keeps the run alive.
+      captured = await locator.evaluate((element, maxChars) => (element.textContent ?? "").slice(0, maxChars + 1), ELEMENT_TEXT_LIMIT, { timeout: Math.max(1, visibilityDeadline - Date.now()) });
+    } catch {
+      facts.push({ id, kind: "ELEMENT_OBSERVATION", value: { expectationId: expectation.id, resolution: "MISSING" } });
+      continue;
+    }
     if (typeof captured !== "string") throw providerError("EVIDENCE_STORAGE_FAILED");
-    const visible = await locator.waitFor({ state: "visible", timeout }).then(() => true, () => false);
+    const visible = ["CONTAINS_TEXT", "VISIBLE"].includes(expectation.kind)
+      ? await locator.waitFor({ state: "visible", timeout: Math.max(1, visibilityDeadline - Date.now()) }).then(() => true, () => locator.isVisible().then((state) => state === true, () => false))
+      : await locator.isVisible().then((state) => state === true, () => false);
     const value = { expectationId: expectation.id, resolution: "FOUND", visible };
     if (captured.length <= ELEMENT_TEXT_LIMIT) Object.assign(value, { text: captured, textTruncated: false });
     facts.push({ id, kind: "ELEMENT_OBSERVATION", value });
