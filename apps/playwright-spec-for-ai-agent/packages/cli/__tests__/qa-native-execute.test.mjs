@@ -260,7 +260,39 @@ describe("qa-native execute persistence", () => {
     expect(reportScenario).toHaveBeenCalledWith(expect.objectContaining({ type: "ERROR", reason: expect.stringMatching(/^BUDGET_EXHAUSTED/) }));
   }, 30_000);
 
-  it("removes the run directory when a later adaptive scenario fails", async () => {
+  it("preserves sealed evidence as <run-dir>.invalid when adaptive evidence validation rejects the run", async () => {
+    const cwd = project(multiSource);
+    const server = createServer((_request, response) => response.end("<!doctype html><button>Dashboard</button>"));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    let proposalId = 0;
+    const createProposer = vi.fn(() => async (input) => ({ tokensUsed: 0, proposal: { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: `p-${++proposalId}`, runId: input.runId, scenarioId: input.scenarioId, milestoneId: input.currentMilestoneId, leaseId: input.capabilityLease.leaseId, action: "observe_dom", parameters: {} } }));
+    const reportInvalidRun = vi.fn();
+    let status;
+    try {
+      status = await runQaNative(["execute", "--spec=dashboard.spec.ts", `--base-url=http://127.0.0.1:${address.port}`, "--run-dir=.qa/runs/rejected", "--provider=hermes", "--mode=adaptive"], {
+        cwd,
+        env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+        handlers: { execute: (args) => executeQaNative(args, { createProposer, executeAdaptive: (options) => runAdaptiveSuiteWithPlaywright({ ...options, browserType: chromium }), validateEvidence: () => { throw new Error("forced invalid evidence"); }, reportInvalidRun }) },
+        stdout: vi.fn(),
+        stderr: vi.fn(),
+      });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+
+    expect(status).toBe(1);
+    const runDirectory = join(cwd, ".qa", "runs", "rejected");
+    expect(existsSync(runDirectory)).toBe(false);
+    const quarantined = `${runDirectory}.invalid`;
+    const inputs = JSON.parse(readFileSync(join(quarantined, "execution-agent-inputs.json"), "utf8"));
+    expect(inputs).toHaveLength(3);
+    const replay = readEvidenceArchive({ directory: join(quarantined, "evidence"), integrityKey });
+    expect(replay.bundles.length).toBeGreaterThan(0);
+    expect(reportInvalidRun).toHaveBeenCalledWith({ preservedAt: join(".qa", "runs", "rejected.invalid") });
+  });
+
+  it("quarantines the run directory when a later adaptive scenario fails without evidence", async () => {
     const cwd = project(multiSource);
     const server = createServer((_request, response) => response.end("<!doctype html><button>Dashboard</button>"));
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -285,6 +317,7 @@ describe("qa-native execute persistence", () => {
 
     expect(status).toBe(1);
     expect(existsSync(join(cwd, ".qa", "runs", "partial"))).toBe(false);
+    expect(existsSync(join(cwd, ".qa", "runs", "partial.invalid", "evidence"))).toBe(true);
   });
 
   it("rejects adaptive completion output that did not originate from the Playwright gateway", async () => {
