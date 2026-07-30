@@ -30,6 +30,54 @@ npx qa-native judge --run-dir=.qa/runs/dashboard-1
 
 `execute` writes an authenticated evidence archive. `judge` runs deterministic checks first and sends only unresolved semantic expectations to Hermes in text-only mode. Hermes adaptive runs allow every page-initiated API request and WebSocket connection. Direct browser navigation remains limited to the configured target origin.
 
+## Adaptive execution
+
+```bash
+npx qa-native execute \
+  --spec=tests/e2e/dashboard.spec.ts \
+  --base-url=https://staging.example.com \
+  --run-dir=.qa/runs/dashboard-1 \
+  --provider=hermes --mode=adaptive
+```
+
+### `@qa-live-policy` values
+
+The spec annotation is the only source of policy truth. Each test carries its own value:
+
+| Annotation                                   | Compiled policy                   | Adaptive meaning                                                                                      |
+| -------------------------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `readonly`                                   | `executable-readonly`             | DOM-only observation; no clicks or typing.                                                            |
+| `safe-interaction`                           | `executable-interaction`          | Safe clicks and non-secret typing allowed.                                                            |
+| `safe-interaction-no-confirm`                | `judgment-interaction-no-confirm` | Interaction allowed, but verdicts come from semantic judgment (verifying on live would be dangerous). |
+| `mock-judgment`                              | `judgment-mock-api`               | Playwright mocks are skipped; the judge rules on live-DOM evidence semantically.                      |
+| `subscription-mutation`, `auth-mock`, `skip` | `blocked-*`                       | Statically blocked; skipped under `--allow-partial`, otherwise the file fails closed.                 |
+
+Scenarios whose policy starts with `judgment-` are recorded in
+`extensions.semanticJudgmentScenarioIds` and complete through an observe-only evidence milestone
+instead of per-expectation checks.
+
+### Budgets
+
+Each scenario gets an independent budget. Defaults: 32 actions, 32 turns, 300000 ms, 100000
+tokens. Override per run with `--budget-actions`, `--budget-turns`, `--budget-time-ms`,
+`--budget-tokens` (positive integers). A scenario that exhausts its budget seals the evidence it
+gathered and ends as `ERROR` with a `BUDGET_EXHAUSTED: …` reason; the run itself still exits 0 and
+reports the scenario on stderr.
+
+### `report_blocked` is a claim, not a verdict
+
+The execution agent may end a milestone with `report_blocked` plus a reason. That reason is only
+the agent's claim: the gateway seals the full visible page alongside it, and the judge rules on
+that sealed evidence later. Nothing the agent writes can become a verdict directly.
+
+### Quarantined runs (`<run-dir>.invalid`)
+
+If the sealed evidence fails integrity validation after an adaptive run, the run directory is not
+deleted — it is renamed to `<run-dir>.invalid` with the evidence archive inside, and
+`qa-native: invalid adaptive evidence preserved at …` is printed to stderr. Every qa-native
+command refuses to read `.invalid` paths, so a rejected run can never become a verdict or a
+report. Inspect it manually, then delete it when you are done debugging.
+
 ## Authenticated pages
 
 Prefer a Playwright `storageState` file created outside QA Native. It is passed only to the browser context and is never copied into the run directory, evidence archive, or run envelope.
@@ -50,7 +98,11 @@ For an automatic SSO or session-refresh page, add an opt-in bootstrap file inste
   "url": "https://staging.example.com/login",
   "allowedOrigins": ["https://login.example-idp.com"],
   "allowedEndpoints": [
-    { "origin": "https://staging.example.com", "path": "/api/auth/session", "methods": ["POST"] }
+    {
+      "origin": "https://staging.example.com",
+      "path": "/api/auth/session",
+      "methods": ["POST"]
+    }
   ]
 }
 ```
