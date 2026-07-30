@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_ACTION_RESULT_VERSION, EXECUTION_AGENT_INPUT_VERSION, EXECUTION_AGENT_OUTCOME_VERSION } from "../../contracts/index.mjs";
-import { advanceAdaptiveMilestone, createAdaptiveActionAuthorizer, createAdaptiveExecutionInput } from "../index.mjs";
+import { advanceAdaptiveMilestone, createAdaptiveActionAuthorizer, createAdaptiveExecutionInput, milestoneCompletionRule } from "../index.mjs";
 
 function executionAgentInput() {
   return {
@@ -365,6 +365,45 @@ describe("adaptive execution authorization", () => {
       type: "COMPLETED",
       completedMilestoneIds: [evidence.id],
     });
+  });
+});
+
+describe("milestone completion rule", () => {
+  const semanticObserveOnly = { id: "m-ev", class: "REQUIRED_SEMANTIC_MILESTONE", status: "PENDING", description: "Observe the page for semantic judgment." };
+  const semanticExpectation = { id: "m-exp", class: "REQUIRED_SEMANTIC_MILESTONE", status: "PENDING", description: "Observe the dialog.", target: { role: "dialog" }, expectation: { kind: "VISIBLE" } };
+  const exactClick = { id: "m-click", class: "REQUIRED_EXACT_ACTION", status: "PENDING", description: "Click settings.", requiredAction: "click_observed_element" };
+
+  it("lets observe actions prove an observe-only semantic milestone even when the sealed satisfiedMilestoneIds is empty", () => {
+    expect(milestoneCompletionRule({ action: "observe_dom", parameters: {}, satisfiedMilestoneIds: [] }, semanticObserveOnly)).toBe(true);
+    expect(milestoneCompletionRule({ action: "observe_aria", parameters: {}, satisfiedMilestoneIds: [] }, semanticObserveOnly)).toBe(true);
+  });
+
+  it("requires satisfiedMilestoneIds membership for an expectation milestone proven by observation", () => {
+    expect(milestoneCompletionRule({ action: "observe_dom", parameters: {}, satisfiedMilestoneIds: [] }, semanticExpectation)).toBe(false);
+    expect(milestoneCompletionRule({ action: "observe_dom", parameters: {}, satisfiedMilestoneIds: ["m-exp"] }, semanticExpectation)).toBe(true);
+  });
+
+  it("lets wait_for_element_state prove a semantic milestone only for present or visible states", () => {
+    expect(milestoneCompletionRule({ action: "wait_for_element_state", parameters: { state: "visible" }, satisfiedMilestoneIds: [] }, semanticExpectation)).toBe(true);
+    expect(milestoneCompletionRule({ action: "wait_for_element_state", parameters: { state: "present" }, satisfiedMilestoneIds: [] }, semanticObserveOnly)).toBe(true);
+    expect(milestoneCompletionRule({ action: "wait_for_element_state", parameters: { state: "hidden" }, satisfiedMilestoneIds: [] }, semanticExpectation)).toBe(false);
+  });
+
+  it("never lets get_current_url or report_blocked prove any milestone", () => {
+    for (const action of ["get_current_url", "report_blocked"]) {
+      expect(milestoneCompletionRule({ action, parameters: {}, satisfiedMilestoneIds: [] }, semanticObserveOnly)).toBe(false);
+      expect(milestoneCompletionRule({ action, parameters: {}, satisfiedMilestoneIds: [] }, exactClick)).toBe(false);
+    }
+  });
+
+  it("requires exactly the required action for an exact-action milestone", () => {
+    expect(milestoneCompletionRule({ action: "click_observed_element", parameters: {} }, exactClick)).toBe(true);
+    expect(milestoneCompletionRule({ action: "hover_observed_element", parameters: {} }, exactClick)).toBe(false);
+  });
+
+  it("never completes an optional hint through the rule", () => {
+    const optional = { id: "m-opt", class: "OPTIONAL_HINT", status: "PENDING", description: "Optional recovery." };
+    expect(milestoneCompletionRule({ action: "click_observed_element", parameters: {} }, optional)).toBe(false);
   });
 });
 

@@ -115,10 +115,16 @@ shared `describe`.
 
 Supported live policies:
 
-| Policy             | Meaning                                                                                              |
-| ------------------ | ---------------------------------------------------------------------------------------------------- |
-| `readonly`         | Inspect without interaction.                                                                         |
-| `safe-interaction` | Allow bounded, non-destructive interaction (same-origin reads after a click are allowed and logged). |
+| Policy                                       | Meaning                                                                                                           |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `readonly`                                   | Inspect without interaction.                                                                                      |
+| `safe-interaction`                           | Allow bounded, non-destructive interaction (same-origin reads after a click are allowed and logged).              |
+| `safe-interaction-no-confirm`                | Interaction allowed, but verifying the outcome on live would be dangerous — verdicts come from semantic judgment. |
+| `mock-judgment`                              | The spec relies on Playwright mocks; the judge rules on live-DOM evidence semantically instead.                   |
+| `subscription-mutation`, `auth-mock`, `skip` | Statically blocked on live; skipped under `--allow-partial`, otherwise the file fails closed.                     |
+
+See the [policy table](docs/qa-native.md#qa-live-policy-values) for how each value
+compiles and behaves under adaptive execution.
 
 For exact parser support and unsupported syntax, see the
 [Playwright syntax reference](https://github.com/lodado/playwright-spec-for-AI-Agent/blob/main/apps/playwright-spec-for-ai-agent/PLAYWRIGHT_SYNTAX_SUPPORT.md).

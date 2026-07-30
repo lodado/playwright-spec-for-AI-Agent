@@ -9,6 +9,12 @@ that code cannot do for you (credentials, keys, external CLI compatibility).
 Never place secrets, cookies, tokens, or query strings in source, argv, QA
 artifacts, or reports. Every check below emits no secrets.
 
+**Release gate:** one manual pass of this runbook — both tracks of §5 — is
+required before every `minor` or larger release of `playwright-spec-for-ai-agent`
+(see AGENTS.md §4). The vitest suite covers the protocol against fixtures; this
+runbook is the only check against a real staging environment, real Hermes CLI,
+and real credentials.
+
 ## 1. Hermes Agent CLI compatibility
 
 QA Native calls Hermes through the legacy `--query`/`--max_turns` contract. Install
@@ -75,6 +81,24 @@ To refresh the login, overwrite `.private/storage-state.json` (keep it `600`).
 
 ## 5. One-shot sequence
 
+Run both tracks. The strict track exercises compilation, planning, and the
+deterministic executor without a model; the adaptive track exercises the Hermes
+proposer, the browser-tool gateway, and the evidence validator.
+
+**Strict track** (no Hermes required):
+
+```bash
+pnpm exec qa-native execute \
+  --spec=src/page/dashboard/__tests__/dashboard.qa-native.ts \
+  --base-url="$STAGING_QA_BASE_URL" \
+  --run-dir=".qa/runs/one-shot-strict-$(date +%Y%m%d-%H%M%S)"
+```
+
+Expect the `qa-native: playwright/strict executed N scenario(s)` summary and a
+sealed run directory.
+
+**Adaptive track** (steps 1–4 required) — the sequence below.
+
 The base URL must include the locale segment. `@qa-page: dashboard` resolves
 relative to the base URL, so `https://agent-dev.koreadeep.com/ko/` yields
 `/ko/dashboard`; a host root would wrongly yield `/dashboard`.
@@ -100,7 +124,10 @@ pnpm exec qa-native report \
 `execute` now runs every declared scenario of the spec sequentially into one
 sealed manifest (`execution-agent-inputs.json` / `execution-agent-outcomes.json`
 are JSON arrays; the run envelope is `run-envelope/0.2`). An incomplete run is
-deleted rather than kept as success evidence.
+never kept as success evidence: setup failures delete the directory, while an
+adaptive run whose sealed evidence fails validation is preserved as
+`<run-dir>.invalid` for debugging — every command refuses to read it, and
+`qa-native: invalid adaptive evidence preserved at …` appears on stderr.
 
 The strict and adaptive browser policy allows same-origin `GET`/`HEAD` after a
 safe interaction (for example a subscription-history dialog that fetches on

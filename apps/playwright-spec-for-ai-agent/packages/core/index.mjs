@@ -240,6 +240,23 @@ function adaptiveSemanticExpectation(expectation) {
   return [expectation.target.accessibleName, expectation.target.text].every((match) => match === undefined || match.kind === "literal");
 }
 
+// Single source of truth for "can this accepted action prove this milestone complete".
+// The runtime (advanceAdaptiveMilestone) applies this rule PLUS live-only bindings (element
+// handles, observation page match); the evidence validator (cli/qa-native-adaptive-evidence)
+// applies exactly this rule — so validator acceptance stays a necessary condition of runtime
+// acceptance and the two can never drift apart again.
+export function milestoneCompletionRule({ action, parameters, satisfiedMilestoneIds } = {}, milestone) {
+  if (milestone.class === "REQUIRED_EXACT_ACTION") return action === milestone.requiredAction;
+  if (milestone.class !== "REQUIRED_SEMANTIC_MILESTONE") return false;
+  const observeAction = ["observe_dom", "observe_aria"].includes(action);
+  const waitAction = action === "wait_for_element_state" && ["present", "visible"].includes(parameters?.state);
+  if (!observeAction && !waitAction) return false;
+  // Milestones without an expectation (observe-only evidence milestones, bare targets) are proven
+  // by the observation itself; the gateway seals satisfiedMilestoneIds only for expectation checks.
+  if (milestone.expectation === undefined) return true;
+  return waitAction || satisfiedMilestoneIds?.includes(milestone.id) === true;
+}
+
 export function advanceAdaptiveMilestone({ input, proposal, result, observation } = {}) {
   const inputSnapshot = snapshotContract("ExecutionAgentInput", input);
   const proposalSnapshot = snapshotContract("ExecutionActionProposal", proposal);
@@ -265,17 +282,24 @@ export function advanceAdaptiveMilestone({ input, proposal, result, observation 
     });
   }
   const boundElement = referencedMilestoneElement(inputSnapshot, proposalSnapshot, milestone.id);
-  const observeOnly = milestone.target === undefined && milestone.expectation === undefined;
+  const boundAction = ["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposalSnapshot.action);
+  // Live-only bindings on top of milestoneCompletionRule: an observation must describe the page
+  // the action ran on (and name the milestone's element when the milestone has a bare target),
+  // and element-bound actions must reference an element observed for this milestone.
   const matchedObservation = ["observe_dom", "observe_aria"].includes(proposalSnapshot.action)
     && observationSnapshot?.pageId === inputSnapshot.currentPage.pageId
     && observationSnapshot.domGeneration === inputSnapshot.currentPage.domGeneration
-    && (observeOnly ? true : (milestone.expectation === undefined
+    && (milestone.expectation === undefined && milestone.target !== undefined
       ? observationSnapshot.elements.some((element) => element.milestoneIds.includes(milestone.id))
-      : observationSnapshot.satisfiedMilestoneIds?.includes(milestone.id) === true));
-  const acceptedBoundAction = ["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposalSnapshot.action) && boundElement !== undefined;
+      : true);
+  const acceptedBoundAction = boundAction && boundElement !== undefined;
+  const ruleProof = milestoneCompletionRule({
+    action: proposalSnapshot.action,
+    parameters: proposalSnapshot.parameters,
+    satisfiedMilestoneIds: observationSnapshot?.satisfiedMilestoneIds,
+  }, milestone);
   const satisfied = resultSnapshot.accepted && (
-    (milestone.class === "REQUIRED_EXACT_ACTION" && proposalSnapshot.action === milestone.requiredAction && (!["click_observed_element", "hover_observed_element", "wait_for_element_state"].includes(proposalSnapshot.action) || boundElement !== undefined))
-    || (milestone.class === "REQUIRED_SEMANTIC_MILESTONE" && (matchedObservation || (proposalSnapshot.action === "wait_for_element_state" && ["present", "visible"].includes(proposalSnapshot.parameters.state) && boundElement !== undefined)))
+    (ruleProof && (["observe_dom", "observe_aria"].includes(proposalSnapshot.action) ? matchedObservation : !boundAction || boundElement !== undefined))
     || (milestone.class === "OPTIONAL_HINT" && acceptedBoundAction)
   );
   if (!satisfied) return undefined;

@@ -1,5 +1,6 @@
 import { TextDecoder } from "node:util";
 import { validateContract } from "../contracts/index.mjs";
+import { milestoneCompletionRule } from "../core/index.mjs";
 import { verifyStoredEvidence } from "../evidence/index.mjs";
 
 export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, manifest, readBlob }) {
@@ -18,7 +19,10 @@ export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, man
     const domArtifacts = verified.bundle.artifacts.filter((artifact) => artifact.type === "DOM_SNAPSHOT");
     const ariaArtifacts = verified.bundle.artifacts.filter((artifact) => artifact.type === "ARIA_SNAPSHOT");
     const actionArtifacts = verified.bundle.artifacts.filter((artifact) => artifact.type === "ACTION_LOG");
-    if (verified.bundle.artifacts.length !== 5 || domArtifacts.length !== 2 || ariaArtifacts.length !== 2 || actionArtifacts.length !== 1) throw new Error("adaptive checkpoint evidence is incomplete");
+    // report_blocked audits seal one extra VISIBLE_TEXT artifact (the page the agent claims is
+    // blocked); every other action seals exactly the five pre/post snapshots plus the action log.
+    const visibleTextArtifacts = verified.bundle.artifacts.filter((artifact) => artifact.type === "VISIBLE_TEXT");
+    if (verified.bundle.artifacts.length !== 5 + visibleTextArtifacts.length || visibleTextArtifacts.length > 1 || domArtifacts.length !== 2 || ariaArtifacts.length !== 2 || actionArtifacts.length !== 1) throw new Error("adaptive checkpoint evidence is incomplete");
     let audit;
     try {
       audit = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(verified.readBlob(actionArtifacts[0].storageRef)));
@@ -29,6 +33,7 @@ export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, man
     const invalidSatisfiedMilestones = audit.satisfiedMilestoneIds !== undefined && (!Array.isArray(audit.satisfiedMilestoneIds) || audit.satisfiedMilestoneIds.some((id) => !input.milestones.some((milestone) => milestone.id === id)));
     if (audit.status !== "ACCEPTED" || invalidSatisfiedMilestones) throw new Error("adaptive action evidence is invalid");
     const proposal = validateContract("ExecutionActionProposal", audit.proposal);
+    if (visibleTextArtifacts.length === 1 && proposal.action !== "report_blocked") throw new Error("adaptive checkpoint evidence is incomplete");
     if (proposal.runId !== input.runId || proposal.scenarioId !== input.scenarioId || proposal.leaseId !== input.capabilityLease.leaseId || !input.capabilityLease.actions.includes(proposal.action)) throw new Error("adaptive action evidence is bound to a different execution");
     if (!input.milestones.some((milestone) => milestone.id === proposal.milestoneId) || verified.bundle.checkpointId !== proposal.proposalId) throw new Error("adaptive action evidence is bound to an unknown milestone");
     validateAuditPage(audit.before, input.capabilityLease.allowedOrigins);
@@ -40,15 +45,25 @@ export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, man
   const requiredMilestones = input.milestones.filter((milestone) => milestone.class !== "OPTIONAL_HINT");
   let milestoneIndex = 0;
   let expectedPage = input.currentPage;
-  for (const audit of audits) {
+  audits.forEach((audit, index) => {
     const milestone = requiredMilestones[milestoneIndex];
-    if (milestone === undefined || audit.proposal.milestoneId !== milestone.id || !sameAuditPage(audit.before, expectedPage)) throw new Error("adaptive action evidence is out of sequence");
+    // The runtime performs the startup navigation itself, so the first audit's `before` may carry
+    // a redirected/normalized URL. pageId and domGeneration must still match the issued input, and
+    // validateAuditPage has already pinned every audit URL inside the capability lease origins.
+    const samePage = index === 0
+      ? audit.before.pageId === expectedPage.pageId && audit.before.domGeneration === expectedPage.domGeneration
+      : sameAuditPage(audit.before, expectedPage);
+    if (milestone === undefined || audit.proposal.milestoneId !== milestone.id || !samePage) throw new Error("adaptive action evidence is out of sequence");
     expectedPage = audit.after;
-    if (provesMilestone(audit, milestone)) {
+    // Legacy audits (the 4-key form, sealed before the gateway evaluated semantic milestones) carry
+    // no satisfiedMilestoneIds; synthesize membership so pre-2.3 runs stay judgeable. Current
+    // gateways always seal the field, so new evidence is held to the strict rule.
+    const satisfiedMilestoneIds = audit.satisfiedMilestoneIds ?? [milestone.id];
+    if (milestoneCompletionRule({ action: audit.proposal.action, parameters: audit.proposal.parameters, satisfiedMilestoneIds }, milestone)) {
       milestoneIndex += 1;
       while (milestone.class === "REQUIRED_SEMANTIC_MILESTONE" && requiredMilestones[milestoneIndex]?.class === "REQUIRED_SEMANTIC_MILESTONE" && audit.satisfiedMilestoneIds?.includes(requiredMilestones[milestoneIndex].id)) milestoneIndex += 1;
     }
-  }
+  });
   // Non-COMPLETED outcomes (ERROR/BLOCKED) seal only partial evidence: their bundle integrity and
   // sequencing above are still verified, but they need not cover every required milestone.
   if (outcome.type === "COMPLETED" && (milestoneIndex !== requiredMilestones.length || requiredMilestones.some((milestone) => !outcome.completedMilestoneIds.includes(milestone.id)))) throw new Error("adaptive milestone completion lacks accepted evidence");
@@ -71,9 +86,4 @@ function validateAuditPage(value, allowedOrigins) {
 
 function sameAuditPage(left, right) {
   return left.pageId === right.pageId && left.domGeneration === right.domGeneration && left.url === right.url;
-}
-
-function provesMilestone(audit, milestone) {
-  if (milestone.class === "REQUIRED_EXACT_ACTION") return audit.proposal.action === milestone.requiredAction;
-  return (audit.satisfiedMilestoneIds === undefined || audit.satisfiedMilestoneIds.includes(milestone.id)) && (["observe_dom", "observe_aria"].includes(audit.proposal.action) || (audit.proposal.action === "wait_for_element_state" && ["present", "visible"].includes(audit.proposal.parameters.state)));
 }

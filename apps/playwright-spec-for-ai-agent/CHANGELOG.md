@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.4.0
+
+### Minor Changes
+
+- Sync the adaptive evidence validator with the runtime and preserve rejected evidence.
+
+  - Fix three validator/runtime divergences that made adaptive runs reject their own output: the startup-navigation URL rewrite vs the first-audit page equality check, sealed empty `satisfiedMilestoneIds` vs observe-only milestone completion, and `report_blocked`'s sixth VISIBLE_TEXT artifact vs the exact-five artifact count. Completion semantics now live in a single exported `milestoneCompletionRule` shared by the runtime and the validator.
+  - A run whose sealed adaptive evidence fails validation is no longer deleted: it is quarantined as `<run-dir>.invalid` with the evidence archive inside, and every qa-native command refuses to read `.invalid` paths.
+  - New adaptive policy-matrix fixture suite (semantic / readonly / safe-interaction / report_blocked / budget-exhausted) guards the protocol in CI without a model or network.
+
 ## 2.3.0
 
 ### Minor Changes

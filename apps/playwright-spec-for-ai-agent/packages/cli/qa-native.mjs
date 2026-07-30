@@ -62,6 +62,9 @@ export function resolvePrivateQaPath(value, { cwd = process.cwd() } = {}) {
   if (typeof value !== "string" || value.length === 0 || value.includes("\0") || isAbsolute(value)) throw new CliError("run directory must be a private .qa path");
   const parts = value.split(/[\\/]+/);
   if (parts.length < 2 || parts[0] !== ".qa" || parts.some((part) => part === "" || part === "." || part === "..")) throw new CliError("run directory must be a private .qa path");
+  // <run-dir>.invalid holds evidence that failed validation (see qa-native-execute preserveInvalidRun);
+  // no command may read it back, so a rejected run can never become a verdict or a report.
+  if (parts.some((part) => part.endsWith(".invalid"))) throw new CliError("run directory is quarantined invalid evidence");
   const root = resolve(cwd, ".qa");
   const target = resolve(cwd, ...parts);
   const fromRoot = relative(root, target);

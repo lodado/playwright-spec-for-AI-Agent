@@ -1,4 +1,4 @@
-import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, rmSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { compilePlaywrightSpec } from "../adapter-playwright/index.mjs";
 import { RUNTIME_OUTCOME_VERSION, validateContract } from "../contracts/index.mjs";
@@ -23,6 +23,8 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
   const createAdaptiveInput = overrides.createAdaptiveInput ?? createAdaptiveExecutionInput;
   const createProposer = overrides.createProposer ?? createHermesExecutionProposer;
   const executeAdaptive = overrides.executeAdaptive ?? runAdaptiveSuiteWithPlaywright;
+  const validateEvidence = overrides.validateEvidence ?? validateAdaptiveExecutionEvidence;
+  const reportInvalidRun = overrides.reportInvalidRun ?? defaultReportInvalidRun;
   const writeArchive = overrides.writeArchive ?? writeEvidenceArchive;
   const projectRoot = realpathSync(cwd);
   let created = false;
@@ -49,14 +51,20 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
       agentInputs = scenarios.map((scenario) => createAdaptiveInput({ qaIr, scenarioId: scenario.id, baseUrl, runId, budget, ...(allowedOrigins === undefined ? {} : { allowedOrigins }), ...(allowExternalRead === true ? { allowExternalRead: true } : {}) }));
       execution = await executeAdaptive({ inputs: agentInputs, proposeAction: createProposer(), storageStatePath, authBootstrap });
       assertPlaywrightAdaptiveExecution(execution);
-      agentOutcomes = execution.executions.map((entry, index) => validateContract("ExecutionAgentOutcome", entry.outcome, { input: agentInputs[index] }));
-      execution.executions.forEach((entry, index) => validateAdaptiveExecutionEvidence({
-        input: agentInputs[index],
-        outcome: agentOutcomes[index],
-        bundles: execution.bundles.filter((bundle) => entry.bundleIds.includes(bundle.bundleId)),
-        manifest: execution.manifest,
-        readBlob: execution.readBlob,
-      }));
+      try {
+        agentOutcomes = execution.executions.map((entry, index) => validateContract("ExecutionAgentOutcome", entry.outcome, { input: agentInputs[index] }));
+        execution.executions.forEach((entry, index) => validateEvidence({
+          input: agentInputs[index],
+          outcome: agentOutcomes[index],
+          bundles: execution.bundles.filter((bundle) => entry.bundleIds.includes(bundle.bundleId)),
+          manifest: execution.manifest,
+          readBlob: execution.readBlob,
+        }));
+      } catch (error) {
+        preserveInvalidRun({ runDirectory, cwd, execution, agentInputs, writeArchive, integrityKey, reportInvalidRun });
+        created = false;
+        throw error;
+      }
       runtimeOutcome = validateContract("RuntimeOutcome", { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "execute", type: "COMPLETED" });
     } else if (provider === "playwright" && mode === "strict") {
       executionPlan = plan({ qaIr, providerCapabilities: playwrightExecutionCapabilities() });
@@ -101,6 +109,38 @@ export async function executeQaNative({ specPath, baseUrl, runDirectory, integri
     if (created) rmSync(runDirectory, { recursive: true, force: true });
     throw error;
   }
+}
+
+// A run that fails adaptive validation is itself the debugging record of the failure: seal whatever
+// evidence the gateway produced, then quarantine the directory as <run-dir>.invalid instead of
+// deleting it. Nothing in this path may delete evidence; errors here only degrade to stderr notes
+// (fixed strings — never error details, which stay behind QA_NATIVE_DEBUG).
+function preserveInvalidRun({ runDirectory, cwd, execution, agentInputs, writeArchive, integrityKey, reportInvalidRun }) {
+  try {
+    writeArchive({
+      directory: join(runDirectory, "evidence"),
+      bundles: execution.bundles,
+      manifest: execution.manifest,
+      readBlob: execution.readBlob,
+      integrityKey,
+    });
+    writePrivateJsonExclusive(relative(cwd, join(runDirectory, "execution-agent-inputs.json")), agentInputs, { cwd });
+  } catch {
+    process.stderr.write("qa-native: failed to seal invalid adaptive evidence\n");
+  }
+  let preservedAt = runDirectory;
+  try {
+    renameSync(runDirectory, `${runDirectory}.invalid`);
+    preservedAt = `${runDirectory}.invalid`;
+  } catch {
+    process.stderr.write("qa-native: failed to quarantine invalid run directory\n");
+  }
+  reportInvalidRun({ preservedAt: relative(cwd, preservedAt) });
+}
+
+// The quarantined path is the operator's entry point for debugging a rejected run.
+function defaultReportInvalidRun({ preservedAt }) {
+  process.stderr.write(`qa-native: invalid adaptive evidence preserved at ${preservedAt}\n`);
 }
 
 function defaultReportDiagnostics(diagnostics) {

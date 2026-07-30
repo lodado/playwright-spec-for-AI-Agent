@@ -51,6 +51,14 @@ describe("qa-native CLI security foundation", () => {
     expect(() => resolvePrivateQaPath(".qa/dangling/run-1", { cwd })).toThrow(/symbolic link/);
   });
 
+  it("rejects quarantined .invalid paths for every command", () => {
+    const cwd = temporaryRoot();
+    for (const quarantined of [".qa/runs/run-1.invalid", ".qa/runs/run-1.invalid/run.json", ".qa/runs/run-1.invalid/evidence/manifest.json"]) {
+      expect(() => resolvePrivateQaPath(quarantined, { cwd })).toThrow(/quarantined invalid evidence/);
+    }
+    expect(resolvePrivateQaPath(".qa/runs/run-1", { cwd })).toBe(join(cwd, ".qa", "runs", "run-1"));
+  });
+
   it("creates private outputs exclusively and refuses overwrite", () => {
     const cwd = temporaryRoot();
     const runDirectory = createExclusiveQaDirectory(".qa/runs/run-1", { cwd });

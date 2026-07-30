@@ -6,6 +6,7 @@ export default defineConfig({
       ...configDefaults.exclude,
       ".omx/**",
       "scripts/**/fixtures/**",
+      "packages/**/fixtures/**",
     ],
   },
 });
