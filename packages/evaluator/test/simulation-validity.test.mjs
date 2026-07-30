@@ -25,9 +25,9 @@ test("creates behavioral fingerprints from session events", () => {
 test("validity defaults to uncalibrated and warns on homogeneous hyperactive samples", () => {
   const sessions = ["s1", "s2", "s3"].map((id, index) => ({
     session: { sessionId: id, personaId: `p${index}`, status: "success" },
-    events: Array.from({ length: 5 }, (_, actionIndex) => event(id, actionIndex, "click", "/start", "/done", { progressChanged: true })),
+    events: Array.from({ length: 8 }, (_, actionIndex) => event(id, actionIndex, "click", "/start", "/done", { progressChanged: true })),
   }));
-  const report = evaluateSimulationValidity({ sessions, taskMaxActions: 5 });
+  const report = evaluateSimulationValidity({ sessions, taskMaxActions: 10 });
 
   assert.equal(report.schemaVersion, "simulation-validity/0.1");
   assert.equal(report.calibration.level, "uncalibrated");

@@ -27,6 +27,11 @@ export const EVALUATOR_ERROR_CODES = Object.freeze({
 
 const MAX_REGEX_PATTERN_LENGTH = 256;
 const MAX_REGEX_INPUT_LENGTH = 10_000;
+// Below this many comparable pairs per arm, a single flipped session swamps the fixed delta
+// thresholds, so no winner is declared — the comparison reports insufficient_evidence instead.
+const MIN_COMPARABLE_PAIRS = 5;
+// A small action budget makes the ">=80% of budget" hyperactivity ratio tautological.
+const MIN_HYPERACTIVE_BUDGET = 8;
 
 export class EvaluatorError extends Error {
   constructor(code, message) {
@@ -539,7 +544,10 @@ function seedSensitivity(fingerprints, sessions) {
 }
 
 function isHyperactive(fingerprints, taskMaxActions) {
-  if (!taskMaxActions || fingerprints.length === 0) return false;
+  // Only judge hyperactivity when the budget is large enough for ">=80%" to be meaningful; a 3-action
+  // task ending at 3 is not hyperactivity. Budget-terminated sessions are already excluded because they
+  // now terminate as ABANDONED, so !abandonmentOccurred filters them out.
+  if (!taskMaxActions || taskMaxActions < MIN_HYPERACTIVE_BUDGET || fingerprints.length === 0) return false;
   return fingerprints.every((item) => item.actionCount >= taskMaxActions * 0.8 && !item.abandonmentOccurred && item.noActionRate === 0);
 }
 
@@ -782,7 +790,11 @@ export function compareVariants({ baselineSessions = [], candidateSessions = [],
     : Number(new Set(orderResults.map((item) => item.status ?? item)).size === 1);
   const confidence = comparisonConfidence({ baselineRecords, candidateRecords, orderConsistency, infrastructureExclusions: eligibility.excluded });
   let status = comparisonStatus({ baseline, candidate, orderConsistency });
-  if (baselineRecords.length === 0 || candidateRecords.length === 0) status = "insufficient_evidence";
+  // An order disagreement (unstable) is a stronger signal than sample size, so it wins; otherwise too
+  // few comparable pairs cannot support a winner.
+  if (status !== "unstable" && Math.min(baselineRecords.length, candidateRecords.length) < MIN_COMPARABLE_PAIRS) {
+    status = "insufficient_evidence";
+  }
   const variantFindings = [...baselineFindings, ...candidateFindings];
   const variantFindingFingerprints = new Set(variantFindings.map((finding) => finding.fingerprint).filter(Boolean));
   const findingIds = canonicalFindings === undefined
