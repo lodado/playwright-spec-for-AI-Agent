@@ -1,9 +1,26 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { QA_IR_VERSION } from "../../contracts/index.mjs";
+import { compilePlaywrightSpec } from "../../adapter-playwright/index.mjs";
 import { createExecutionPlan } from "../../core/index.mjs";
 import { verifyStoredEvidence } from "../../evidence/index.mjs";
 import { evaluateDeterministically } from "../../judge/index.mjs";
 import { executeWithPlaywright, normalizeAuthBootstrap, playwrightExecutionCapabilities } from "../index.mjs";
+
+const uploadTempRoots = [];
+afterEach(() => { for (const dir of uploadTempRoots.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+
+const uploadSpec = `// @qa-scenario: UPLOAD\n// @qa-page: /upload\n// @qa-live-policy: safe-interaction\n// @qa-fixture: doc=fixtures/sample.pdf\ntest("uploads a document", async ({ page }) => {\n  await page.getByTestId("file-input").setInputFiles("doc");\n  await expect(page.getByTestId("heading")).toContainText("Uploaded");\n});\n`;
+
+function uploadProject(fixtureRelPath = "fixtures/sample.pdf") {
+  const root = mkdtempSync(join(tmpdir(), "qa-upload-"));
+  uploadTempRoots.push(root);
+  mkdirSync(join(root, "fixtures"), { recursive: true });
+  writeFileSync(join(root, "fixtures", "sample.pdf"), "%PDF-1.4 fixture bytes");
+  return root;
+}
 
 const policy = {
   navigation: "ALLOWED",
@@ -113,6 +130,9 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
           if (clickError) throw clickError;
           await onClick?.({ routeHandler, webSocketHandler });
         },
+        async setInputFiles(files) {
+          calls.push(["setInputFiles:testId", value, files]);
+        },
       };
     },
     getByText(value) {
@@ -145,6 +165,41 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
     get webSocketHandler() { return webSocketHandler; },
   };
 }
+
+describe("strict file upload execution", () => {
+  const compileUpload = (spec = uploadSpec) => {
+    const result = compilePlaywrightSpec({ source: spec, sourcePath: "upload.spec.ts" });
+    return { qaIr: result.qaIr, plan: createExecutionPlan({ qaIr: result.qaIr, providerCapabilities: playwrightExecutionCapabilities() }) };
+  };
+
+  it("replays a declared @qa-fixture into the target file input via setInputFiles", async () => {
+    const projectRoot = uploadProject();
+    const { qaIr, plan } = compileUpload();
+    const fixture = fakeBrowser({ text: "Uploaded" });
+    const result = await executeWithPlaywright({ qaIr, plan, baseUrl: "https://example.test", runId: "run-upload", browserType: fixture.browserType, projectRoot });
+
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    const uploadCall = fixture.calls.find(([name]) => name === "setInputFiles:testId");
+    expect(uploadCall).toBeDefined();
+    expect(uploadCall[2]).toMatch(/fixtures\/sample\.pdf$/); // resolved to the real fixture file
+    const actionLog = result.bundles.flatMap((bundle) => bundle.artifacts).find((artifact) => artifact.type === "ACTION_LOG");
+    expect(actionLog).toBeDefined();
+  });
+
+  it("refuses a fixture path that escapes the project root", async () => {
+    const projectRoot = uploadProject();
+    // The config declares a fixture outside the project; resolveFixtureFile must reject it.
+    const escaping = uploadSpec.replace("doc=fixtures/sample.pdf", "doc=../outside.pdf");
+    writeFileSync(join(projectRoot, "..", "outside.pdf"), "escape");
+    const { qaIr, plan } = compileUpload(escaping);
+    const fixture = fakeBrowser({ text: "Uploaded" });
+    const result = await executeWithPlaywright({ qaIr, plan, baseUrl: "https://example.test", runId: "run-escape", browserType: fixture.browserType, projectRoot });
+
+    expect(result.outcome.type).not.toBe("COMPLETED");
+    expect(fixture.calls.some(([name]) => name === "setInputFiles:testId")).toBe(false);
+    rmSync(join(projectRoot, "..", "outside.pdf"), { force: true });
+  });
+});
 
 describe("readonly Playwright execution provider", () => {
   it("uses session state and confines bootstrap mutations to declared endpoints", async () => {

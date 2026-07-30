@@ -269,9 +269,18 @@ function validateQaSuite(value, path) {
 
 function validateQaScenario(value, path) {
   object(value, path, "QaIrDocument");
-  allowedKeys(value, ["id", "title", "preconditions", "steps", "expectations", "policy", "provenance"], path, "QaIrDocument");
+  allowedKeys(value, ["id", "title", "preconditions", "steps", "expectations", "policy", "provenance", "fixtures"], path, "QaIrDocument");
   string(value.id, `${path}.id`, "QaIrDocument");
   string(value.title, `${path}.title`, "QaIrDocument");
+  // Optional additive field (no schemaVersion bump): `@qa-fixture` name→repo-relative path map for
+  // file-upload replay. Old IRs without it stay valid.
+  if (value.fixtures !== undefined) {
+    object(value.fixtures, `${path}.fixtures`, "QaIrDocument");
+    for (const [name, fixturePath] of Object.entries(value.fixtures)) {
+      boundedString(name, 128, `${path}.fixtures.${name}`, "QaIrDocument");
+      boundedString(fixturePath, 1_024, `${path}.fixtures.${name}`, "QaIrDocument");
+    }
+  }
   recordArray(value.preconditions, `${path}.preconditions`, "QaIrDocument");
   array(value.steps, `${path}.steps`, "QaIrDocument");
   value.steps.forEach((step, index) => validateQaStep(step, `${path}.steps[${index}]`));
@@ -412,7 +421,8 @@ function validateExecutionPlan(value, path) {
   value.nodes.forEach((node, index) => {
     const nodePath = `${path}.nodes[${index}]`;
     object(node, nodePath, "ExecutionPlan");
-    allowedKeys(node, ["nodeId", "suiteId", "scenarioId", "stepId", "kind", "milestoneClass", "action", "evidence", "policy"], nodePath, "ExecutionPlan");
+    allowedKeys(node, ["nodeId", "suiteId", "scenarioId", "stepId", "kind", "milestoneClass", "action", "value", "evidence", "policy"], nodePath, "ExecutionPlan");
+    if (node.value !== undefined) boundedString(node.value, 1_024, `${nodePath}.value`, "ExecutionPlan");
     string(node.nodeId, `${nodePath}.nodeId`, "ExecutionPlan");
     string(node.suiteId, `${nodePath}.suiteId`, "ExecutionPlan");
     string(node.scenarioId, `${nodePath}.scenarioId`, "ExecutionPlan");

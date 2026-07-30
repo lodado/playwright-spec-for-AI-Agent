@@ -10,6 +10,27 @@ test("loads dashboard", async ({ page }) => {
 });
 `;
 
+describe("compilePlaywrightSpec @qa-fixture uploads", () => {
+  it("carries the fixture map and an UPLOAD step naming its fixture", () => {
+    const spec = `// @qa-scenario: UPLOAD\n// @qa-live-policy: safe-interaction\n// @qa-fixture: doc=fixtures/sample.pdf\ntest("uploads a document", async ({ page }) => {\n  await page.getByTestId("file-input").setInputFiles("doc");\n  await expect(page.getByText("Uploaded")).toBeVisible();\n});\n`;
+    const result = compilePlaywrightSpec({ source: spec, sourcePath: "upload.spec.ts" });
+    validateContract("CompileResult", result);
+    const scenario = result.qaIr.suites[0].scenarios[0];
+    expect(scenario.fixtures).toEqual({ doc: "fixtures/sample.pdf" });
+    const upload = scenario.steps.find((step) => step.kind === "INTERACT");
+    expect(upload).toMatchObject({ action: "UPLOAD", value: "doc" });
+    expect(result.qaIr.extensions.blockedScenarioIds ?? []).not.toContain(scenario.id);
+  });
+
+  it("blocks an upload whose fixture name is not declared with @qa-fixture", () => {
+    const spec = `// @qa-scenario: UPLOAD_MISS\n// @qa-live-policy: safe-interaction\ntest("uploads without fixture", async ({ page }) => {\n  await page.getByTestId("file-input").setInputFiles("nope");\n});\n`;
+    const result = compilePlaywrightSpec({ source: spec, sourcePath: "miss.spec.ts" });
+    const scenario = result.qaIr.suites[0].scenarios[0];
+    expect(result.qaIr.extensions.blockedScenarioIds).toContain(scenario.id);
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain("UPLOAD_FIXTURE_UNRESOLVED");
+  });
+});
+
 describe("compilePlaywrightSpec", () => {
   it("emits valid deterministic QA IR without timestamps", () => {
     const first = compilePlaywrightSpec({ source, sourcePath: "dashboard.spec.ts", revision: "abc123" });

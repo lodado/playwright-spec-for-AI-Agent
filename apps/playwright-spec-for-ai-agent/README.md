@@ -132,11 +132,34 @@ secret-handling constraints.
 File annotations belong before imports; live policy belongs above each test or a
 shared `describe`.
 
-| Annotation        | Required | Purpose                                                     |
-| ----------------- | -------- | ----------------------------------------------------------- |
-| `@qa-page`        | No       | Page id; the target path resolves relative to `--base-url`. |
-| `@qa-scenario`    | Yes      | Name the scenario or account state.                         |
-| `@qa-live-policy` | Yes      | Declare what live interaction is safe.                      |
+| Annotation        | Required | Purpose                                                                           |
+| ----------------- | -------- | --------------------------------------------------------------------------------- |
+| `@qa-page`        | No       | Page id; the target path resolves relative to `--base-url`.                       |
+| `@qa-scenario`    | Yes      | Name the scenario or account state.                                               |
+| `@qa-live-policy` | Yes      | Declare what live interaction is safe.                                            |
+| `@qa-fixture`     | No       | `name=repo-relative/path` file for an `setInputFiles("name")` upload (see below). |
+
+### File uploads (`@qa-fixture`)
+
+File upload is the one interaction that replays a real file, so it is an
+exception path handled only in **strict** mode (`--provider=playwright
+--mode=strict`) — the adaptive/AI provider never uploads. Declare the file and
+name it in the `setInputFiles` call:
+
+```ts
+// @qa-scenario: UPLOAD
+// @qa-live-policy: safe-interaction
+// @qa-fixture: doc=src/page/deep-parser/__QA__/fixtures/sample.pdf
+test("uploads a document", async ({ page }) => {
+  await page.getByTestId("file-input").setInputFiles("doc"); // "doc" names the @qa-fixture
+  await expect(page.getByText("업로드 완료")).toBeVisible();
+});
+```
+
+The fixture path is repo-relative and resolved strictly inside the project root
+(no symlink escape, 32 MB cap) before Playwright touches it. An upload whose
+`setInputFiles` argument does not name a declared `@qa-fixture` is blocked (a
+`UPLOAD_FIXTURE_UNRESOLVED` diagnostic), so it is skipped rather than run blind.
 
 Supported live policies:
 

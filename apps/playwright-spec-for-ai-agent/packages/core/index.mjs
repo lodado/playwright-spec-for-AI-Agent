@@ -381,6 +381,7 @@ function nodesForScenario(suite, scenario) {
     kind: step.kind,
     ...((step.kind === "NAVIGATE" || step.kind === "INTERACT") ? { milestoneClass: step.milestoneClass } : {}),
     action: step.kind === "INTERACT" ? step.action : REQUIRED_ACTIONS[step.kind],
+    ...(step.kind === "INTERACT" && step.value !== undefined ? { value: step.value } : {}),
     evidence: evidenceRequests(step),
     policy: { ...scenario.policy },
   }));
@@ -496,14 +497,16 @@ function validateCanonicalNode(node, stage) {
 }
 
 function validateInteractionPolicy(node, stage) {
-  if (node.action !== "CLICK") throw policyError(stage, `${node.action} is not supported for execution`);
+  // CLICK and UPLOAD are the executable strict interactions; both stay inside the same safe envelope
+  // (no form submit, no destructive mutation) and require a click-enabled policy.
+  if (node.action !== "CLICK" && node.action !== "UPLOAD") throw policyError(stage, `${node.action} is not supported for execution`);
   if (node.policy?.click !== "SAFE_ONLY" && node.policy?.click !== "ALL") throw policyError(stage, `${node.nodeId} click is blocked by policy`);
   if (node.policy?.submit !== false || node.policy?.destructiveMutation !== false) throw policyError(stage, `${node.nodeId} click exceeds safe interaction policy`);
   if (node.evidence?.length !== 1 || node.evidence[0] !== "ACTION_LOG") throw policyError(stage, `${node.nodeId} click requires ACTION_LOG evidence`);
 }
 
 function evidenceRequests(step) {
-  if (step.kind === "INTERACT" && step.action === "CLICK") return ["ACTION_LOG"];
+  if (step.kind === "INTERACT" && (step.action === "CLICK" || step.action === "UPLOAD")) return ["ACTION_LOG"];
   if (step.kind !== "OBSERVE") return [];
   return (step.requests ?? []).map((request) => request.type).filter(Boolean).sort();
 }

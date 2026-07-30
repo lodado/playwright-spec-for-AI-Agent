@@ -69,7 +69,7 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
       runtimeOutcome = validateContract("RuntimeOutcome", { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "execute", type: "COMPLETED" });
     } else if (provider === "playwright" && mode === "strict") {
       executionPlan = plan({ qaIr, providerCapabilities: playwrightExecutionCapabilities() });
-      execution = await execute({ qaIr, plan: executionPlan, baseUrl, runId: basename(runDirectory), storageStatePath, authBootstrap });
+      execution = await execute({ qaIr, plan: executionPlan, baseUrl, runId: basename(runDirectory), storageStatePath, authBootstrap, projectRoot });
       runtimeOutcome = validateContract("RuntimeOutcome", execution.outcome);
     } else {
       throw new Error("execution provider and mode combination is unsupported");

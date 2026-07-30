@@ -16,6 +16,8 @@ import {
   providerCapabilities,
   validateExecutionPlanBinding,
 } from "../core/index.mjs";
+import { closeSync, constants as fsConstants, fstatSync, openSync, realpathSync } from "node:fs";
+import { resolve as resolvePath, sep as pathSep } from "node:path";
 import { createInMemoryEvidenceStore, redactSensitiveText } from "../evidence/index.mjs";
 
 const PROVIDER_ID = "playwright-readonly";
@@ -23,6 +25,7 @@ const PROVIDER_VERSION = "0.1.0";
 const TEXT_LIMIT = 1024 * 1024;
 const DOM_LIMIT = 4 * 1024 * 1024;
 const ACTION_LOG_LIMIT = 16 * 1024;
+const MAX_FIXTURE_BYTES = 32 * 1024 * 1024;
 const ELEMENT_TEXT_LIMIT = 4 * 1024;
 const MAX_ELEMENT_OBSERVATIONS = 128;
 const MAX_POST_INTERACTION_REQUESTS = 100;
@@ -94,7 +97,7 @@ function normalizeBootstrapEndpoint(value, allowedOrigins) {
 export function playwrightExecutionCapabilities() {
   return providerCapabilities({
     providerId: PROVIDER_ID,
-    actions: ["NAVIGATE", "CLICK", "OBSERVE", "CHECKPOINT"],
+    actions: ["NAVIGATE", "CLICK", "UPLOAD", "OBSERVE", "CHECKPOINT"],
     evidence: ["VISIBLE_TEXT", "DOM_SNAPSHOT", "ACTION_LOG", "ELEMENT_OBSERVATION"],
   });
 }
@@ -768,6 +771,7 @@ export async function executeWithPlaywright({
   secrets = [],
   storageStatePath,
   authBootstrap,
+  projectRoot,
   now = () => new Date().toISOString(),
 } = {}) {
   let runtime;
@@ -780,7 +784,7 @@ export async function executeWithPlaywright({
     validateExecutionPlanBinding({ qaIr, plan, providerCapabilities: capabilities });
     if (plan.nodes.length > MAX_PLAN_NODES || plan.retryPolicy.maxAttempts !== 1) throw new Error("execution plan exceeds readonly provider limits");
     if (plan.timeoutPolicy.perNodeMs > MAX_NODE_TIMEOUT_MS || plan.timeoutPolicy.runMs > MAX_RUN_TIMEOUT_MS) throw new Error("execution timeout exceeds readonly provider limits");
-    runtime = createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, storageStatePath, authBootstrap, now, capabilities, nodeTimeoutMs: plan.timeoutPolicy.perNodeMs });
+    runtime = createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, storageStatePath, authBootstrap, projectRoot, now, capabilities, nodeTimeoutMs: plan.timeoutPolicy.perNodeMs });
   } catch {
     return executionResult(runtimeError("CONTRACT_VIOLATION", "Execution provider input is invalid"));
   }
@@ -817,7 +821,7 @@ export async function executeWithPlaywright({
   return executionResult(outcome, runtime);
 }
 
-function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, storageStatePath, authBootstrap, now, capabilities, nodeTimeoutMs }) {
+function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, storageStatePath, authBootstrap, projectRoot, now, capabilities, nodeTimeoutMs }) {
   const base = runtimeUrl(baseUrl);
   const bootstrap = normalizeAuthBootstrap(authBootstrap, base.href);
   if (typeof runId !== "string" || runId.length === 0) throw new Error("runId must be a non-empty string");
@@ -979,9 +983,27 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       return;
     }
     if (node.kind === "INTERACT") {
-      if (node.action !== "CLICK" || node.evidence.length !== 1 || node.evidence[0] !== "ACTION_LOG") throw providerError("POLICY_VIOLATION");
+      if ((node.action !== "CLICK" && node.action !== "UPLOAD") || node.evidence.length !== 1 || node.evidence[0] !== "ACTION_LOG") throw providerError("POLICY_VIOLATION");
       const page = await openPage();
       const beforeUrl = evidenceUrl(page, base);
+      if (node.action === "UPLOAD") {
+        // File upload is the exception interaction: replay the test's declared `@qa-fixture` file
+        // into the target file input. The fixture file is resolved strictly inside the project root
+        // (no symlink escape, bounded size) before Playwright ever touches it.
+        const fixturePath = entry.scenario.fixtures?.[node.value ?? ""];
+        if (typeof fixturePath !== "string") throw providerError("POLICY_VIOLATION");
+        const file = resolveFixtureFile(projectRoot, fixturePath);
+        const locator = semanticLocator(page, step.target, { allowUnsupported: true });
+        if (!locator) throw providerError("CONTRACT_VIOLATION");
+        interactionStarted = true;
+        await locator.setInputFiles(file, { timeout: nodeTimeoutMs });
+        if (interactionPolicyViolation) throw providerError("POLICY_VIOLATION");
+        const afterUrl = evidenceUrl(page, base);
+        const content = boundedText(JSON.stringify({ action: "UPLOAD", target: actionLogTarget(step.target), fixture: node.value, beforeUrl, afterUrl, status: "SUCCEEDED", allowedRequests: postInteractionRequests }), ACTION_LOG_LIMIT, "ACTION_LOG");
+        postInteractionRequests = [];
+        observationState(observations, node.scenarioId).artifacts.push(captureArtifact(`${node.nodeId}:action_log`, "ACTION_LOG", "application/json", content));
+        return;
+      }
       const locator = semanticLocator(page, step.target, { requireAccessibleName: true });
       if (!locator) throw providerError("CONTRACT_VIOLATION");
       await assertSafeClickTarget(locator, nodeTimeoutMs);
@@ -1064,6 +1086,28 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       activeBrowser = undefined;
     },
   };
+}
+
+// Resolve a repo-relative `@qa-fixture` path to a real file strictly inside the project root, with
+// no symlink escape and a bounded size, before it is handed to Playwright's setInputFiles.
+function resolveFixtureFile(projectRoot, repoRelativePath) {
+  if (typeof projectRoot !== "string" || projectRoot.length === 0) throw providerError("POLICY_VIOLATION");
+  const root = realpathSync(projectRoot);
+  let real;
+  try {
+    real = realpathSync(resolvePath(root, repoRelativePath));
+  } catch {
+    throw providerError("EVIDENCE_STORAGE_FAILED");
+  }
+  if (real !== root && !real.startsWith(root + pathSep)) throw providerError("POLICY_VIOLATION");
+  const fd = openSync(real, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_FIXTURE_BYTES) throw providerError("POLICY_VIOLATION");
+  } finally {
+    closeSync(fd);
+  }
+  return real;
 }
 
 async function assertSafeClickTarget(locator, timeout) {
