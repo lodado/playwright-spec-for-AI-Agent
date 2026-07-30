@@ -1,0 +1,92 @@
+{
+  "name": "Design Convergence Fixture",
+  "nodes": {
+    "1:2": {
+      "document": {
+        "id": "1:2",
+        "name": "Pricing Card / Pro",
+        "type": "FRAME",
+        "visible": true,
+        "opacity": 1,
+        "absoluteBoundingBox": { "x": 100, "y": 200, "width": 360, "height": 480 },
+        "layoutMode": "VERTICAL",
+        "itemSpacing": 16,
+        "paddingTop": 24,
+        "paddingRight": 24,
+        "paddingBottom": 24,
+        "paddingLeft": 24,
+        "cornerRadius": 12,
+        "clipsContent": true,
+        "fills": [{ "type": "SOLID", "visible": true, "opacity": 1, "color": { "r": 1, "g": 1, "b": 1, "a": 1 } }],
+        "strokes": [{ "type": "SOLID", "visible": true, "color": { "r": 0.9, "g": 0.9, "b": 0.9, "a": 1 } }],
+        "strokeWeight": 1,
+        "strokeAlign": "INSIDE",
+        "effects": [
+          { "type": "DROP_SHADOW", "visible": true, "offset": { "x": 0, "y": 4 }, "radius": 12, "spread": 0, "color": { "r": 0, "g": 0, "b": 0, "a": 0.1 } }
+        ],
+        "children": [
+          {
+            "id": "1:3",
+            "name": "Plan Name",
+            "type": "TEXT",
+            "characters": "Pro",
+            "absoluteBoundingBox": { "x": 124, "y": 224, "width": 120, "height": 32 },
+            "fills": [{ "type": "SOLID", "color": { "r": 0.06, "g": 0.06, "b": 0.06, "a": 1 } }],
+            "style": {
+              "fontFamily": "Inter",
+              "fontPostScriptName": "Inter-SemiBold",
+              "fontWeight": 600,
+              "fontSize": 24,
+              "lineHeightPx": 32,
+              "letterSpacing": 0,
+              "textAlignHorizontal": "LEFT"
+            }
+          },
+          {
+            "id": "1:4",
+            "name": "Price",
+            "type": "TEXT",
+            "characters": "$29",
+            "absoluteBoundingBox": { "x": 124, "y": 272, "width": 120, "height": 56 },
+            "fills": [{ "type": "SOLID", "color": { "r": 0.06, "g": 0.06, "b": 0.06, "a": 1 } }],
+            "style": {
+              "fontFamily": "Inter",
+              "fontPostScriptName": "Inter-Bold",
+              "fontWeight": 700,
+              "fontSize": 48,
+              "lineHeightPx": 56,
+              "letterSpacing": -0.5,
+              "textAlignHorizontal": "LEFT"
+            }
+          },
+          {
+            "id": "1:5",
+            "name": "CTA",
+            "type": "INSTANCE",
+            "absoluteBoundingBox": { "x": 124, "y": 632, "width": 312, "height": 48 },
+            "cornerRadius": 8,
+            "fills": [{ "type": "SOLID", "color": { "r": 0.15, "g": 0.39, "b": 0.92, "a": 1 } }],
+            "children": [
+              {
+                "id": "1:6",
+                "name": "Label",
+                "type": "TEXT",
+                "characters": "Start Free",
+                "absoluteBoundingBox": { "x": 124, "y": 646, "width": 312, "height": 20 },
+                "fills": [{ "type": "SOLID", "color": { "r": 1, "g": 1, "b": 1, "a": 1 } }],
+                "style": {
+                  "fontFamily": "Inter",
+                  "fontWeight": 600,
+                  "fontSize": 16,
+                  "lineHeightPx": 20,
+                  "letterSpacing": 0,
+                  "textAlignHorizontal": "CENTER"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

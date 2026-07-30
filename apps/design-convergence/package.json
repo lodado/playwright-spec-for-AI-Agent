@@ -1,0 +1,24 @@
+{
+  "name": "design-convergence",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "design-convergence": "./dist/cli.js" },
+  "exports": "./dist/main.js",
+  "types": "./dist/main.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@design-convergence/config": "workspace:*",
+    "@design-convergence/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.7"
+  }
+}
