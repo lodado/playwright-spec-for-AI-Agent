@@ -59,7 +59,7 @@ function clickableQaIr(action = "CLICK") {
   return input;
 }
 
-function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccessCode=short-secret#short-secret", text = "Dashboard SESSION-SECRET", dom = "<main>Dashboard SESSION-SECRET</main>", clickError, onClick, onGoto, closeDelayMs = 0, elementCount = 1, visible = true, waitForVisible = visible, elementDetached = false, appearsAfterWait = false } = {}) {
+function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccessCode=short-secret#short-secret", text = "Dashboard SESSION-SECRET", dom = "<main>Dashboard SESSION-SECRET</main>", clickError, onClick, onGoto, closeDelayMs = 0, elementCount = 1, visible = true, waitForVisible = visible, elementDetached = false, appearsAfterWait = false, bounceFirstNavigationTo } = {}) {
   const calls = [];
   let routeHandler;
   let webSocketHandler;
@@ -82,8 +82,9 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
     },
   };
   const countNow = async () => (appearsAfterWait && !appeared ? 0 : elementCount);
+  let gotoCount = 0;
   const page = {
-    async goto(url) { calls.push(["goto", url]); await onGoto?.({ url, routeHandler }); },
+    async goto(url) { gotoCount += 1; calls.push(["goto", url]); await onGoto?.({ url, routeHandler }); },
     locator(selector) {
       return {
         async evaluate(_callback, maxChars) {
@@ -117,7 +118,7 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
     getByRole(role, options) {
       return { ...visibility, async count() { return countNow(); }, async evaluate(_callback, argument) { return typeof argument === "number" ? text.slice(0, argument + 1) : { anchor: false, form: false, editable: false }; }, async click() { calls.push(["click:role", role, options]); } };
     },
-    url() { return pageUrl; },
+    url() { return bounceFirstNavigationTo && gotoCount === 1 ? bounceFirstNavigationTo : pageUrl; },
     viewportSize() { return { width: 1280, height: 720 }; },
   };
   const browser = {
@@ -246,6 +247,19 @@ describe("readonly Playwright execution provider", () => {
     expect(result.outcome).toMatchObject({ type: "COMPLETED" });
     expect(result.bundles[0].facts[0]).toMatchObject({ kind: "ELEMENT_OBSERVATION", value: { expectationId: "heading-visible", resolution: "FOUND", visible: false } });
   });
+
+  it("re-navigates once when the first navigation bounces off the target path", async () => {
+    // A stale access token bounces the first hit to /login while the app silently refreshes the
+    // session; one bounded re-navigation reaches the refreshed page. A healthy landing (same
+    // pathname) never triggers the retry, and the observation still records the final page truth.
+    const input = qaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    const fixture = fakeBrowser({ text: "Dashboard", bounceFirstNavigationTo: "https://example.test/login" });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-bounced-nav", browserType: fixture.browserType });
+
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    expect(fixture.calls.filter(([name]) => name === "goto")).toHaveLength(2);
+  }, 15_000);
 
   it("waits for a VISIBLE target still rendering at observation time instead of recording MISSING", async () => {
     // Playwright assertions retry for their declared timeout; an observation taken mid-render must

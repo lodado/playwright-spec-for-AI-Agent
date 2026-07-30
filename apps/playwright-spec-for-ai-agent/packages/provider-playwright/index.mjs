@@ -27,6 +27,9 @@ const MAX_PLAN_NODES = 128;
 const MAX_RUN_ARTIFACTS = 256;
 const MAX_RUN_EVIDENCE_BYTES = 16 * 1024 * 1024;
 const MAX_NODE_TIMEOUT_MS = 60_000;
+// ponytail: fixed settle delay before the single navigation retry; make it configurable if a
+// staging environment needs a longer token-refresh window.
+const NAVIGATION_SETTLE_MS = 3_000;
 const MAX_RUN_TIMEOUT_MS = 300_000;
 const MAX_VIEWPORT_DIMENSION = 4096;
 const MAX_VIEWPORT_AREA = 4096 * 4096;
@@ -882,6 +885,14 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       const target = navigationUrl(step.target, base);
       const page = await openPage();
       await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: nodeTimeoutMs });
+      // A stale access token can bounce the first hit to a login route while the app silently
+      // refreshes the session in the background. One bounded re-navigation reaches the refreshed
+      // page; a healthy landing (same pathname) never triggers it, and the observation still
+      // records whatever the final page truly shows.
+      if (new URL(String(page.url())).pathname !== target.pathname) {
+        await new Promise((resolve) => setTimeout(resolve, NAVIGATION_SETTLE_MS));
+        await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: nodeTimeoutMs });
+      }
       assertPageOrigin(page, base);
       return;
     }
