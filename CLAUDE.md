@@ -1,6 +1,9 @@
 # CLAUDE.md
 
-Guidance for agents working in this repository.
+Read AGENTS.md first; when the two differ, AGENTS.md wins.
+
+Any PR touching the adaptive protocol, spec compilation, or CLI options must walk the
+applicable rows of the AGENTS.md §2 synchronization matrix.
 
 ## Release / Versioning (required on every PR)
 
@@ -43,8 +46,7 @@ packages need no changeset.
 
 ## Verifying
 
-The app package `playwright-spec-for-ai-agent` has no lint/typecheck script — its
-source is `.mjs`. Its full gate is:
+See AGENTS.md §5. Short version:
 
 ```bash
 cd apps/playwright-spec-for-ai-agent && pnpm test   # vitest run
