@@ -78,6 +78,31 @@ evidence manifest. Unclear live states become `MANUAL_REVIEW`; they are not
 forced into pass or fail. A strict read-only provider (`--provider=playwright
 --mode=strict`) is available for evidence capture without an inference model.
 
+### Choosing the spec: `--spec` vs `--page`
+
+`execute` needs exactly one spec source, and an explicit spec always wins:
+
+- **`--spec=<file>`** — run that one spec file. Requires `--base-url`. Use this
+  to pin an exact, predetermined spec so nothing improvises which tests run.
+- **`--page=<name>`** — resolve the page's _designated_ specs from the project
+  config (`hermes-qa.config.mjs` / `playwright-spec-for-ai-agent.config.mjs`)
+  instead of naming a file. The config's `paths.specDir` / per-page `specDir`
+  locates the page's `__tests__` directory; every `*.spec.ts` in it is compiled
+  and merged into one run, `--base-url` defaults to `batch.defaultBaseUrl`, and
+  the scenarios that cannot run against the live target (`@qa-live-skip`, or a
+  `@qa-live-policy` that blocks navigation/DOM such as `skip` / `auth-mock` /
+  `subscription-mutation`) are skipped — leaving only the page's live-runnable
+  specs. `--config=<file>` overrides config auto-discovery.
+
+```bash
+# Run the dashboard page's designated specs, base URL from config:
+npx qa-native execute --page=dashboard --run-dir=.qa/runs/dashboard-1 \
+  --provider=hermes --mode=adaptive
+```
+
+Giving both `--spec` and `--page`, or neither, is an error. This keeps a QA run
+tied to the specs you defined for a page rather than an ad-hoc plan.
+
 See the [QA Native guide](docs/qa-native.md) and the
 [one-shot runbook](docs/qa-native-one-shot-runbook.md) for the full flow,
 operator setup, and verdict handling.

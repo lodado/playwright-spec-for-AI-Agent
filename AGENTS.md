@@ -99,9 +99,13 @@ test-level resolution (`testIndex`) ③ `--allow-partial` behavior.
 Skipped: 2.1.0 — missing `testIndex` neutralized `--allow-partial`.
 
 **CLI options**
-→ ① `COMMAND_OPTIONS` in `packages/cli/qa-native.mjs` ② usage/help text ③ README
-④ `docs/qa-native-one-shot-runbook.md`.
-Skipped: `--help` drifts from reality.
+→ ① `COMMAND_OPTIONS` + the `parseArgs` option schema in `packages/cli/qa-native.mjs`
+(both must list a new flag) ② usage/help text ③ README ④ `docs/qa-native-one-shot-runbook.md`.
+Skipped: `--help` drifts from reality; a flag added to `COMMAND_OPTIONS` but not the `parseArgs`
+schema fails as "invalid command arguments".
+`execute` takes exactly one spec source: `--spec=<file>` (needs `--base-url`) or `--page=<name>`,
+which resolves the page's `__tests__` directory and base URL from the project config
+(`scripts/hermes-qa-project-config.mjs`, imported lazily) and runs its live-runnable specs.
 
 **Budget shape**
 → ① `DEFAULT_ADAPTIVE_BUDGET` ② `--budget-*` flags ③ authorizer exhaustion checks ④ prompt
