@@ -197,6 +197,9 @@ export const configSchema = z
     verification: verificationSchema,
     ai: aiSchema,
     github: githubSchema,
+    // Project-relative path to the manual `design-bindings.json`. Absent file is
+    // treated as zero eligible bindings; a present file is validated + preflighted.
+    bindings: z.string().min(1).default("design-bindings.json"),
     cases: z.array(caseSchema).min(1),
   })
   .strict()

@@ -17,6 +17,12 @@ export default defineConfig({
           import.meta.url,
         ),
       ),
+      "@design-convergence/instrumentation": fileURLToPath(
+        new URL(
+          "../../packages/design-convergence-instrumentation/src/index.ts",
+          import.meta.url,
+        ),
+      ),
     },
   },
 });

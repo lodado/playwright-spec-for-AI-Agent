@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@design-convergence/config": "workspace:*",
+    "@design-convergence/instrumentation": "workspace:*",
     "@design-convergence/shared": "workspace:*"
   },
   "devDependencies": {

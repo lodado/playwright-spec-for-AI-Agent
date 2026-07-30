@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { main } from "../src/main.js";
 
 const dirs: string[] = [];
@@ -40,6 +40,50 @@ const validConfig = {
     },
   ],
 };
+
+// Fixture source with a precomputed hash + <section> source range.
+const CARD_SRC =
+  'export function Card() {\n  return <section className="c">Hi</section>;\n}\n';
+const CARD_HASH =
+  "sha256:a7fdbd4edc982873e4cc87a6f6123d2f6c6eac595a2e3da92b7aec7d17162409";
+const CARD_RANGE = { startLine: 2, startColumn: 9, endLine: 2, endColumn: 32 };
+
+function cardBinding(overrides: { sourceHash?: string } = {}) {
+  return {
+    id: "card-root",
+    caseIds: ["pricing-desktop"],
+    figma: { fileKey: "k", nodeId: "1:2" },
+    target: {
+      kind: "intrinsic-jsx-element",
+      filePath: "components/Card.tsx",
+      elementName: "section",
+      occurrence: 0,
+      sourceRange: CARD_RANGE,
+      sourceHash: overrides.sourceHash ?? CARD_HASH,
+    },
+    runtime: { attributeName: "data-design-node", attributeValue: "1:2" },
+    status: "proposed",
+    absorbedNodeIds: [],
+    evidence: {},
+  };
+}
+
+/** Write a config plus extra project files into one tmp dir; return config path. */
+function tmpProject(
+  config: unknown,
+  files: Record<string, string> = {},
+): string {
+  const d = mkdtempSync(join(tmpdir(), "dc-cli-"));
+  dirs.push(d);
+  const p = join(d, "design-convergence.config.json");
+  writeFileSync(p, JSON.stringify(config));
+  for (const [rel, content] of Object.entries(files)) {
+    const abs = join(d, rel);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  }
+  return p;
+}
 
 describe("main", () => {
   it("prints help and exits 2 with no command", async () => {
@@ -103,5 +147,40 @@ describe("main", () => {
     expect(
       await main(["run", "--case", "x", "--config", tmpConfig(bad)], c.io),
     ).toBe(2);
+  });
+
+  it("preflights bindings and reports the statically eligible count", async () => {
+    const c = capture();
+    const configPath = tmpProject(validConfig, {
+      "components/Card.tsx": CARD_SRC,
+      "design-bindings.json": JSON.stringify({
+        schemaVersion: 1,
+        bindings: [cardBinding()],
+      }),
+    });
+    const code = await main(
+      ["run", "--case", "pricing-desktop", "--config", configPath],
+      c.io,
+    );
+    expect(code).toBe(0);
+    expect(c.out.join("\n")).toContain("1 statically eligible binding");
+  });
+
+  it("exits 2 with kind instrumentation when a binding is stale", async () => {
+    const c = capture();
+    const configPath = tmpProject(validConfig, {
+      "components/Card.tsx": CARD_SRC,
+      "design-bindings.json": JSON.stringify({
+        schemaVersion: 1,
+        bindings: [cardBinding({ sourceHash: `sha256:${"0".repeat(64)}` })],
+      }),
+    });
+    const code = await main(
+      ["run", "--case", "pricing-desktop", "--config", configPath, "--json"],
+      c.io,
+    );
+    expect(code).toBe(2);
+    const line = c.err.find((l) => l.includes("card-root"))!;
+    expect(JSON.parse(line).kind).toBe("instrumentation");
   });
 });
