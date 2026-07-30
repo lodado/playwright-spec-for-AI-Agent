@@ -1122,11 +1122,15 @@ function runtimeError(code, message) {
 }
 
 function executionResult(outcome, runtime) {
-  const completed = outcome.type === "COMPLETED";
+  // A POLICY_VIOLATION taints everything the run sealed (e.g. a delayed click request detected at
+  // cleanup), so that evidence stays withheld. Every other failure keeps the checkpoints it sealed
+  // before failing: how many nodes were recorded is the primary debugging signal, and the caller
+  // quarantines failed evidence as <run-dir>.invalid instead of ever treating it as success.
+  const withheld = outcome.type !== "COMPLETED" && outcome.code === "POLICY_VIOLATION";
   return Object.freeze({
     outcome,
-    bundles: Object.freeze(completed ? [...(runtime?.bundles ?? [])] : []),
-    ...(completed && runtime?.manifest !== undefined ? { manifest: runtime.manifest } : {}),
-    readBlob: completed ? runtime?.readBlob ?? (() => undefined) : () => undefined,
+    bundles: Object.freeze(withheld ? [] : [...(runtime?.bundles ?? [])]),
+    ...(!withheld && runtime?.manifest !== undefined ? { manifest: runtime.manifest } : {}),
+    readBlob: withheld ? () => undefined : runtime?.readBlob ?? (() => undefined),
   });
 }

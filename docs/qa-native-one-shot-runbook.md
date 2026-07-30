@@ -127,7 +127,7 @@ are JSON arrays; the run envelope is `run-envelope/0.2`). An incomplete run is
 never kept as success evidence: setup failures delete the directory, while an
 adaptive run whose sealed evidence fails validation is preserved as
 `<run-dir>.invalid` for debugging — every command refuses to read it, and
-`qa-native: invalid adaptive evidence preserved at …` appears on stderr.
+`qa-native: invalid run evidence preserved at …` appears on stderr.
 
 The strict and adaptive browser policy allows same-origin `GET`/`HEAD` after a
 safe interaction (for example a subscription-history dialog that fetches on

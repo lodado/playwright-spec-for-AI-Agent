@@ -74,7 +74,7 @@ that sealed evidence later. Nothing the agent writes can become a verdict direct
 
 If the sealed evidence fails integrity validation after an adaptive run, the run directory is not
 deleted — it is renamed to `<run-dir>.invalid` with the evidence archive inside, and
-`qa-native: invalid adaptive evidence preserved at …` is printed to stderr. Every qa-native
+`qa-native: invalid run evidence preserved at …` is printed to stderr. Every qa-native
 command refuses to read `.invalid` paths, so a rejected run can never become a verdict or a
 report. Inspect it manually, then delete it when you are done debugging.
 

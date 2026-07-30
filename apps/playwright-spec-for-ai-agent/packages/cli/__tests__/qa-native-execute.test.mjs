@@ -403,6 +403,36 @@ test.describe("dashboard", () => {
     expect(existsSync(join(cwd, ".qa", "runs", "forged"))).toBe(false);
   });
 
+  it("surfaces the runtime outcome and quarantines evidence when strict execution fails", async () => {
+    const cwd = project();
+    const stderr = vi.fn();
+    const failingExecution = async (args) => {
+      const result = await fixtureExecution(args);
+      return { ...result, outcome: { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "execute", type: "ERROR", code: "UNKNOWN_RUNTIME_ERROR", message: "Execution timed out" } };
+    };
+    const status = await runQaNative([
+      "execute",
+      "--spec=dashboard.spec.ts",
+      "--base-url=https://example.test",
+      "--run-dir=.qa/runs/strict-fail",
+    ], {
+      cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+      handlers: { execute: (args) => executeQaNative(args, { execute: failingExecution }) },
+      stdout: vi.fn(),
+      stderr,
+    });
+
+    expect(status).toBe(1);
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("type=ERROR"));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("code=UNKNOWN_RUNTIME_ERROR"));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("Execution timed out"));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("bundles=1"));
+    expect(existsSync(join(cwd, ".qa", "runs", "strict-fail"))).toBe(false);
+    const replay = readEvidenceArchive({ directory: join(cwd, ".qa", "runs", "strict-fail.invalid", "evidence"), integrityKey });
+    expect(replay.bundles).toHaveLength(1);
+  });
+
   it("removes the run directory when persistence fails", async () => {
     const cwd = project();
     const stderr = vi.fn();
