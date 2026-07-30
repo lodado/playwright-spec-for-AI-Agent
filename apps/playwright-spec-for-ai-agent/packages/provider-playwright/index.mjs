@@ -809,6 +809,17 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       && !requestUrl.username && !requestUrl.password;
   }
 
+  // Consumer apps serve their API from a sibling origin (app.example.test → api.example.test);
+  // blocking those page-initiated reads breaks the page under test itself. Reads to foreign sites
+  // stay blocked — this loosens the pre-interaction guard to the registrable domain only, never
+  // to mutations, and the stricter same-origin rule still governs post-interaction traffic.
+  function isReadOnlySameSiteRequest(requestUrl, method) {
+    return ["GET", "HEAD"].includes(method)
+      && ["http:", "https:"].includes(requestUrl.protocol)
+      && registrableDomain(requestUrl.hostname) === registrableDomain(base.hostname)
+      && !requestUrl.username && !requestUrl.password;
+  }
+
   async function openPage() {
     if (session) return session.page;
     let browser;
@@ -850,7 +861,7 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
             await route.abort("blockedbyclient");
             return;
           }
-          if (!isReadOnlySameOriginRequest(requestUrl, request.method())) {
+          if (!isReadOnlySameSiteRequest(requestUrl, request.method())) {
             await route.abort("blockedbyclient");
             return;
           }
@@ -1134,6 +1145,14 @@ function navigationUrl(target, base) {
   const url = new URL(target.value, base);
   if (url.origin !== base.origin || url.username || url.password) throw providerError("POLICY_VIOLATION");
   return url;
+}
+
+// ponytail: naive eTLD+1 (last two labels); swap in the public suffix list if a consumer ever
+// runs against a co.uk-style registrable domain.
+function registrableDomain(hostname) {
+  if (/^[[\d]/.test(hostname)) return hostname;
+  const labels = hostname.split(".");
+  return labels.slice(-2).join(".");
 }
 
 function assertPageOrigin(page, base) {

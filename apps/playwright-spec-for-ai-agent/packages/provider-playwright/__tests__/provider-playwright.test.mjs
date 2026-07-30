@@ -384,6 +384,28 @@ describe("readonly Playwright execution provider", () => {
     expect(webSocket.close).toHaveBeenCalledOnce();
   });
 
+  it("allows same-site read-only API requests before any interaction", async () => {
+    // Consumer apps serve their API from a sibling origin (app.example.test → api.example.test);
+    // blocking those reads breaks the page under test. Reads to foreign sites stay blocked — the
+    // exfiltration guard above is unchanged.
+    const input = qaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    const fixture = fakeBrowser({ pageUrl: "https://app.example.test/dashboard" });
+    await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://app.example.test", runId: "run-same-site", browserType: fixture.browserType });
+
+    const sameSiteRead = { request: () => ({ method: () => "GET", url: () => "https://api.example.test/v1/auth/me" }), abort: vi.fn(), continue: vi.fn() };
+    const sameSiteMutation = { request: () => ({ method: () => "POST", url: () => "https://api.example.test/v1/plans" }), abort: vi.fn(), continue: vi.fn() };
+    const foreignRead = { request: () => ({ method: () => "GET", url: () => "https://attacker.test/collect" }), abort: vi.fn(), continue: vi.fn() };
+    await fixture.routeHandler(sameSiteRead);
+    await fixture.routeHandler(sameSiteMutation);
+    await fixture.routeHandler(foreignRead);
+
+    expect(sameSiteRead.continue).toHaveBeenCalledOnce();
+    expect(sameSiteRead.abort).not.toHaveBeenCalled();
+    expect(sameSiteMutation.abort).toHaveBeenCalledWith("blockedbyclient");
+    expect(foreignRead.abort).toHaveBeenCalledWith("blockedbyclient");
+  });
+
   it("executes semantic clicks and seals a redacted ACTION_LOG", async () => {
     const input = clickableQaIr();
     const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
