@@ -10,8 +10,13 @@ import { validateAdaptiveExecutionEvidence } from "./qa-native-adaptive-evidence
 import { readAuthenticatedRunEnvelope, verifyRunEnvelopeBindings } from "./qa-native-run-envelope.mjs";
 import { createExclusiveQaDirectory, readPrivateJson, writePrivateFileExclusive, writePrivateJsonExclusive } from "./qa-native.mjs";
 
-export async function reportQaNative({ runDirectory, repositoryRoot, revision, judgmentPath, integrityKey, cwd }) {
-  const prepared = prepareQaNativeRemediation({ runDirectory, repositoryRoot, revision, judgmentPath, integrityKey, cwd });
+export async function reportQaNative({ runDirectory, repositoryRoot, revision, judgmentPath, integrityKey, cwd }, overrides = {}) {
+  const reportSummary = overrides.reportSummary ?? defaultReportSummary;
+  const prepared = prepareQaNativeRemediation({ runDirectory, repositoryRoot, revision, judgmentPath, integrityKey, cwd, requireFailing: false });
+  if (prepared.items.length === 0) {
+    reportSummary({ judged: prepared.judged, failing: 0 });
+    return 0;
+  }
   const reportHash = shortHash({ results: prepared.items.map(({ judgeResult }) => judgeResult.resultId), repositoryRevision: prepared.repositoryRevision });
   const reportDirectory = join(runDirectory, "reports", `report-${reportHash}`);
   let created = false;
@@ -26,6 +31,7 @@ export async function reportQaNative({ runDirectory, repositoryRoot, revision, j
       writePrivateFileExclusive(relative(cwd, join(reportDirectory, `report-${suffix}.md`)), renderRemediationReport({ diagnosis, codeContext, recommendation, qaIr: prepared.qaIr, judgeResult, evidenceBundle }), { cwd });
     }
     writePrivateJsonExclusive(relative(cwd, join(reportDirectory, "run.json")), { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "report", type: "COMPLETED" }, { cwd });
+    reportSummary({ judged: prepared.judged, failing: prepared.items.length, reportDirectory: relative(cwd, reportDirectory) });
     return 0;
   } catch (error) {
     if (created) rmSync(reportDirectory, { recursive: true, force: true });
@@ -33,7 +39,15 @@ export async function reportQaNative({ runDirectory, repositoryRoot, revision, j
   }
 }
 
-export function prepareQaNativeRemediation({ runDirectory, repositoryRoot, revision, judgmentPath, integrityKey, cwd, repositoryId }) {
+// A successful report was previously silent (and an all-pass run was an error); one summary line
+// tells CI and operators what was judged and where the remediation artifacts landed.
+function defaultReportSummary({ judged, failing, reportDirectory }) {
+  process.stdout.write(failing === 0
+    ? `qa-native report: ${judged} judgment(s), 0 failing — nothing to remediate\n`
+    : `qa-native report: ${judged} judgment(s), ${failing} failing → ${reportDirectory}\n`);
+}
+
+export function prepareQaNativeRemediation({ runDirectory, repositoryRoot, revision, judgmentPath, integrityKey, cwd, repositoryId, requireFailing = true }) {
   const outcome = readPrivateJson(relative(cwd, join(runDirectory, "run.json")), { cwd });
   validateContract("RuntimeOutcome", outcome);
   if (outcome.stage !== "execute" || outcome.type !== "COMPLETED") throw new Error("QA execution is incomplete");
@@ -51,7 +65,10 @@ export function prepareQaNativeRemediation({ runDirectory, repositoryRoot, revis
   });
   if (judgmentPath === undefined) assertCompleteJudgmentSet(judgments, expectedBundles);
   const selected = judgments.filter(({ result }) => ["FAIL", "MANUAL_REVIEW"].includes(result.verdict));
-  if (selected.length === 0) throw new Error("QA report has no failing judgments");
+  if (selected.length === 0) {
+    if (requireFailing) throw new Error("QA report has no failing judgments");
+    return Object.freeze({ qaIr, judged: judgments.length, items: Object.freeze([]) });
+  }
 
   const snapshot = createLocalRepositorySnapshot({ root: repositoryRoot, revision, repositoryId });
   const items = selected.map(({ result, bundle }) => {
@@ -60,7 +77,7 @@ export function prepareQaNativeRemediation({ runDirectory, repositoryRoot, revis
     const recommendation = recommendRepair({ diagnosis, codeContext, qaIr, judgeResult: result, evidenceBundle: bundle });
     return { judgeResult: result, evidenceBundle: bundle, diagnosis, codeContext, recommendation };
   });
-  return Object.freeze({ qaIr, repositoryRevision: snapshot.revision, items: Object.freeze(items) });
+  return Object.freeze({ qaIr, repositoryRevision: snapshot.revision, judged: judgments.length, items: Object.freeze(items) });
 }
 
 function expectedJudgedBundles({ runDirectory, archive, envelope, qaIr, runtimeOutcome, cwd }) {

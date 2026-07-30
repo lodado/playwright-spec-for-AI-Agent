@@ -59,6 +59,42 @@ describe("qa-native repository report", () => {
     expect(readFileSync(join(fixture.cwd, "src", "Dashboard.jsx"), "utf8")).toBe(workingCopy);
   });
 
+  it("prints a success summary and exits 0 when no judgment fails", async () => {
+    const fixture = persistedFailedRun();
+    fixture.judgment.verdict = "PASS";
+    fixture.judgment.expectationResults[0].status = "MATCHED";
+    writeFileSync(join(fixture.judgmentDirectory, "judge-result-fail.json"), `${JSON.stringify(fixture.judgment)}\n`);
+    const reportSummary = vi.fn();
+
+    const status = await runQaNative(["report", "--run-dir=.qa/runs/run-1", "--repository-root=."], {
+      cwd: fixture.cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+      handlers: { report: (args) => reportQaNative(args, { reportSummary }) },
+      stdout: vi.fn(),
+      stderr: vi.fn(),
+    });
+
+    expect(status).toBe(0);
+    expect(reportSummary).toHaveBeenCalledWith({ judged: 1, failing: 0 });
+    expect(existsSync(join(fixture.runDirectory, "reports"))).toBe(false);
+  });
+
+  it("prints a summary naming the report directory when failures are reported", async () => {
+    const fixture = persistedFailedRun();
+    const reportSummary = vi.fn();
+
+    const status = await runQaNative(["report", "--run-dir=.qa/runs/run-1", "--repository-root=."], {
+      cwd: fixture.cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
+      handlers: { report: (args) => reportQaNative(args, { reportSummary }) },
+      stdout: vi.fn(),
+      stderr: vi.fn(),
+    });
+
+    expect(status).toBe(0);
+    expect(reportSummary).toHaveBeenCalledWith({ judged: 1, failing: 1, reportDirectory: expect.stringContaining("reports") });
+  });
+
   it("reports the final adaptive checkpoint without requiring judgments for intermediate actions", async () => {
     const fixture = persistedFailedRun({ adaptive: true });
 
