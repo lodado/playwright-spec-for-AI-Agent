@@ -59,17 +59,32 @@ function clickableQaIr(action = "CLICK") {
   return input;
 }
 
-function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccessCode=short-secret#short-secret", text = "Dashboard SESSION-SECRET", dom = "<main>Dashboard SESSION-SECRET</main>", clickError, onClick, onGoto, closeDelayMs = 0, elementCount = 1, visible = true, waitForVisible = visible } = {}) {
+function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccessCode=short-secret#short-secret", text = "Dashboard SESSION-SECRET", dom = "<main>Dashboard SESSION-SECRET</main>", clickError, onClick, onGoto, closeDelayMs = 0, elementCount = 1, visible = true, waitForVisible = visible, elementDetached = false, appearsAfterWait = false, bounceFirstNavigationTo } = {}) {
   const calls = [];
   let routeHandler;
   let webSocketHandler;
+  let appeared = false;
   // Model a mount/entry animation: `isVisible()` is the instant snapshot, `waitFor({state:"visible"})` resolves once the element becomes visible (or rejects if it never does).
+  // `appearsAfterWait` models a page still rendering at observation time: count() is 0 until the
+  // observer waits for the element to appear.
   const visibility = {
     async isVisible() { return visible; },
-    async waitFor(options) { if (options?.state === "visible" && !waitForVisible) throw new Error("waitFor: element never became visible"); },
+    async waitFor(options) {
+      if (appearsAfterWait) {
+        appeared = true;
+        return;
+      }
+      if (options?.state === "visible" && !waitForVisible) {
+        // Real Playwright blocks for the full timeout before rejecting — model that, it is the race.
+        await new Promise((resolve) => setTimeout(resolve, options?.timeout ?? 0));
+        throw new Error("waitFor: element never became visible");
+      }
+    },
   };
+  const countNow = async () => (appearsAfterWait && !appeared ? 0 : elementCount);
+  let gotoCount = 0;
   const page = {
-    async goto(url) { calls.push(["goto", url]); await onGoto?.({ url, routeHandler }); },
+    async goto(url) { gotoCount += 1; calls.push(["goto", url]); await onGoto?.({ url, routeHandler }); },
     locator(selector) {
       return {
         async evaluate(_callback, maxChars) {
@@ -81,8 +96,13 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
     getByTestId(value) {
       return {
         ...visibility,
-        async count() { return elementCount; },
-        async evaluate(_callback, argument) {
+        async count() { return countNow(); },
+        async evaluate(_callback, argument, options) {
+          if (elementDetached) {
+            // Real Playwright waits the full timeout for a detached element to re-attach.
+            await new Promise((resolve) => setTimeout(resolve, options?.timeout ?? 0));
+            throw new Error("evaluate: element is not attached to the DOM");
+          }
           return typeof argument === "number" ? text.slice(0, argument + 1) : { anchor: false, form: false, editable: false };
         },
         async click() {
@@ -93,12 +113,12 @@ function fakeBrowser({ pageUrl = "https://example.test/dashboard?temporaryAccess
       };
     },
     getByText(value) {
-      return { ...visibility, async count() { return elementCount; }, async evaluate() { return text; }, async click() { calls.push(["click:text", value]); } };
+      return { ...visibility, async count() { return countNow(); }, async evaluate() { return text; }, async click() { calls.push(["click:text", value]); } };
     },
     getByRole(role, options) {
-      return { ...visibility, async count() { return elementCount; }, async evaluate(_callback, argument) { return typeof argument === "number" ? text.slice(0, argument + 1) : { anchor: false, form: false, editable: false }; }, async click() { calls.push(["click:role", role, options]); } };
+      return { ...visibility, async count() { return countNow(); }, async evaluate(_callback, argument) { return typeof argument === "number" ? text.slice(0, argument + 1) : { anchor: false, form: false, editable: false }; }, async click() { calls.push(["click:role", role, options]); } };
     },
-    url() { return pageUrl; },
+    url() { return bounceFirstNavigationTo && gotoCount === 1 ? bounceFirstNavigationTo : pageUrl; },
     viewportSize() { return { width: 1280, height: 720 }; },
   };
   const browser = {
@@ -201,6 +221,71 @@ describe("readonly Playwright execution provider", () => {
     ]);
   });
 
+  it("observes a present-but-hidden NOT_VISIBLE target as a fact instead of timing out the run", async () => {
+    // Consumer repro: dashboard-inactive's `.not.toBeVisible()` targets are sometimes in the DOM
+    // but hidden. Waiting for them to become visible burns the whole node timeout and killed the
+    // run (strict one-shot 0/4). Observation must snapshot hidden state, never wait for it.
+    const input = qaIr();
+    input.suites[0].scenarios[0].expectations = [{ id: "signin-hidden", kind: "NOT_VISIBLE", target: { testId: "signin" }, provenance: [] }];
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities(), timeoutPolicy: { perNodeMs: 400, runMs: 5_000 } });
+    const fixture = fakeBrowser({ text: "Dashboard", visible: false, waitForVisible: false });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-hidden-not-visible", browserType: fixture.browserType });
+
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    expect(result.bundles[0].facts[0]).toMatchObject({ kind: "ELEMENT_OBSERVATION", value: { expectationId: "signin-hidden", resolution: "FOUND", visible: false } });
+  });
+
+  it("bounds the entry-animation visibility wait below the node timeout for VISIBLE expectations", async () => {
+    // A VISIBLE expectation whose element never shows must end as an observed visible:false fact
+    // within the node budget — not as a run-killing node timeout.
+    const input = qaIr();
+    input.suites[0].scenarios[0].expectations = [{ id: "heading-visible", kind: "VISIBLE", target: { testId: "heading" }, provenance: [] }];
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities(), timeoutPolicy: { perNodeMs: 400, runMs: 5_000 } });
+    const fixture = fakeBrowser({ text: "Dashboard", visible: false, waitForVisible: false });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-never-visible", browserType: fixture.browserType });
+
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    expect(result.bundles[0].facts[0]).toMatchObject({ kind: "ELEMENT_OBSERVATION", value: { expectationId: "heading-visible", resolution: "FOUND", visible: false } });
+  });
+
+  it("re-navigates once when the first navigation bounces off the target path", async () => {
+    // A stale access token bounces the first hit to /login while the app silently refreshes the
+    // session; one bounded re-navigation reaches the refreshed page. A healthy landing (same
+    // pathname) never triggers the retry, and the observation still records the final page truth.
+    const input = qaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    const fixture = fakeBrowser({ text: "Dashboard", bounceFirstNavigationTo: "https://example.test/login" });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-bounced-nav", browserType: fixture.browserType });
+
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    expect(fixture.calls.filter(([name]) => name === "goto")).toHaveLength(2);
+  }, 15_000);
+
+  it("waits for a VISIBLE target still rendering at observation time instead of recording MISSING", async () => {
+    // Playwright assertions retry for their declared timeout; an observation taken mid-render must
+    // do the same for appearance, or a loading page becomes a MISSING fact and a false verdict.
+    const input = qaIr();
+    input.suites[0].scenarios[0].expectations = [{ id: "heading-visible", kind: "VISIBLE", target: { testId: "heading" }, provenance: [] }];
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities(), timeoutPolicy: { perNodeMs: 400, runMs: 5_000 } });
+    const fixture = fakeBrowser({ text: "Dashboard", appearsAfterWait: true });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-late-render", browserType: fixture.browserType });
+
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    expect(result.bundles[0].facts[0]).toMatchObject({ kind: "ELEMENT_OBSERVATION", value: { expectationId: "heading-visible", resolution: "FOUND", visible: true } });
+  });
+
+  it("records a detached element as MISSING instead of timing out the run", async () => {
+    // Hydration re-renders detach elements between count() and evaluate(); waiting the full node
+    // timeout for re-attachment killed the run the same way the visibility wait did.
+    const input = qaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities(), timeoutPolicy: { perNodeMs: 400, runMs: 5_000 } });
+    const fixture = fakeBrowser({ text: "Dashboard", elementDetached: true });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-detached", browserType: fixture.browserType });
+
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    expect(result.bundles[0].facts[0]).toMatchObject({ kind: "ELEMENT_OBSERVATION", value: { expectationId: "heading", resolution: "MISSING" } });
+  });
+
   it("keeps ambiguous semantic targets unresolved instead of inventing a deterministic result", async () => {
     const input = qaIr();
     const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
@@ -297,6 +382,28 @@ describe("readonly Playwright execution provider", () => {
     const webSocket = { close: vi.fn() };
     fixture.webSocketHandler(webSocket);
     expect(webSocket.close).toHaveBeenCalledOnce();
+  });
+
+  it("allows same-site read-only API requests before any interaction", async () => {
+    // Consumer apps serve their API from a sibling origin (app.example.test → api.example.test);
+    // blocking those reads breaks the page under test. Reads to foreign sites stay blocked — the
+    // exfiltration guard above is unchanged.
+    const input = qaIr();
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
+    const fixture = fakeBrowser({ pageUrl: "https://app.example.test/dashboard" });
+    await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://app.example.test", runId: "run-same-site", browserType: fixture.browserType });
+
+    const sameSiteRead = { request: () => ({ method: () => "GET", url: () => "https://api.example.test/v1/auth/me" }), abort: vi.fn(), continue: vi.fn() };
+    const sameSiteMutation = { request: () => ({ method: () => "POST", url: () => "https://api.example.test/v1/plans" }), abort: vi.fn(), continue: vi.fn() };
+    const foreignRead = { request: () => ({ method: () => "GET", url: () => "https://attacker.test/collect" }), abort: vi.fn(), continue: vi.fn() };
+    await fixture.routeHandler(sameSiteRead);
+    await fixture.routeHandler(sameSiteMutation);
+    await fixture.routeHandler(foreignRead);
+
+    expect(sameSiteRead.continue).toHaveBeenCalledOnce();
+    expect(sameSiteRead.abort).not.toHaveBeenCalled();
+    expect(sameSiteMutation.abort).toHaveBeenCalledWith("blockedbyclient");
+    expect(foreignRead.abort).toHaveBeenCalledWith("blockedbyclient");
   });
 
   it("executes semantic clicks and seals a redacted ACTION_LOG", async () => {

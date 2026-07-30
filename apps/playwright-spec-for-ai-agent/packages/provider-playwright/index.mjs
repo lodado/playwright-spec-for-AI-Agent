@@ -27,6 +27,9 @@ const MAX_PLAN_NODES = 128;
 const MAX_RUN_ARTIFACTS = 256;
 const MAX_RUN_EVIDENCE_BYTES = 16 * 1024 * 1024;
 const MAX_NODE_TIMEOUT_MS = 60_000;
+// ponytail: fixed settle delay before the single navigation retry; make it configurable if a
+// staging environment needs a longer token-refresh window.
+const NAVIGATION_SETTLE_MS = 3_000;
 const MAX_RUN_TIMEOUT_MS = 300_000;
 const MAX_VIEWPORT_DIMENSION = 4096;
 const MAX_VIEWPORT_AREA = 4096 * 4096;
@@ -733,10 +736,23 @@ export async function executeWithPlaywright({
     return executionResult(runtimeError("CONTRACT_VIOLATION", "Execution provider input is invalid"));
   }
 
+  // QA_NATIVE_TRACE_TIMING=1 prints one start/done line per node to stderr. This exists to locate
+  // hangs (the start line without a done line names the stuck node); heavyweight logging like
+  // DEBUG=pw:api changes scheduling enough to mask races, so keep this the only sanctioned probe.
+  const traceTiming = process.env.QA_NATIVE_TRACE_TIMING === "1";
+  const executeNode = !traceTiming ? runtime.executeNode : async (node) => {
+    const startedAt = performance.now();
+    process.stderr.write(`qa-native timing: ${node.nodeId} ${node.kind} start\n`);
+    try {
+      return await runtime.executeNode(node);
+    } finally {
+      process.stderr.write(`qa-native timing: ${node.nodeId} ${node.kind} ${Math.round(performance.now() - startedAt)}ms\n`);
+    }
+  };
   let outcome = await executePlan({
     plan,
     providerCapabilities: runtime.capabilities,
-    executeNode: runtime.executeNode,
+    executeNode,
   });
   if (outcome.type === "COMPLETED" && !runtime.hasCompleteEvidence()) {
     outcome = runtimeError("EVIDENCE_STORAGE_FAILED", "Execution completed without complete sealed evidence");
@@ -793,6 +809,17 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       && !requestUrl.username && !requestUrl.password;
   }
 
+  // Consumer apps serve their API from a sibling origin (app.example.test → api.example.test);
+  // blocking those page-initiated reads breaks the page under test itself. Reads to foreign sites
+  // stay blocked — this loosens the pre-interaction guard to the registrable domain only, never
+  // to mutations, and the stricter same-origin rule still governs post-interaction traffic.
+  function isReadOnlySameSiteRequest(requestUrl, method) {
+    return ["GET", "HEAD"].includes(method)
+      && ["http:", "https:"].includes(requestUrl.protocol)
+      && registrableDomain(requestUrl.hostname) === registrableDomain(base.hostname)
+      && !requestUrl.username && !requestUrl.password;
+  }
+
   async function openPage() {
     if (session) return session.page;
     let browser;
@@ -834,7 +861,7 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
             await route.abort("blockedbyclient");
             return;
           }
-          if (!isReadOnlySameOriginRequest(requestUrl, request.method())) {
+          if (!isReadOnlySameSiteRequest(requestUrl, request.method())) {
             await route.abort("blockedbyclient");
             return;
           }
@@ -869,6 +896,14 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       const target = navigationUrl(step.target, base);
       const page = await openPage();
       await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: nodeTimeoutMs });
+      // A stale access token can bounce the first hit to a login route while the app silently
+      // refreshes the session in the background. One bounded re-navigation reaches the refreshed
+      // page; a healthy landing (same pathname) never triggers it, and the observation still
+      // records whatever the final page truly shows.
+      if (new URL(String(page.url())).pathname !== target.pathname) {
+        await new Promise((resolve) => setTimeout(resolve, NAVIGATION_SETTLE_MS));
+        await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: nodeTimeoutMs });
+      }
       assertPageOrigin(page, base);
       return;
     }
@@ -1013,12 +1048,28 @@ function semanticLocator(page, target, { requireAccessibleName = false, allowUns
 
 async function observeExpectations(page, expectations, nodeId, timeout) {
   const facts = [];
+  // Entry-animation waits (VISIBLE/CONTAINS_TEXT targets that mount hidden) share one budget with
+  // headroom under the node timeout: a still-hidden element must end as an observed visible:false
+  // fact, never as a node timeout that kills the whole run. NOT_VISIBLE/PRESENT expectations take
+  // an instant snapshot — waiting for a deliberately hidden element to become visible was the
+  // strict one-shot race (element in DOM but hidden → full-timeout wait → run death).
+  // 0.8 × 30s = 24s covers the 20s assertion timeouts consumer specs declare while leaving
+  // headroom under the node timeout; an element still hidden past the spec's own wait would fail
+  // the real Playwright test too, so recording visible:false there is spec-faithful.
+  const visibilityDeadline = Date.now() + Math.max(1, Math.floor(timeout * 0.8));
   for (const expectation of expectations) {
     if (!["CONTAINS_TEXT", "VISIBLE", "NOT_VISIBLE", "PRESENT"].includes(expectation.kind)) continue;
     const locator = semanticLocator(page, expectation.target, { allowUnsupported: true });
     if (!locator) continue;
-    const count = await locator.count();
+    const expectsVisible = ["CONTAINS_TEXT", "VISIBLE"].includes(expectation.kind);
+    let count = await locator.count();
     const id = `${nodeId}:element:${expectation.id}`;
+    if (count === 0 && expectsVisible) {
+      // Playwright assertions retry for their declared timeout; mirror that for appearance so an
+      // observation taken mid-render doesn't turn a still-loading page into a MISSING fact.
+      const appeared = await locator.waitFor({ state: "visible", timeout: Math.max(1, visibilityDeadline - Date.now()) }).then(() => true, () => false);
+      if (appeared) count = await locator.count();
+    }
     if (count === 0) {
       facts.push({ id, kind: "ELEMENT_OBSERVATION", value: { expectationId: expectation.id, resolution: "MISSING" } });
       continue;
@@ -1027,9 +1078,19 @@ async function observeExpectations(page, expectations, nodeId, timeout) {
       facts.push({ id, kind: "ELEMENT_OBSERVATION", value: { expectationId: expectation.id, resolution: "AMBIGUOUS", count } });
       continue;
     }
-    const captured = await locator.evaluate((element, maxChars) => (element.textContent ?? "").slice(0, maxChars + 1), ELEMENT_TEXT_LIMIT, { timeout });
+    let captured;
+    try {
+      // Hydration re-renders can detach the element between count() and evaluate(); a bounded
+      // re-attach wait that ends as a MISSING fact keeps the run alive.
+      captured = await locator.evaluate((element, maxChars) => (element.textContent ?? "").slice(0, maxChars + 1), ELEMENT_TEXT_LIMIT, { timeout: Math.max(1, visibilityDeadline - Date.now()) });
+    } catch {
+      facts.push({ id, kind: "ELEMENT_OBSERVATION", value: { expectationId: expectation.id, resolution: "MISSING" } });
+      continue;
+    }
     if (typeof captured !== "string") throw providerError("EVIDENCE_STORAGE_FAILED");
-    const visible = await locator.waitFor({ state: "visible", timeout }).then(() => true, () => false);
+    const visible = expectsVisible
+      ? await locator.waitFor({ state: "visible", timeout: Math.max(1, visibilityDeadline - Date.now()) }).then(() => true, () => locator.isVisible().then((state) => state === true, () => false))
+      : await locator.isVisible().then((state) => state === true, () => false);
     const value = { expectationId: expectation.id, resolution: "FOUND", visible };
     if (captured.length <= ELEMENT_TEXT_LIMIT) Object.assign(value, { text: captured, textTruncated: false });
     facts.push({ id, kind: "ELEMENT_OBSERVATION", value });
@@ -1086,6 +1147,14 @@ function navigationUrl(target, base) {
   return url;
 }
 
+// ponytail: naive eTLD+1 (last two labels); swap in the public suffix list if a consumer ever
+// runs against a co.uk-style registrable domain.
+function registrableDomain(hostname) {
+  if (/^[[\d]/.test(hostname)) return hostname;
+  const labels = hostname.split(".");
+  return labels.slice(-2).join(".");
+}
+
 function assertPageOrigin(page, base) {
   const url = new URL(String(page.url()));
   if (!["http:", "https:"].includes(url.protocol) || url.origin !== base.origin || url.username || url.password) throw providerError("POLICY_VIOLATION");
@@ -1122,11 +1191,15 @@ function runtimeError(code, message) {
 }
 
 function executionResult(outcome, runtime) {
-  const completed = outcome.type === "COMPLETED";
+  // A POLICY_VIOLATION taints everything the run sealed (e.g. a delayed click request detected at
+  // cleanup), so that evidence stays withheld. Every other failure keeps the checkpoints it sealed
+  // before failing: how many nodes were recorded is the primary debugging signal, and the caller
+  // quarantines failed evidence as <run-dir>.invalid instead of ever treating it as success.
+  const withheld = outcome.type !== "COMPLETED" && outcome.code === "POLICY_VIOLATION";
   return Object.freeze({
     outcome,
-    bundles: Object.freeze(completed ? [...(runtime?.bundles ?? [])] : []),
-    ...(completed && runtime?.manifest !== undefined ? { manifest: runtime.manifest } : {}),
-    readBlob: completed ? runtime?.readBlob ?? (() => undefined) : () => undefined,
+    bundles: Object.freeze(withheld ? [] : [...(runtime?.bundles ?? [])]),
+    ...(!withheld && runtime?.manifest !== undefined ? { manifest: runtime.manifest } : {}),
+    readBlob: withheld ? () => undefined : runtime?.readBlob ?? (() => undefined),
   });
 }

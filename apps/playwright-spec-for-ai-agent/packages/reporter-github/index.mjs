@@ -24,7 +24,7 @@ export function createGitHubCliIssueTransport({ spawn = spawnSync } = {}) {
       if (!search || !Number.isSafeInteger(search.total_count) || search.total_count < 0 || search.total_count > MAX_PUBLICATION_MATCHES || !Array.isArray(search.items) || search.items.length > MAX_PUBLICATION_MATCHES) throw new Error("GitHub publication search is ambiguous");
       for (const item of search.items) {
         if (!item || item.state !== "open" || !Number.isSafeInteger(item.number) || item.number < 1 || seen.has(item.number)) continue;
-        const publication = item.pull_request === undefined ? "ISSUE" : "DRAFT_PR";
+        const publication = item.pull_request == null ? "ISSUE" : "DRAFT_PR"; // jq projections emit null for absent keys
         const found = awaitGitHubPublication(spawn, target, { publication, number: item.number, url: item.html_url });
         if (!hasFingerprintMarker(found.body, fingerprint)) continue;
         matches.push(found);
@@ -39,7 +39,7 @@ export function createGitHubCliIssueTransport({ spawn = spawnSync } = {}) {
       if (!Array.isArray(items) || items.length >= 100) throw new Error("GitHub recent publication search is ambiguous");
       return items.flatMap((item) => {
         if (!item || item.state !== "open" || !Number.isSafeInteger(item.number) || item.number < 1 || typeof item.body !== "string" || !hasFingerprintMarker(item.body, fingerprint)) return [];
-        const publication = item.pull_request === undefined ? "ISSUE" : "DRAFT_PR";
+        const publication = item.pull_request == null ? "ISSUE" : "DRAFT_PR"; // jq projections emit null for absent keys
         return [awaitGitHubPublication(spawn, target, { publication, number: item.number, url: item.html_url })];
       });
     },
@@ -62,6 +62,13 @@ export function createGitHubCliIssueTransport({ spawn = spawnSync } = {}) {
       const target = repositorySlug(repository);
       if (typeof title !== "string" || title.length === 0 || title.length > 240 || typeof body !== "string" || body.length === 0 || body.length > 65_536) throw new Error("GitHub Issue request is invalid");
       const safeLabels = validateLabels(labels, []);
+      // Labels are metadata, not policy: ensure each one exists (idempotently — an "already
+      // exists" failure is ignored, existing labels are never modified) instead of failing the
+      // whole publication on repositories that have never seen qa-native. Dynamic labels like
+      // scenario:<id> cannot be pre-created by operators.
+      for (const label of safeLabels) {
+        spawn("gh", ["label", "create", label, "--repo", target, "--color", "ededed", "--description", "qa-native"], { encoding: "buffer", maxBuffer: MAX_GITHUB_RESPONSE_BYTES, env: githubEnvironment() });
+      }
       const args = ["issue", "create", "--repo", target, "--title", title, "--body-file", "-"];
       for (const label of safeLabels) args.push("--label", label);
       const url = runGh(spawn, args, body).toString("utf8").trim();
@@ -74,8 +81,16 @@ export function createGitHubCliIssueTransport({ spawn = spawnSync } = {}) {
       publicationTarget({ repository: target, publication, number, url });
       const login = runGh(spawn, ["api", "--method", "GET", "user", "--jq", ".login"]).toString("utf8").trim();
       if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,98}[A-Za-z0-9])?(?:\[bot\])?$/.test(login)) throw new Error("GitHub authenticated actor is invalid");
-      const records = runGhJson(spawn, ["api", "--method", "GET", `repos/${target}/issues/${number}/comments`, "-f", "per_page=100", "--paginate", "--slurp", "--jq", `[.[][]|select(.user.login==${JSON.stringify(login)} and (.body|contains(\"qa-occurrence:\")))|{id,html_url,body:([.body|split(\"\\n\")[]|select(startswith(\"<!-- qa-occurrence:\"))|.[:2048]][:1]|join(\"\\n\")),created_at}]`]);
-      if (!Array.isArray(records) || records.length > 500) throw new Error("GitHub occurrence search returned invalid data");
+      // gh rejects --jq combined with --slurp, so take the raw paginated pages (one array per
+      // page) and filter client-side; runGh's maxBuffer bounds the response size.
+      const pages = runGhJson(spawn, ["api", "--method", "GET", `repos/${target}/issues/${number}/comments`, "-f", "per_page=100", "--paginate", "--slurp"]);
+      if (!Array.isArray(pages)) throw new Error("GitHub occurrence search returned invalid data");
+      const records = pages.flat().flatMap((comment) => {
+        if (!comment || comment.user?.login !== login || typeof comment.body !== "string" || !comment.body.includes("qa-occurrence:")) return [];
+        const markerBody = comment.body.split("\n").filter((line) => line.startsWith("<!-- qa-occurrence:")).map((line) => line.slice(0, 2_048)).slice(0, 1).join("\n");
+        return [{ id: comment.id, html_url: comment.html_url, body: markerBody, created_at: comment.created_at }];
+      });
+      if (records.length > 500) throw new Error("GitHub occurrence search returned invalid data");
       return records;
     },
     async createOccurrenceRecord({ repository, publication, number, url, body }) {
@@ -619,7 +634,18 @@ function safePlainText(value, secrets) {
 function safeText(value, secrets) { return safePlainText(value, secrets).replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1").replaceAll("@", "@\u200b"); }
 function verifyStableId(prefix, idKey, value) { const { [idKey]: id, ...body } = value; const expected = `${prefix}-${canonicalHash(body).slice("sha256:".length, "sha256:".length + 16)}`; if (id !== expected) throw new Error(`${prefix} artifact identity is invalid`); }
 function jsonSnapshot(value) { const serialized = JSON.stringify(value); if (serialized === undefined) throw new Error("GitHub publication input must be JSON-serializable"); return JSON.parse(serialized); }
-function runGh(spawn, args, input) { const result = spawn("gh", args, { encoding: "buffer", maxBuffer: MAX_GITHUB_RESPONSE_BYTES, env: githubEnvironment(), ...(input === undefined ? {} : { input }) }); if (!result || result.status !== 0 || !(result.stdout instanceof Uint8Array) || result.stdout.byteLength > MAX_GITHUB_RESPONSE_BYTES) throw new Error("GitHub CLI request failed"); return Buffer.from(result.stdout); }
+// Input must be a Buffer: Node 24 rejects string input combined with encoding:"buffer"
+// (ERR_UNKNOWN_ENCODING inside spawnSync).
+function runGh(spawn, args, input) {
+  const result = spawn("gh", args, { encoding: "buffer", maxBuffer: MAX_GITHUB_RESPONSE_BYTES, env: githubEnvironment(), ...(input === undefined ? {} : { input: Buffer.isBuffer(input) ? input : Buffer.from(String(input), "utf8") }) });
+  if (!result || result.status !== 0 || !(result.stdout instanceof Uint8Array) || result.stdout.byteLength > MAX_GITHUB_RESPONSE_BYTES) {
+    // Diagnostics must never be swallowed: gh's stderr names the real failure (missing label,
+    // auth, rate limit) and is reachable on demand without leaking into default output.
+    if (process.env.QA_NATIVE_DEBUG && result?.stderr) process.stderr.write(`qa-native gh debug: ${Buffer.from(result.stderr).toString("utf8").slice(0, 2_000)}\n`);
+    throw new Error("GitHub CLI request failed");
+  }
+  return Buffer.from(result.stdout);
+}
 function runGit(spawn, root, args) { const result = spawn("git", ["-C", root, ...args], { encoding: "buffer", maxBuffer: MAX_GITHUB_RESPONSE_BYTES, env: gitPublicationEnvironment() }); if (!result || result.status !== 0 || !(result.stdout instanceof Uint8Array) || result.stdout.byteLength > MAX_GITHUB_RESPONSE_BYTES) throw new Error("GitHub Draft PR git operation failed"); return Buffer.from(result.stdout); }
 function assertDraftDiff(spawn, root, range, files, expectedHash) { const args = ["diff", "--no-ext-diff", "--no-renames", ...range, "--"]; const diff = runGit(spawn, root, args); const names = runGit(spawn, root, ["diff", "--name-only", "--no-renames", ...range, "--"]).toString("utf8").trim().split("\n").filter(Boolean).sort(); const expected = [...files].sort(); if (`sha256:${createHash("sha256").update(diff).digest("hex")}` !== expectedHash || names.length !== expected.length || names.some((path, index) => path !== expected[index])) throw new Error("GitHub Draft PR diff does not match the verified application"); }
 function readDraftHead(spawn, repository, target) { if (!target || target.publication !== "DRAFT_PR" || !Number.isSafeInteger(target.number)) throw new Error("GitHub Draft PR target is invalid"); const branch = runGh(spawn, ["pr", "view", String(target.number), "--repo", repository, "--json", "headRefName", "--jq", ".headRefName"]).toString("utf8").trim(); if (!/^qa\/fix-[a-z0-9-]+$/.test(branch)) throw new Error("GitHub Draft PR head branch is not managed"); return branch; }

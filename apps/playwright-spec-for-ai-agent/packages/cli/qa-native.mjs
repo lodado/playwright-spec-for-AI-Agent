@@ -429,4 +429,6 @@ function lstatIfExists(path) {
 }
 
 // ponytail: .qa is single-process private storage; use descriptor-relative no-follow I/O before supporting shared writers.
-class CliError extends Error {}
+// CliError messages are printed to the operator verbatim (see runQaNative), so they must never
+// embed evidence bytes or secrets — only controlled, enumerable detail.
+export class CliError extends Error {}

@@ -5,7 +5,7 @@ import { readEvidenceArchive } from "../evidence/index.mjs";
 import { judgeWithHermes } from "../provider-hermes/index.mjs";
 import { validateAdaptiveExecutionEvidence } from "./qa-native-adaptive-evidence.mjs";
 import { readAuthenticatedRunEnvelope, verifyRunEnvelopeBindings } from "./qa-native-run-envelope.mjs";
-import { createExclusiveQaDirectory, readPrivateJson, writePrivateJsonExclusive } from "./qa-native.mjs";
+import { CliError, createExclusiveQaDirectory, readPrivateJson, writePrivateJsonExclusive } from "./qa-native.mjs";
 
 export async function judgeQaNative({ runDirectory, integrityKey, cwd, failOn }, overrides = {}) {
   const judge = overrides.judge ?? judgeWithHermes;
@@ -48,7 +48,9 @@ export async function judgeQaNative({ runDirectory, integrityKey, cwd, failOn },
   const perScenario = [];
   for (const bundle of bundles) {
     const result = await judge({ qaIr, bundle, manifest: archive.manifest, readBlob: archive.readBlob });
-    if (result?.type === "ERROR") throw new Error("QA judgment failed");
+    // The judge outcome fields are provider-controlled enumerations and redacted messages — safe
+    // to surface, and the difference between a model outage and a protocol bug lives here.
+    if (result?.type === "ERROR") throw new CliError(`QA judgment failed (scenario=${bundle.scenarioId}${result.code === undefined ? "" : ` code=${result.code}`}${result.message === undefined ? "" : ` message=${result.message}`})`);
     validateContract("JudgeResult", result, { qaIr, evidenceBundle: bundle });
     results.push(result);
     perScenario.push({ scenarioId: bundle.scenarioId, verdict: result.verdict, confidence: result.confidence });

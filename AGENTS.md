@@ -113,6 +113,25 @@ audits (no `satisfiedMilestoneIds`) for exactly this reason.
 `.invalid` path guard in `resolvePrivateQaPath` ③ judge/report refusal of `.invalid`.
 Skipped: 2.2.0-era `rmSync` destroyed the only evidence of validation failures.
 
+**Browser network policy** (route interception, origin allowances, mutation blocking)
+→ ① strict pre-interaction allows same-site (registrable domain) GET/HEAD — consumer apps serve
+their API from sibling origins, and blocking those reads breaks the page under test itself
+② the exfiltration guard (foreign-site reads) and mutation blocking stay intact — named tests
+③ post-interaction traffic keeps the stricter same-origin rule ④ docs network-policy sentences.
+Skipped: v2.4 — same-origin-only reads aborted the consumer app's own auth/plans/credit calls;
+scenarios sealed "Failed to fetch" error shells and verdicts flipped with SSR cache luck.
+
+**Timing / clock / wait-budget changes** (element observation waits, gateway deadlines,
+`withTimeout`, node timeout policy)
+→ ① repeated no-DEBUG runs against the consumer repo are the only valid verdict — `DEBUG=pw:api`
+and even the lightweight `QA_NATIVE_TRACE_TIMING=1` probe change scheduling enough to mask races
+(measured: trace-on 3/3 pass while no-DEBUG failed) ② every element-level wait must stay bounded
+below the node timeout and end as an observed fact, never as a run-killing timeout ③ the
+policy-matrix fixture suite.
+Skipped: v2.4-pre — `waitFor(visible)` and `locator.evaluate` used the full node timeout; hidden
+NOT_VISIBLE targets and detached elements killed the consumer strict one-shot (0/4 → 5/5 after
+bounding).
+
 **Deferred**: replacing the first-audit baseline exception with an explicit RUNTIME_NAVIGATION
 audit sealed by the gateway (root-cause fix for startup navigation). Requires an audit schema
 bump — run the "contracts fields" row when picked up.

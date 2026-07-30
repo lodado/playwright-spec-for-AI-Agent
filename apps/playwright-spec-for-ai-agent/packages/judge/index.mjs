@@ -15,9 +15,9 @@ const DEFAULT_JUDGE = Object.freeze({
   promptVersion: "deterministic-evidence/0.1",
 });
 const TEXT_EVIDENCE_TYPES = new Set(["DOM_SNAPSHOT", "ARIA_SNAPSHOT", "VISIBLE_TEXT", "NETWORK_LOG", "CONSOLE_LOG", "ACTION_LOG"]);
-const MAX_ITEM_CHARS = 8_192;
-const MAX_EVIDENCE_CHARS = 32_768;
-const MAX_SEMANTIC_INPUT_CHARS = 65_536;
+const MAX_ITEM_CHARS = 16_384;
+const MAX_EVIDENCE_CHARS = 65_536;
+const MAX_SEMANTIC_INPUT_CHARS = 131_072;
 
 export function evaluateDeterministically({ qaIr, bundle, manifest, readBlob }) {
   const qaIrSnapshot = jsonSnapshot(qaIr, "QA IR");
@@ -90,7 +90,8 @@ export async function judgeEvidence({ qaIr, bundle, manifest, readBlob, semantic
   let semanticInput;
   try {
     semanticInput = buildSemanticInput(qaIrSnapshot, verified, evaluation, secretList);
-  } catch {
+  } catch (error) {
+    debugJudgeFailure(error);
     return runtimeError(CONTRACT_VIOLATION, "Semantic judge input violated its contract");
   }
   if (semanticInput.evidence.length === 0) {
@@ -100,9 +101,22 @@ export async function judgeEvidence({ qaIr, bundle, manifest, readBlob, semantic
   try {
     const scenario = findScenario(qaIrSnapshot, verified.bundle.scenarioId);
     const byExpectation = new Map(evaluation.resolvedChecks.map((check) => [check.expectationId, withConfidence(check, 1)]));
-    const semanticDecision = redactValue(jsonSnapshot(await semanticJudge(semanticInput), "semantic judge decision"), secretList);
-    validateContract("SemanticJudgeDecision", semanticDecision, { semanticJudgeInput: semanticInput });
-    assertCompleteDecision(semanticInput, semanticDecision);
+    // Models occasionally emit a decision outside the contract (invalid status enum, missing
+    // expectation). One fresh sample recovers the judgment without weakening it: an invalid
+    // decision is discarded, never coerced, and two invalid samples still fail the judge.
+    let semanticDecision;
+    let lastDecisionError;
+    for (let attempt = 0; attempt < 2 && semanticDecision === undefined; attempt += 1) {
+      try {
+        const candidate = redactValue(jsonSnapshot(await semanticJudge(semanticInput), "semantic judge decision"), secretList);
+        validateContract("SemanticJudgeDecision", candidate, { semanticJudgeInput: semanticInput });
+        assertCompleteDecision(semanticInput, candidate);
+        semanticDecision = candidate;
+      } catch (decisionError) {
+        lastDecisionError = decisionError;
+      }
+    }
+    if (semanticDecision === undefined) throw lastDecisionError;
     for (const check of semanticDecision.expectationResults) byExpectation.set(check.expectationId, check);
     const expectationResults = scenario.expectations.map((expectation) => byExpectation.get(expectation.id));
     if (expectationResults.some((item) => item === undefined)) throw new Error("Every expectation requires a judgment");
@@ -114,9 +128,16 @@ export async function judgeEvidence({ qaIr, bundle, manifest, readBlob, semantic
       uncertainty: semanticDecision.uncertainty,
       inputHash: canonicalHash(semanticInput),
     });
-  } catch {
+  } catch (error) {
+    debugJudgeFailure(error);
     return runtimeError("MODEL_PROVIDER_FAILED", "Semantic judge provider failed");
   }
+}
+
+// Diagnostics must never be swallowed: the public outcome stays a redacted enumeration, but the
+// underlying error (which separates a model outage from a protocol bug) is reachable on demand.
+function debugJudgeFailure(error) {
+  if (process.env.QA_NATIVE_DEBUG) process.stderr.write(`qa-native judge debug: ${error?.stack ?? String(error?.message ?? error)}\n`);
 }
 
 function deterministicCheck(expectation, bundle, readBlob) {
@@ -245,12 +266,19 @@ function buildSemanticInput(qaIr, verified, evaluation, secrets) {
     });
   }
 
+  const clues = expectationClues(scenario, unresolved);
   let remaining = MAX_EVIDENCE_CHARS;
   const evidence = [];
   for (const item of candidates.sort((left, right) => left.id.localeCompare(right.id))) {
-    if (remaining === 0 || evidence.some((entry) => entry.id === item.id)) continue;
+    // A page observed before it rendered seals empty artifacts; an empty item carries no signal
+    // for the judge and would violate the SemanticJudgeInput contract, making the run unjudgeable.
+    if (item.content.length === 0 || remaining === 0 || evidence.some((entry) => entry.id === item.id)) continue;
     const length = Math.min(item.content.length, MAX_ITEM_CHARS, remaining);
-    evidence.push({ id: item.id, kind: item.kind, content: item.content.slice(0, length), truncated: item.truncated || length < item.content.length });
+    // Head-slicing dropped whatever the routed expectations were actually about whenever it sat
+    // past the item budget (the judge then answers TRUNCATED_DOM). Centre the slice on the
+    // earliest clue match instead; items whose clues fit in the head keep the plain head slice.
+    const start = clueWindowStart(item.content, clues, length);
+    evidence.push({ id: item.id, kind: item.kind, content: item.content.slice(start, start + length), truncated: item.truncated || length < item.content.length });
     remaining -= length;
   }
 
@@ -265,6 +293,35 @@ function buildSemanticInput(qaIr, verified, evaluation, secrets) {
   const validated = validateContract("SemanticJudgeInput", input);
   if (JSON.stringify(validated).length > MAX_SEMANTIC_INPUT_CHARS) throw new Error("Semantic judge input exceeds size limit");
   return deepFreeze(validated);
+}
+
+// Literal strings that identify what the routed expectations are about: testIds, accessible
+// names, expected texts. They anchor evidence slicing to the relevant part of large artifacts.
+function expectationClues(scenario, unresolved) {
+  const clues = [];
+  for (const expectation of scenario.expectations) {
+    if (!unresolved.has(expectation.id)) continue;
+    for (const value of [expectation.target?.testId, promptLiteral(expectation.target?.accessibleName), promptLiteral(expectation.target?.text), promptLiteral(expectation.text), promptLiteral(expectation.expected)]) {
+      if (typeof value === "string" && value.length >= 2) clues.push(value);
+    }
+  }
+  return clues;
+}
+
+function promptLiteral(value) {
+  if (typeof value === "string") return value;
+  return value?.kind === "literal" || value?.kind === "TEXT" ? value.value : undefined;
+}
+
+function clueWindowStart(content, clues, length) {
+  if (content.length <= length) return 0;
+  let earliest = -1;
+  for (const clue of clues) {
+    const index = content.indexOf(clue);
+    if (index !== -1 && (earliest === -1 || index < earliest)) earliest = index;
+  }
+  if (earliest === -1 || earliest + Math.min(64, length) <= length) return 0;
+  return Math.min(Math.max(0, earliest - Math.floor(length / 2)), content.length - length);
 }
 
 function assertCompleteDecision(input, decision) {

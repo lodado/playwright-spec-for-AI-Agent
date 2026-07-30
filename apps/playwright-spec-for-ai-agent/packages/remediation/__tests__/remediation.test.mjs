@@ -104,6 +104,28 @@ function judgeResult(evidenceRefs = ["artifact-visible-text"]) {
 }
 
 describe("repository-aware remediation vertical slice", () => {
+  it("classifies a judge-flagged context or auth mismatch as ENVIRONMENT", () => {
+    const judgment = judgeResult();
+    judgment.uncertainty = [{ code: "CONTEXT_MISMATCH", description: "Live plan state does not match the mocked INACTIVE state." }];
+    const diagnosis = diagnoseFailure({ qaIr: qaIr(), judgeResult: judgment, evidenceBundle: evidenceBundle() });
+    expect(diagnosis.origin).toBe("ENVIRONMENT");
+    expect(diagnosis.remediationEligible).toBe(false);
+  });
+
+  it("ranks the executed spec file first among pure route matches", () => {
+    const repository = fixtureRepository({ "tests/dashboard.spec.ts": "test(\"dashboard\", () => visit(\"/dashboard\"));\n", "src/routes.js": "export const dashboardRoute = \"/dashboard\";\n" });
+    const qa = qaIr();
+    qa.source.uri = "tests/dashboard.spec.ts";
+    const evidence = evidenceBundle();
+    const judgment = judgeResult();
+    const diagnosis = diagnoseFailure({ qaIr: qa, judgeResult: judgment, evidenceBundle: evidence });
+    const codeContext = locateCode({ snapshot: createLocalRepositorySnapshot({ root: repository }), diagnosis, judgeResult: judgment, qaIr: qa, evidenceBundle: evidence });
+
+    const paths = codeContext.candidates.map((candidate) => candidate.path);
+    expect(paths).toContain("tests/dashboard.spec.ts");
+    expect(paths.indexOf("tests/dashboard.spec.ts")).toBeLessThan(paths.indexOf("src/routes.js"));
+  });
+
   it("produces evidence-backed locations, suggestion-only guidance, and Markdown", () => {
     const repository = fixtureRepository();
     const qa = qaIr();
@@ -215,9 +237,13 @@ describe("repository-aware remediation vertical slice", () => {
   });
 });
 
-function fixtureRepository() {
+function fixtureRepository(extraFiles = {}) {
   const root = mkdtempSync(join(tmpdir(), "qa-native-remediation-"));
   mkdirSync(join(root, "src", "secrets"), { recursive: true });
+  for (const [path, content] of Object.entries(extraFiles)) {
+    mkdirSync(join(root, path, ".."), { recursive: true });
+    writeFileSync(join(root, path), content);
+  }
   writeFileSync(join(root, "src", "Dashboard.jsx"), [
     "export function Dashboard() {",
     "  const apiKey = 'LOCATOR-SECRET';",

@@ -81,7 +81,7 @@ function fixture(options = {}) {
     id: "visible-text",
     type: "VISIBLE_TEXT",
     contentType: "text/plain",
-    content: "Dashboard Save balanced layout stored-secret",
+    content: options.artifactContent ?? "Dashboard Save balanced layout stored-secret",
   });
   const facts = [
     { id: "fact-url", kind: "URL", value: options.url ?? "https://example.test/dashboard" },
@@ -205,6 +205,34 @@ describe("semantic-judgment routing", () => {
     expect(validateContract("SemanticJudgeInput", input)).toBe(input);
   });
 
+  it("keeps expectation-adjacent evidence when the relevant section sits past the item budget", () => {
+    // Consumer repro: a 51KB DOM whose subscription section sits at the tail was head-sliced out
+    // of the prompt, so the judge answered TRUNCATED_DOM / NOT_OBSERVED. Slicing must prioritise
+    // the window around the routed expectation's clues (testId, expected text) over the head.
+    const clue = "<h1 data-testid=\"heading\">Dashboard heading rendered late</h1>";
+    const evidence = fixture({ omitText: true, artifactContent: `${"<div>filler</div>".repeat(3_000)}${clue}` });
+    const ir = qaIr({ semantic: false });
+    const evaluation = evaluateDeterministically({ qaIr: ir, ...evidence });
+    const input = buildSemanticJudgeInput({ qaIr: ir, ...evidence, evaluation });
+
+    const visibleText = input.evidence.find((item) => item.kind === "VISIBLE_TEXT");
+    expect(visibleText.content).toContain("data-testid=\"heading\"");
+    expect(visibleText.truncated).toBe(true);
+  });
+
+  it("omits empty evidence items instead of violating the semantic input contract", () => {
+    // A page observed before it rendered seals an empty VISIBLE_TEXT artifact; an empty item
+    // carries no signal for the judge and must not make the whole run unjudgeable.
+    const evidence = fixture({ omitText: true, artifactContent: "" });
+    const ir = qaIr({ semantic: false });
+    const evaluation = evaluateDeterministically({ qaIr: ir, ...evidence });
+    const input = buildSemanticJudgeInput({ qaIr: ir, ...evidence, evaluation });
+
+    expect(validateContract("SemanticJudgeInput", input)).toBe(input);
+    expect(input.evidence.length).toBeGreaterThan(0);
+    expect(input.evidence.every((item) => item.content.length > 0)).toBe(true);
+  });
+
   it("leaves routed expectations without a judgment key when the scenario is not listed", () => {
     const evidence = fixture({ text: "Overview panel" });
     const ir = qaIr({ semantic: false });
@@ -269,6 +297,25 @@ describe("offline judge runtime", () => {
     expect(semanticJudge.mock.calls[0][0].expectations.map((item) => item.id)).toEqual(["visual"]);
   });
 
+  it("resamples the model once when a decision violates the contract", async () => {
+    // gpt-class models occasionally emit a status outside the enum; one fresh sample recovers the
+    // judgment without weakening it — an invalid decision is discarded, never coerced.
+    const evidence = fixture();
+    let calls = 0;
+    const semanticJudge = vi.fn(async (input) => {
+      calls += 1;
+      if (calls === 1) {
+        const invalid = semanticDecision(input);
+        return { ...invalid, expectationResults: invalid.expectationResults.map((item) => ({ ...item, status: "PASSED" })) };
+      }
+      return semanticDecision(input);
+    });
+    const result = await judgeEvidence({ qaIr: qaIr(), ...evidence, semanticJudge });
+
+    expect(semanticJudge).toHaveBeenCalledTimes(2);
+    expect(result.verdict).toBe("PASS");
+  });
+
   it("keeps model/provider failures separate from product verdicts", async () => {
     const evidence = fixture();
     const providerFailure = await judgeEvidence({
@@ -331,7 +378,7 @@ describe("offline judge runtime", () => {
   it("rejects oversized semantic input before calling a model", async () => {
     const evidence = fixture();
     const oversized = qaIr();
-    oversized.suites[0].scenarios[0].title = "x".repeat(70_000);
+    oversized.suites[0].scenarios[0].title = "x".repeat(140_000);
     const semanticJudge = vi.fn();
     const result = await judgeEvidence({ qaIr: oversized, ...evidence, semanticJudge });
 

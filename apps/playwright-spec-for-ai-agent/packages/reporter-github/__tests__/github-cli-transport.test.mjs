@@ -19,22 +19,45 @@ describe("GitHub CLI Issue transport", () => {
     vi.stubEnv("APP_BROWSER_PASSWORD", "browser-secret");
     const revision = "a".repeat(40);
     const content = Buffer.from("export const dashboard = true;\n");
-    const spawn = vi.fn()
-      .mockReturnValueOnce({ status: 0, stdout: Buffer.from(`${revision}\n`) })
-      .mockReturnValueOnce({ status: 0, stdout: content })
-      .mockReturnValueOnce({ status: 0, stdout: Buffer.from("https://github.com/owner/example/issues/42\n") });
+    const spawn = vi.fn((command, args) => {
+      if (args[0] === "label") return { status: 1, stdout: Buffer.alloc(0), stderr: Buffer.from("already exists") };
+      if (args[0] === "issue") return { status: 0, stdout: Buffer.from("https://github.com/owner/example/issues/42\n") };
+      if (args.some((value) => String(value).includes("/contents/"))) return { status: 0, stdout: content };
+      return { status: 0, stdout: Buffer.from(`${revision}\n`) };
+    });
     const transport = createGitHubCliIssueTransport({ spawn });
     const files = [{ path: "src/Dashboard.jsx", contentHash: `sha256:${createHash("sha256").update(content).digest("hex")}` }];
 
     expect(await transport.verifyCodeContext({ repository: "owner/example", revision, files })).toBe(true);
-    expect(await transport.createIssue({ repository: "owner/example", title: "[QA] Dashboard", body: "## Failure", labels: ["qa-runtime"] })).toEqual({ number: 42, url: "https://github.com/owner/example/issues/42" });
-    expect(spawn.mock.calls[1][1]).toContain("repos/owner/example/contents/src/Dashboard.jsx");
-    expect(spawn.mock.calls[2][1]).toEqual(expect.arrayContaining(["issue", "create", "--label", "qa-runtime"]));
-    expect(spawn.mock.calls[2][2].input).toBe("## Failure");
-    expect(spawn.mock.calls[2][2].env).toMatchObject({ GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" });
-    expect(spawn.mock.calls[2][2].env.QA_NATIVE_INTEGRITY_KEY).toBeUndefined();
-    expect(spawn.mock.calls[2][2].env.QA_NATIVE_PUBLICATION_KEY).toBeUndefined();
-    expect(spawn.mock.calls[2][2].env.APP_BROWSER_PASSWORD).toBeUndefined();
+    expect(await transport.createIssue({ repository: "owner/example", title: "[QA] Dashboard", body: "## Failure", labels: ["qa-runtime", "scenario:dashboard"] })).toEqual({ number: 42, url: "https://github.com/owner/example/issues/42" });
+    // Labels are ensured idempotently before the issue call — a pre-existing label (non-zero
+    // exit) must not fail the publication.
+    const labelCalls = spawn.mock.calls.filter(([, args]) => args[0] === "label");
+    expect(labelCalls.map(([, args]) => args[2])).toEqual(["qa-runtime", "scenario:dashboard"]);
+    const issueCall = spawn.mock.calls.find(([, args]) => args[0] === "issue");
+    expect(issueCall[1]).toEqual(expect.arrayContaining(["issue", "create", "--label", "qa-runtime", "--label", "scenario:dashboard"]));
+    // Node 24 rejects string input combined with encoding:"buffer" (ERR_UNKNOWN_ENCODING) —
+    // payloads must reach spawnSync as buffers.
+    expect(issueCall[2].input).toEqual(Buffer.from("## Failure", "utf8"));
+    expect(issueCall[2].env).toMatchObject({ GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" });
+    expect(issueCall[2].env.QA_NATIVE_INTEGRITY_KEY).toBeUndefined();
+    expect(issueCall[2].env.QA_NATIVE_PUBLICATION_KEY).toBeUndefined();
+    expect(issueCall[2].env.APP_BROWSER_PASSWORD).toBeUndefined();
+  });
+
+  it("treats a null pull_request from the gh jq projection as an issue", async () => {
+    // The search projection (`--jq {…,pull_request}`) emits null for plain issues; comparing with
+    // === undefined misclassified every found issue as a draft PR and failed dedup validation.
+    const fingerprint = `sha256:${"a".repeat(64)}`;
+    const spawn = vi.fn((command, args) => {
+      if (args.includes("search/issues")) return { status: 0, stdout: Buffer.from(JSON.stringify({ total_count: 1, items: [{ number: 42, state: "open", html_url: "https://github.com/owner/example/issues/42", pull_request: null }] })) };
+      return { status: 0, stdout: Buffer.from(JSON.stringify({ number: 42, state: "open", html_url: "https://github.com/owner/example/issues/42", body: `<!-- qa-fingerprint: ${fingerprint} -->` })) };
+    });
+    const transport = createGitHubCliIssueTransport({ spawn });
+    const matches = await transport.findOpenPublications({ repository: "owner/example", fingerprint });
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0].publication).toBe("ISSUE");
   });
 
   it("fails closed on content drift and CLI errors", async () => {
@@ -72,19 +95,26 @@ describe("GitHub CLI Issue transport", () => {
   });
 
   it("lists and appends immutable occurrence comments", async () => {
-    const body = "## QA occurrence\n\n<!-- qa-occurrence: c2lnbmVk -->";
+    const marker = "<!-- qa-occurrence: c2lnbmVk -->";
+    const body = `## QA occurrence\n\n${marker}`;
     const created = { id: 123, html_url: "https://github.com/owner/example/issues/4#issuecomment-123", body, created_at: "2026-07-26T00:00:00.000Z" };
+    // gh rejects --jq combined with --slurp, so the transport receives raw paginated pages
+    // (array per page) and filters client-side by the authenticated login.
+    const pages = [[
+      { ...created, user: { login: "qa-runtime-bot[bot]" } },
+      { id: 124, html_url: "https://github.com/owner/example/issues/4#issuecomment-124", body: "unrelated comment", created_at: "2026-07-26T00:00:01.000Z", user: { login: "someone-else" } },
+    ]];
     const spawn = vi.fn()
       .mockReturnValueOnce({ status: 0, stdout: Buffer.from("qa-runtime-bot[bot]\n") })
-      .mockReturnValueOnce({ status: 0, stdout: Buffer.from(JSON.stringify([created])) })
+      .mockReturnValueOnce({ status: 0, stdout: Buffer.from(JSON.stringify(pages)) })
       .mockReturnValueOnce({ status: 0, stdout: Buffer.from(JSON.stringify(created)) });
     const transport = createGitHubCliIssueTransport({ spawn });
     const target = { repository: "owner/example", publication: "ISSUE", number: 4, url: "https://github.com/owner/example/issues/4" };
 
-    expect(await transport.listOccurrenceRecords(target)).toEqual([created]);
+    expect(await transport.listOccurrenceRecords(target)).toEqual([{ id: 123, html_url: created.html_url, body: marker, created_at: created.created_at }]);
     expect(await transport.createOccurrenceRecord({ ...target, body })).toEqual({ id: 123, url: created.html_url, body, createdAt: created.created_at });
     expect(spawn.mock.calls[1][1]).toEqual(expect.arrayContaining(["repos/owner/example/issues/4/comments", "--paginate", "--slurp"]));
-    expect(spawn.mock.calls[1][1].join(" ")).toContain("qa-runtime-bot[bot]");
+    expect(spawn.mock.calls[1][1]).not.toContain("--jq");
     expect(spawn.mock.calls[2][1]).toEqual(expect.arrayContaining(["--method", "POST", "--input", "-"]));
     expect(JSON.parse(spawn.mock.calls[2][2].input.toString())).toEqual({ body });
   });
