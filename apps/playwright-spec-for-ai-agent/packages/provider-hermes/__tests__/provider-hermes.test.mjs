@@ -591,7 +591,7 @@ describe("Hermes judge provider", () => {
       provider: "hermes",
       model: "hermes-test",
       modelVersion: "2026-07-25",
-      promptVersion: "hermes-evidence-judge/0.3",
+      promptVersion: "hermes-evidence-judge/0.4",
     });
     expect(transport).toHaveBeenCalledTimes(1);
     const [query, maxTurns, options] = transport.mock.calls[0];

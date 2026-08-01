@@ -8,6 +8,7 @@
 - Retry only timed-out or invalid full-spec batches at a smaller size, and constrain live applicability to runtime-mapped scenario keys and pre-flow prerequisites so copied hashes or post-action titles cannot drop coverage.
 - Limit extracted applicability to read-only observable initial state; future mock responses, fixture identities, uploads, destinations, and toasts remain authored flow or claims instead of becoming false preflight skips.
 - Allow one additional independently reviewed abstraction revision before failing closed, and invalidate old abstraction cache decisions without changing QA IR or run-artifact schemas.
+- Prevent evidence judges from treating absent internal mock/setup requests as applicability conflicts when sealed page evidence directly establishes the authored visible state.
 
 ## 2.8.0
 

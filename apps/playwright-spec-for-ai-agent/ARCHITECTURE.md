@@ -131,6 +131,12 @@ and every downstream command refuses them.
 applicability is affirmatively not met is `SKIP`, not `PASS`, `FAIL`, or
 `MANUAL_REVIEW`.
 
+Missing evidence for an internal mock, helper, or setup request is not an
+applicability conflict when the required route/account/product state and the
+user-visible claim are directly established by sealed page evidence. Internal
+network setup matters only when that network behavior is itself an authored
+claim or is required to distinguish the visible product state.
+
 `packages/review/index.mjs` uses an independent invocation to check grounding.
 Review approval means the judgment is evidence-supported; it does not change
 the verdict and is not an application PASS.

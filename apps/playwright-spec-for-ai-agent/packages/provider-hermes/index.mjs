@@ -12,7 +12,7 @@ import { normalizePlaywrightSpecFallback } from "../adapter-playwright/index.mjs
 import { normalizeFullSpecAbstraction, normalizeFullSpecReview } from "../abstract-playwright/index.mjs";
 import { readHermesModelConfig, runHermes } from "../../scripts/hermes-runner.mjs";
 
-const PROMPT_VERSION = "hermes-evidence-judge/0.3";
+const PROMPT_VERSION = "hermes-evidence-judge/0.4";
 export const JUDGMENT_REVIEW_PROMPT_VERSION = "hermes-judgment-review/0.3";
 const MAX_TURNS = 3;
 const MAX_QUERY_CHARS = 70_000;
@@ -451,6 +451,7 @@ export function buildHermesJudgeQuery(input) {
     "Required JSON shape: {\"expectationResults\":[{\"expectationId\":string,\"status\":\"MATCHED|CONTRADICTED|NOT_OBSERVED|AMBIGUOUS|NOT_APPLICABLE\",\"confidence\":number,\"evidenceRefs\":[string],\"rationale\":string}],\"uncertainty\":[{\"code\":string,\"description\":string}]}",
     "Expectations marked judgment:\"SEMANTIC\" are semantic claims, possibly extracted from statically unsupported test code. Infer whether each complete claim is supported by the sealed DOM, URL, network, and action evidence. MATCHED requires affirmative evidence, CONTRADICTED requires contrary evidence, and missing proof must be NOT_OBSERVED or AMBIGUOUS. Never treat absence from truncated or missing evidence as proof of absence.",
     "Gate judgment on scenario applicability before evaluating claims. If sealed evidence does not establish every material applicability condition, mark every claim NOT_APPLICABLE; if applicability evidence conflicts or cannot be resolved, use AMBIGUOUS. Never emit MATCHED or CONTRADICTED from a different account, plan, boundary value, route, or retained state.",
+    "Do not treat missing evidence for internal mocks, helpers, auth bootstrap calls, or setup requests as an applicability conflict when sealed page evidence directly establishes the required route/account/product state and visible claim. Internal network setup is material only when that network behavior is itself authored claim or needed distinguish visible product state.",
     "First verify the scenario applicability, authored when-flow, and requiredPath from evidence. A redirect, login screen, wrong route, unmet applicability, or missing authored interaction cannot contradict the claim; use NOT_APPLICABLE, NOT_OBSERVED, or AMBIGUOUS unless relevant evidence affirmatively proves the opposite after the required state and flow were reached.",
     JSON.stringify(input),
   ].join("\n\n");
