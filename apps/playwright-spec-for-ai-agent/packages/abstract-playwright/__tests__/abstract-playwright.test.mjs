@@ -19,8 +19,8 @@ const manifest = extractPlaywrightStaticManifest({ source, sourcePath: "dashboar
 const candidate = {
   status: "ABSTRACTED",
   tests: [
-    { testId: manifest.tests[0].testId, applicability: ["the dashboard is available"], when: ["open the dashboard"], claims: ["Dashboard content is visible"], classification: "LIVE_EXECUTABLE" },
-    { testId: manifest.tests[1].testId, applicability: [], when: [], claims: ["The mocked API response is rendered"], classification: "MOCK_ONLY" },
+    { testId: manifest.tests[0].testId, given: ["the dashboard is available"], when: ["open the dashboard"], then: ["Dashboard content is visible"], classification: "LIVE_EXECUTABLE" },
+    { testId: manifest.tests[1].testId, given: [], when: [], then: ["The mocked API response is rendered"], classification: "MOCK_ONLY" },
   ],
 };
 
@@ -37,6 +37,9 @@ describe("AI-first Playwright abstraction", () => {
     expect(() => normalizeFullSpecAbstraction({ ...candidate, tests: candidate.tests.map(test => ({ ...test, actions: [] })) }, { source, manifest })).toThrow(/unsupported fields/);
     expect(() => normalizeFullSpecAbstraction({ ...candidate, tests: candidate.tests.map(test => ({ ...test, testId: "invented" })) }, { source, manifest })).toThrow(/testId/);
     expect(() => normalizeFullSpecAbstraction({ ...candidate, tests: [candidate.tests[0], candidate.tests[0]] }, { source, manifest })).toThrow(/unique and complete/);
+    const legacy = { ...candidate, tests: candidate.tests.map(({ given, then, ...test }) => ({ ...test, applicability: given, claims: then })) };
+    expect(normalizeFullSpecAbstraction(legacy, { source, manifest })).toEqual(candidate);
+    expect(() => normalizeFullSpecAbstraction({ ...candidate, tests: candidate.tests.map(test => ({ ...test, claims: test.then })) }, { source, manifest })).toThrow(/Given, When, Then/);
   });
 
   it("normalizes model order back to immutable manifest order", () => {
@@ -46,14 +49,14 @@ describe("AI-first Playwright abstraction", () => {
 
   it("uses an independent review and allows exactly one reviewed revision", async () => {
     const revised = structuredClone(candidate);
-    revised.tests[0].claims = ["Dashboard heading is visible"];
+    revised.tests[0].then = ["Dashboard heading is visible"];
     const extract = vi.fn().mockResolvedValueOnce(candidate).mockResolvedValueOnce(revised);
     const review = vi.fn().mockResolvedValueOnce({ status: "REVISE", issues: ["Preserve the heading requirement"] }).mockResolvedValueOnce({ status: "APPROVED" });
 
     const artifact = await abstractPlaywrightSource({ source, sourcePath: "dashboard.spec.ts", manifest, extract, review });
 
     expect(artifact.status).toBe("APPROVED");
-    expect(artifact.tests[0].claims).toEqual(["Dashboard heading is visible"]);
+    expect(artifact.tests[0].then).toEqual(["Dashboard heading is visible"]);
     expect(artifact.source.manifestHash).toBeDefined();
     expect(artifact.attempts.map(item => item.reviewStatus)).toEqual(["REVISE", "APPROVED"]);
     expect(extract.mock.calls[0][0].manifest).toEqual(manifest);
@@ -73,7 +76,7 @@ describe("abstract Playwright compiler", () => {
   it("takes inherited policy, page, title, and provenance only from static manifest", async () => {
     const input = `// @qa-scenario: MENU\n// @qa-page: /dashboard\n// @qa-live-policy: safe-interaction\ntest.describe("menu", () => {\n  test("opens menu", async ({ page }) => { await page.getByRole("button", { name: "Menu" }).click(); });\n});\n`;
     const staticManifest = extractPlaywrightStaticManifest({ source: input, sourcePath: "menu.spec.ts" });
-    const extracted = { status: "ABSTRACTED", tests: [{ testId: staticManifest.tests[0].testId, applicability: ["a user is signed in"], when: ["the menu is opened"], claims: ["the menu is visible"], classification: "LIVE_EXECUTABLE" }] };
+    const extracted = { status: "ABSTRACTED", tests: [{ testId: staticManifest.tests[0].testId, given: ["a user is signed in"], when: ["the menu is opened"], then: ["the menu is visible"], classification: "LIVE_EXECUTABLE" }] };
     const artifact = await abstractPlaywrightSource({ source: input, sourcePath: "menu.spec.ts", manifest: staticManifest, extract: async () => extracted, review: async () => ({ status: "APPROVED" }) });
     const result = compileAbstractPlaywrightArtifact({ artifact, manifest: staticManifest, source: input, sourcePath: "menu.spec.ts" });
 

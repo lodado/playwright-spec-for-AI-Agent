@@ -43,8 +43,9 @@ npx qa-native execute --page=dashboard --run-dir=.qa/runs/dashboard-1
 ```
 
 `abstract-ai` resolves the same config-selected specs as `execute`, asks one
-text-only model to extract every test's applicability, authored flow, observable
-claims, and live classification, then asks a fresh model invocation to review
+text-only model to extract every test as explicit Given (initial observable
+conditions), When (authored flow), and Then (observable claims), plus its live
+classification, then asks a fresh model invocation to review
 the candidate against the complete source and immutable manifest. It permits up to three reviewed revisions.
 Results are cached as owner-only JSON in `.qa/abstract/cache/` with Markdown
 views in `.qa/abstract/<page>/`;
@@ -56,13 +57,15 @@ failed batch until it succeeds or a single-test batch fails; successful batches
 are not repeated. A retryable single-test failure gets one final retry before
 the spec fails closed.
 
-Approved applicability descriptions are evaluated against one bounded live-page
+Approved Given descriptions are compiled as applicability conditions and evaluated against one bounded live-page
 ARIA observation before per-scenario execution. The selector cannot grant
 policy or actions and receives no titles, claims, destination URLs, dialogs,
 toasts, or other post-action state. Only conditions that must already hold
 before the authored flow and can be established by read-only observation may
-form a conflict. Future mock responses and fixture identities stay in authored
-flow or claims. Only a complete
+form a conflict. Future mock responses and fixture identities stay in When or
+Then. Hidden API setup also stays out of Given when the rendered Then claim
+directly establishes the relevant product state. Given never presupposes the
+subject evaluated by Then, so a missing target remains judgeable. Only a complete
 `NOT_APPLICABLE` decision with confidence at
 least `0.8` skips execution; low-confidence, malformed, missing, or failed
 selection remains `AMBIGUOUS` and executes for backward-compatible coverage.

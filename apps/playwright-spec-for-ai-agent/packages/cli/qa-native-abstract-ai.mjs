@@ -94,7 +94,7 @@ export function renderAbstractMarkdown(record) {
   for (const test of artifact.tests) {
     const staticTest = record.manifest.tests.find(item => item.testId === test.testId);
     lines.push(`## ${markdownText(staticTest?.title ?? test.testId)}`, "", `- Test ID: \`${markdownText(test.testId)}\``, `- Policy: \`${markdownText(staticTest?.livePolicyAnnotation ?? "blocked") }\``, `- Classification: **${test.classification}**`);
-    for (const [label, values] of [["Applicability", test.applicability], ["When", test.when], ["Claims", test.claims]]) {
+    for (const [label, values] of [["Given", test.given], ["When", test.when], ["Then", test.then]]) {
       lines.push("", `### ${label}`, ...values.map(value => `- ${markdownText(value)}`));
     }
     lines.push("");

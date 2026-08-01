@@ -84,9 +84,9 @@ describe("Playwright full-spec abstraction", () => {
     status: "ABSTRACTED",
     tests: [{
       testId: manifest.tests[0].testId,
-      applicability: ["a restorable document exists"],
+      given: ["a restorable document exists"],
       when: ["the document is restored"],
-      claims: ["exactly one restore request is sent"],
+      then: ["exactly one restore request is sent"],
       classification: "LIVE_EXECUTABLE",
     }],
   };
@@ -126,7 +126,12 @@ describe("Playwright full-spec abstraction", () => {
   });
 
   it("bounds full-source prompts independently from the smaller slice prompt", () => {
-    expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("hermes-playwright-full-spec-abstraction/0.17");
+    expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("hermes-playwright-full-spec-abstraction/0.21");
+    expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("explicit Given / When / Then behavioral contract");
+    expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("not a reconstruction of fixtures or hidden setup");
+    expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("must not presuppose the presence");
+    expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("A route-only Given is valid");
+    expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain('"given":["..."]');
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("structured test source slice");
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("test title and nearby authored comments");
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("Do not classify a test MOCK_ONLY merely");
@@ -136,7 +141,11 @@ describe("Playwright full-spec abstraction", () => {
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("Do not copy shared setup into a test");
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest, previousCandidate: candidate, reviewerIssues: ["fix"] })).toContain("minimum, not an exhaustive list");
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest, previousCandidate: candidate, reviewerIssues: ["fix"] })).toContain("preserve all unchallenged fields");
-    expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("hermes-playwright-full-spec-review/0.16");
+    expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("hermes-playwright-full-spec-review/0.20");
+    expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("Given / When / Then boundary");
+    expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("Reject fixture reconstruction in Given");
+    expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("converts a real regression into NOT_APPLICABLE");
+    expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("Do not request hidden plan");
     expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("assertions alone");
     expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("classification independently from static execution policy");
     expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("policy metadata is the only rationale");
@@ -175,9 +184,9 @@ describe("Playwright full-spec abstraction", () => {
         status: "ABSTRACTED",
         tests: payload.tests.map(test => ({
           testId: test.testId,
-          applicability: ["the page is available"],
+          given: ["the page is available"],
           when: ["the page is observed"],
-          claims: [`${test.title} is satisfied`],
+          then: [`${test.title} is satisfied`],
           classification: "LIVE_EXECUTABLE",
         })),
       };
@@ -200,7 +209,7 @@ describe("Playwright full-spec abstraction", () => {
     const extract = createHermesFullSpecAbstractor({ transport: async query => {
       const payload = JSON.parse(query.split("\n\n").at(-1));
       sizes.push(payload.tests.length);
-      const tests = payload.tests.map(test => ({ testId: test.testId, applicability: ["available"], when: ["observed"], claims: ["visible"], classification: "LIVE_EXECUTABLE" }));
+      const tests = payload.tests.map(test => ({ testId: test.testId, given: ["available"], when: ["observed"], then: ["visible"], classification: "LIVE_EXECUTABLE" }));
       return { status: "ABSTRACTED", tests: payload.tests.length > 4 ? tests.slice(0, -1) : tests };
     } });
 
@@ -219,7 +228,7 @@ describe("Playwright full-spec abstraction", () => {
       const payload = JSON.parse(query.split("\n\n").at(-1));
       extractionSizes.push(payload.tests.length);
       if (payload.tests.length > 4) throw Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
-      return { status: "ABSTRACTED", tests: payload.tests.map(test => ({ testId: test.testId, applicability: ["available"], when: ["observed"], claims: ["visible"], classification: "LIVE_EXECUTABLE" })) };
+      return { status: "ABSTRACTED", tests: payload.tests.map(test => ({ testId: test.testId, given: ["available"], when: ["observed"], then: ["visible"], classification: "LIVE_EXECUTABLE" })) };
     } });
     const candidate = await extract({ sourcePath: "tests/batched.spec.ts", source: batchedSource, manifest: batchedManifest });
     const reviewSizes = [];
@@ -257,7 +266,7 @@ describe("Playwright full-spec abstraction", () => {
     const extract = createHermesFullSpecAbstractor({ transport: async query => {
       const payload = JSON.parse(query.split("\n\n").at(-1));
       extractionSizes.push(payload.tests.length);
-      return { status: "ABSTRACTED", tests: payload.tests.map(test => ({ testId: test.testId, applicability: ["available"], when: ["observed"], claims: ["visible"], classification: "LIVE_EXECUTABLE" })) };
+      return { status: "ABSTRACTED", tests: payload.tests.map(test => ({ testId: test.testId, given: ["available"], when: ["observed"], then: ["visible"], classification: "LIVE_EXECUTABLE" })) };
     } });
     const extracted = await extract({ sourcePath: "tests/large.spec.ts", source: largeSource, manifest: largeManifest });
     const reviewSizes = [];

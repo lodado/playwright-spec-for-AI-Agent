@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.10.0
+
+### Minor Changes
+
+- Extract explicit Given, When, and Then semantics before live applicability selection.
+
 ## 2.9.0
 
 ### Minor Changes

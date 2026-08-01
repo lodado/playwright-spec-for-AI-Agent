@@ -14,7 +14,7 @@ declare a verdict, select a file, or turn its own claim into a test result.
 ```text
 Playwright spec
   → static manifest (AST: identity, policy, fixtures, safe authored targets)
-  → abstract-ai (applicability, authored flow, observable claims)
+  → abstract-ai (explicit Given / When / Then semantics)
   → applicability preflight (one read-only live-page observation)
   → adaptive or strict execution (applicable/ambiguous scenarios only)
   → sealed evidence + authenticated run envelope
@@ -40,12 +40,24 @@ not attempt to understand the full behavioral meaning of a test.
 ### 2. Abstract AI
 
 `packages/provider-hermes/index.mjs` extracts, and independently reviews, each
-test's:
+test as an explicit behavioral contract:
 
-- applicability conditions,
-- authored when-flow,
-- observable claims,
+- **Given**: only material initial conditions observable before the flow,
+- **When**: the authored user or system flow,
+- **Then**: observable claims that must hold after the flow,
 - live classification.
+
+Given is not a reconstruction of test fixtures or hidden API setup. When a
+Then claim directly exposes the relevant product state, the internal mock,
+endpoint, or payload that produced it is not an additional applicability gate.
+Given also cannot presuppose the presence, absence, or state of the subject
+that Then evaluates; otherwise a real product regression would be skipped as
+not applicable instead of reaching judgment.
+
+The approved abstraction artifact uses `given`, `when`, and `then` directly.
+During compilation these map to the existing QA IR semantic fields
+`applicability`, `when`, and `claims`, preserving old authenticated run and
+judge compatibility while making the AI extraction boundary unambiguous.
 
 `packages/abstract-playwright/index.mjs` combines approved semantics with the
 immutable static manifest. AI output cannot add policy, selectors, actions,
@@ -66,7 +78,7 @@ Three reviewed revisions are allowed; a fourth independent rejection remains
 
 Adaptive execution performs one read-only observation of the configured live
 page before opening per-scenario sessions. Hermes compares that observation
-with only every compiled scenario's approved, pre-flow applicability
+with only every compiled scenario's approved, pre-flow Given conditions
 conditions and returns one decision per scenario. Scenario titles, claims, and
 post-action states are not selector input, so an authored destination or dialog
 cannot be mistaken for a missing initial prerequisite:

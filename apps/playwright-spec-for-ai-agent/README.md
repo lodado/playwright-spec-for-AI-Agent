@@ -23,7 +23,9 @@ flows or mutating staging state.
 Playwright spec → AST policy manifest → independent AI extraction → live applicability preflight → policy-bounded browser evidence → judgment → independent review → code-backed report
 ```
 
-Page runs send each complete selected spec to a text-only Hermes extractor, then
+Page runs send each complete selected spec to a text-only Hermes extractor that
+returns explicit Given (initial observable state), When (authored flow), and Then
+(observable outcome) fields, then
 give only the source, immutable manifest, and candidate to a fresh independent reviewer. Up to three
 reviewed revisions are allowed; a fourth rejection fails closed. Approved meaning is cached as
 private JSON under `.qa/abstract/cache/` and page-local Markdown under
@@ -99,11 +101,14 @@ For approved abstract specs, `execute` first observes the live page once and
 selects scenario applicability. High-confidence conflicts become
 `NOT_APPLICABLE` and are not executed; ambiguous scenarios retain the legacy
 execute path so coverage cannot disappear silently. The selector receives only
-pre-flow applicability conditions, not titles, claims, destination URLs,
+the compiled Given conditions, not titles, Then claims, destination URLs,
 dialogs, toasts, future mock responses, fixture identities, or other post-action
-state. Only read-only observable initial route/account/product state can skip a
-scenario. Executed scenarios are
-sealed into one evidence manifest. Unclear executed states become
+state. Given is not a fixture reconstruction: hidden API setup is excluded when
+the rendered Then claim directly establishes the product state. Only read-only
+observable initial route/account/product state can skip a scenario, and Given
+never presupposes the presence or state of the subject evaluated by Then. A
+missing subject therefore reaches judgment instead of becoming not-applicable.
+Executed scenarios are sealed into one evidence manifest. Unclear executed states become
 `MANUAL_REVIEW`; they are not forced into pass or fail. **AI-native (`--provider=hermes --mode=adaptive`) is the
 default**; pass `--mode=strict` for the deterministic read-only provider that needs
 no inference model. See [Providers and modes](#providers-and-modes).

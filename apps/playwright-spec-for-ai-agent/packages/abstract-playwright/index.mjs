@@ -1,7 +1,7 @@
 import { COMPILE_RESULT_VERSION, DIAGNOSTIC_VERSION, QA_IR_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
 import { PLAYWRIGHT_STATIC_MANIFEST_VERSION } from "../adapter-playwright/index.mjs";
 
-export const ABSTRACT_PLAYWRIGHT_SPEC_VERSION = "abstract-playwright-spec/0.6";
+export const ABSTRACT_PLAYWRIGHT_SPEC_VERSION = "abstract-playwright-spec/0.7";
 const ABSTRACT_ADAPTER_VERSION = "0.3.0";
 const CLASSIFICATIONS = new Set(["LIVE_EXECUTABLE", "LIVE_JUDGMENT_ONLY", "MOCK_ONLY", "AMBIGUOUS"]);
 const MAX_REVISIONS = 3;
@@ -117,8 +117,8 @@ export function compileAbstractPlaywrightArtifact({ artifact, manifest, source, 
         sourcePath,
       ));
     }
-    const semantics = { applicability: test.applicability, when: test.when, claims: test.claims, classification: test.classification };
-    const expectations = test.claims.map((claim, claimIndex) => ({
+    const semantics = { applicability: test.given, when: test.when, claims: test.then, classification: test.classification };
+    const expectations = test.then.map((claim, claimIndex) => ({
       id: stableId("abstract-expectation", id, claimIndex, claim),
       kind: "SEMANTIC_CLAIM",
       text: { kind: "literal", value: claim },
@@ -163,14 +163,21 @@ export function compileAbstractPlaywrightArtifact({ artifact, manifest, source, 
 
 function normalizeAbstractedTest(value, index) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`abstracted test ${index} must be an object`);
-  if (Object.keys(value).some(key => !["testId", "applicability", "when", "claims", "classification"].includes(key))) throw new TypeError("abstracted test contains unsupported fields");
+  const keys = Object.keys(value);
+  const gwt = ["given", "when", "then"];
+  const legacy = ["applicability", "when", "claims"];
+  const usesGwt = gwt.every(key => keys.includes(key)) && legacy.every(key => key === "when" || !keys.includes(key));
+  const usesLegacy = legacy.every(key => keys.includes(key)) && gwt.every(key => key === "when" || !keys.includes(key));
+  const allowed = usesGwt ? ["testId", ...gwt, "classification"] : usesLegacy ? ["testId", ...legacy, "classification"] : [];
+  if (allowed.length === 0) throw new TypeError("abstracted test must contain exactly Given, When, Then semantics");
+  if (keys.some(key => !allowed.includes(key))) throw new TypeError("abstracted test contains unsupported fields");
   const testId = boundedText(value.testId, 256, "abstracted testId");
   if (!CLASSIFICATIONS.has(value.classification)) throw new TypeError("abstracted test classification is invalid");
   return {
     testId,
-    applicability: boundedTextArray(value.applicability, 10, "abstracted test applicability"),
+    given: boundedTextArray(value.given ?? value.applicability, 10, "abstracted test Given"),
     when: boundedTextArray(value.when, 20, "abstracted test when"),
-    claims: boundedTextArray(value.claims, 20, "abstracted test claims", { nonEmpty: true }),
+    then: boundedTextArray(value.then ?? value.claims, 20, "abstracted test Then", { nonEmpty: true }),
     classification: value.classification,
   };
 }
