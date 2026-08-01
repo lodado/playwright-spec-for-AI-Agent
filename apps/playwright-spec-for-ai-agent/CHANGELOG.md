@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.10.2
+
+### Patch Changes
+
+- Document the full QA Native pipeline, module mechanics, trust boundaries, artifacts, and failure states with diagrams.
+
 ## 2.10.1
 
 ### Patch Changes
