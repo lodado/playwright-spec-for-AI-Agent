@@ -1,5 +1,7 @@
 import {
   ADAPTIVE_ACTIONS,
+  ELEMENT_BOUND_ACTIONS,
+  EXECUTION_ACTION_PROPOSAL_VERSION,
   EXECUTION_ACTION_RESULT_VERSION,
   EXECUTION_AGENT_OUTCOME_VERSION,
   RUNTIME_OUTCOME_VERSION,
@@ -110,6 +112,33 @@ export function playwrightBrowserToolCapabilities() {
   });
 }
 
+export async function observeAdaptiveApplicabilityPage({ input, browserName = "chromium", browserType, storageStatePath, authBootstrap, projectRoot } = {}) {
+  const gateway = await openPlaywrightBrowserToolGateway({ input, browserName, browserType, storageStatePath, authBootstrap, projectRoot });
+  try {
+    const current = gateway.agentInput();
+    const proposal = {
+      schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION,
+      proposalId: `proposal-applicability-${canonicalHash({ runId: current.runId, scenarioId: current.scenarioId }).slice("sha256:".length, "sha256:".length + 16)}`,
+      runId: current.runId,
+      scenarioId: current.scenarioId,
+      milestoneId: current.currentMilestoneId,
+      leaseId: current.capabilityLease.leaseId,
+      action: "observe_aria",
+      parameters: {},
+    };
+    const execution = await gateway.execute({ proposal, tokensUsed: 0 });
+    const aria = execution.bundle.artifacts.find((artifact) => artifact.id.endsWith(":after:aria"));
+    if (!aria || !execution.observation) throw new Error("applicability observation evidence is incomplete");
+    return Object.freeze({
+      url: execution.result.page.url,
+      aria: gateway.readBlob(aria.storageRef).toString("utf8").slice(0, 65_536),
+      elements: execution.observation.elements.map(({ elementId: _elementId, milestoneIds: _milestoneIds, allowedActions: _allowedActions, ...element }) => element),
+    });
+  } finally {
+    await gateway.close();
+  }
+}
+
 export async function openPlaywrightBrowserToolGateway({
   input,
   browserName = "chromium",
@@ -150,12 +179,15 @@ export async function openPlaywrightBrowserToolGateway({
   let failed = false;
   let executing = false;
   let interactionStarted = false;
+  let interactionPolicyViolation = false;
+  const pendingPolicyDecisions = new Set();
   let bootstrapActive = bootstrap !== undefined;
   try {
     context = await runGatewayBrowserOperation({ deadline, clock }, () => browser.newContext({ viewport: { ...viewport }, serviceWorkers: "block", ...(storageStatePath === undefined ? {} : { storageState: storageStatePath }) }));
-    if (typeof context.route !== "function") throw new Error("browser context cannot enforce gateway policy");
-    await runGatewayBrowserOperation({ deadline, clock }, () => context.route("**/*", async (route) => {
-      try {
+    if (typeof context.route !== "function" || typeof context.routeWebSocket !== "function") throw new Error("browser context cannot enforce gateway policy");
+    await runGatewayBrowserOperation({ deadline, clock }, () => context.route("**/*", (route) => {
+      const decision = (async () => {
+        try {
         const request = route.request();
         if (bootstrapActive) {
           const url = new URL(request.url());
@@ -163,10 +195,23 @@ export async function openPlaywrightBrowserToolGateway({
           else await route.abort("blockedbyclient");
           return;
         }
-        await route.continue();
-      } catch {
+        const url = new URL(request.url());
+        if (isReadOnlyAllowedOriginUrl(url, request.method(), initialInput.capabilityLease.allowedOrigins)) {
+          await route.continue();
+          return;
+        }
+        if (interactionStarted && !["GET", "HEAD"].includes(request.method())) interactionPolicyViolation = true;
         await route.abort("blockedbyclient");
-      }
+        } catch {
+          await route.abort("blockedbyclient");
+        }
+      })();
+      pendingPolicyDecisions.add(decision);
+      return decision.finally(() => pendingPolicyDecisions.delete(decision));
+    }));
+    await runGatewayBrowserOperation({ deadline, clock }, () => context.routeWebSocket("**/*", (webSocket) => {
+      if (interactionStarted) interactionPolicyViolation = true;
+      webSocket.close();
     }));
     const page = await runGatewayBrowserOperation({ deadline, clock }, () => context.newPage());
     if (bootstrap !== undefined) {
@@ -185,6 +230,7 @@ export async function openPlaywrightBrowserToolGateway({
     let recentObservations = [];
     let manifest = priorManifest;
     let observationSequence = 0;
+    let recoveryNotice;
     const handles = new Map();
     const usedProposalIds = new Set();
 
@@ -193,6 +239,10 @@ export async function openPlaywrightBrowserToolGateway({
       remainingBudget.timeMs = Math.min(remainingBudget.timeMs, Math.max(0, Math.floor(deadline - readFiniteClock(clock))));
       return snapshotContract("ExecutionAgentInput", {
         ...initialInput,
+        goal: recoveryNotice === undefined ? initialInput.goal : {
+          ...initialInput.goal,
+          description: `${initialInput.goal.description.slice(0, Math.max(0, 4_095 - recoveryNotice.length))}\n${recoveryNotice}`,
+        },
         milestones: structuredClone(milestones),
         currentMilestoneId,
         currentPage: { ...currentPage },
@@ -211,6 +261,8 @@ export async function openPlaywrightBrowserToolGateway({
       try {
         const beforeInput = agentInput();
         const authorization = createAdaptiveActionAuthorizer({ input: beforeInput, now: clock }).authorize({ proposal, tokensUsed });
+        const authoredLocator = await observedAuthoredLocator(page, beforeInput, authorization.proposal, handles, { deadline, clock });
+        let actionSatisfiedMilestoneIds = [];
         usedProposalIds.add(authorization.proposal.proposalId);
         remainingBudget = { ...authorization.remainingBudget };
         if (["navigate", "go_back", "reload_page"].includes(authorization.proposal.action) && interactionStarted) throw new Error("browser navigation is denied after an interaction");
@@ -218,6 +270,7 @@ export async function openPlaywrightBrowserToolGateway({
         const before = await captureGatewayPage(page, currentPage, initialInput.capabilityLease.allowedOrigins, { deadline, clock }, secrets);
         let observation;
         let visibleText;
+        let executionFailure;
         if (authorization.proposal.action === "get_current_url") {
           // URL is captured in the mandatory pre/post evidence.
         } else if (authorization.proposal.action === "navigate") {
@@ -239,21 +292,29 @@ export async function openPlaywrightBrowserToolGateway({
           handles.clear();
           observation.handles.forEach((locator, elementId) => handles.set(`${observation.contract.observationId}\0${elementId}`, locator));
         } else if (authorization.proposal.action === "click_observed_element") {
-          const locator = handles.get(`${authorization.proposal.parameters.observationId}\0${authorization.proposal.parameters.elementId}`);
+          const locator = authoredLocator ?? handles.get(`${authorization.proposal.parameters.observationId}\0${authorization.proposal.parameters.elementId}`);
           if (!locator) throw new Error("observed element handle is unavailable");
           await runGatewayBrowserOperation({ deadline, clock }, () => assertSafeClickTarget(locator));
           interactionStarted = true;
-          await runGatewayBrowserOperation({ deadline, clock }, (timeout) => locator.click({ timeout: Math.min(10_000, timeout) }));
-          invalidateGatewayObservations();
+          try {
+            await runGatewayBrowserOperation({ deadline, clock }, (timeout) => locator.click({ timeout: Math.min(10_000, timeout) }));
+            if (authoredLocator) actionSatisfiedMilestoneIds = [authorization.proposal.milestoneId];
+            invalidateGatewayObservations();
+          } catch (error) {
+            if (!pointerInterceptionFailure(error)) throw error;
+            executionFailure = "The previous exact click was blocked by an element intercepting pointer events. Autonomously choose a leased, structurally safe recovery action, observe again, then retry the authored target.";
+            recoveryNotice = `Runtime fact: ${executionFailure}`;
+          }
         } else if (authorization.proposal.action === "hover_observed_element") {
-          const locator = handles.get(`${authorization.proposal.parameters.observationId}\0${authorization.proposal.parameters.elementId}`);
+          const locator = authoredLocator ?? handles.get(`${authorization.proposal.parameters.observationId}\0${authorization.proposal.parameters.elementId}`);
           if (!locator) throw new Error("observed element handle is unavailable");
           await runGatewayBrowserOperation({ deadline, clock }, () => assertSafeClickTarget(locator));
           interactionStarted = true;
           await runGatewayBrowserOperation({ deadline, clock }, (timeout) => locator.hover({ timeout: Math.min(10_000, timeout) }));
+          if (authoredLocator) actionSatisfiedMilestoneIds = [authorization.proposal.milestoneId];
           invalidateGatewayObservations();
         } else if (authorization.proposal.action === "upload_observed_element") {
-          const locator = handles.get(`${authorization.proposal.parameters.observationId}\0${authorization.proposal.parameters.elementId}`);
+          const locator = authoredLocator ?? handles.get(`${authorization.proposal.parameters.observationId}\0${authorization.proposal.parameters.elementId}`);
           if (!locator) throw new Error("observed element handle is unavailable");
           // The file is the milestone's author-designated @qa-fixture, resolved strictly inside the
           // project root — the AI chooses the element, never the file.
@@ -267,6 +328,7 @@ export async function openPlaywrightBrowserToolGateway({
           }
           interactionStarted = true;
           await runGatewayBrowserOperation({ deadline, clock }, (timeout) => locator.setInputFiles(file, { timeout: Math.min(10_000, timeout) }));
+          if (authoredLocator) actionSatisfiedMilestoneIds = [authorization.proposal.milestoneId];
           invalidateGatewayObservations();
         } else if (authorization.proposal.action === "scroll_view") {
           interactionStarted = true;
@@ -294,6 +356,11 @@ export async function openPlaywrightBrowserToolGateway({
           // Seal the full page the agent claims is blocked; the reason stays a claim for the judge, never a verdict.
           visibleText = await captureGatewayVisibleText(page, { deadline, clock }, [...secrets, ...before.sensitiveValues]);
         }
+        if (interactionStarted) {
+          await runGatewayBrowserOperation({ deadline, clock }, () => page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0))));
+          await Promise.all([...pendingPolicyDecisions]);
+        }
+        if (interactionPolicyViolation) throw providerError("POLICY_VIOLATION");
         const nextUrl = gatewayUrl(page, initialInput.capabilityLease.allowedOrigins);
         if (["navigate", "go_back", "reload_page"].includes(authorization.proposal.action) || nextUrl !== currentPage.url) {
           currentPage = { pageId: `page-${canonicalHash({ proposalId: authorization.proposal.proposalId, nextUrl }).slice("sha256:".length, "sha256:".length + 12)}`, domGeneration: 1, url: nextUrl };
@@ -303,21 +370,25 @@ export async function openPlaywrightBrowserToolGateway({
         const after = await captureGatewayPage(page, currentPage, initialInput.capabilityLease.allowedOrigins, { deadline, clock }, secrets);
         currentPage.url = after.page.url;
         remainingBudget.timeMs = Math.min(remainingBudget.timeMs, Math.max(0, Math.floor(deadline - readFiniteClock(clock))));
+        const status = executionFailure === undefined ? "ACCEPTED" : "EXECUTION_FAILED";
+        const satisfiedMilestoneIds = status === "ACCEPTED"
+          ? [...new Set([...(observation?.contract.satisfiedMilestoneIds ?? []), ...actionSatisfiedMilestoneIds])]
+          : [];
         const artifacts = [
-          ...captureGatewayArtifacts(store, authorization.proposal, before, after, observation?.contract.satisfiedMilestoneIds ?? []),
+          ...captureGatewayArtifacts(store, authorization.proposal, before, after, satisfiedMilestoneIds, status),
           ...(visibleText === undefined ? [] : [store.captureArtifact({ id: `${authorization.proposal.proposalId}:visible-text`, type: "VISIBLE_TEXT", contentType: "text/plain", content: visibleText })]),
         ];
         const facts = [
           { id: `${authorization.proposal.proposalId}:url`, kind: "URL", value: after.page.url },
-          { id: `${authorization.proposal.proposalId}:audit`, kind: "BROWSER_TOOL_AUDIT", value: { action: authorization.proposal.action, proposalId: authorization.proposal.proposalId, before: before.page, after: after.page, status: "ACCEPTED" } },
+          { id: `${authorization.proposal.proposalId}:audit`, kind: "BROWSER_TOOL_AUDIT", value: { action: authorization.proposal.action, proposalId: authorization.proposal.proposalId, before: before.page, after: after.page, status } },
         ];
         const evidenceRefs = [...artifacts.map((artifact) => artifact.id), ...facts.map((fact) => fact.id)];
         const result = snapshotContract("ExecutionActionResult", {
           schemaVersion: EXECUTION_ACTION_RESULT_VERSION,
           resultId: `result-${canonicalHash({ proposalId: authorization.proposal.proposalId, evidenceRefs, page: after.page }).slice("sha256:".length, "sha256:".length + 16)}`,
           proposalId: authorization.proposal.proposalId,
-          accepted: true,
-          policyReason: "ACCEPTED",
+          accepted: status === "ACCEPTED",
+          policyReason: status,
           evidenceRefs,
           page: { ...after.page },
           remainingBudget: { ...remainingBudget },
@@ -332,8 +403,14 @@ export async function openPlaywrightBrowserToolGateway({
           facts,
         });
         manifest = store.appendCheckpoint(bundle, { stage: "execute", ...(manifest === undefined ? {} : { manifest }) });
+        if (status === "EXECUTION_FAILED") {
+          recentObservations = [];
+          handles.clear();
+          return Object.freeze({ result, bundle, manifest });
+        }
         const observedContract = observation?.contract;
-        const transition = advanceAdaptiveMilestone({ input: beforeInput, proposal: authorization.proposal, result, ...(observedContract ? { observation: observedContract } : {}) });
+        const transition = advanceAdaptiveMilestone({ input: beforeInput, proposal: authorization.proposal, result, satisfiedMilestoneIds, ...(observedContract ? { observation: observedContract } : {}) });
+        if (!["observe_dom", "observe_aria"].includes(authorization.proposal.action)) recoveryNotice = undefined;
         if (transition?.input) {
           milestones = structuredClone(transition.input.milestones);
           currentMilestoneId = transition.input.currentMilestoneId;
@@ -357,7 +434,7 @@ export async function openPlaywrightBrowserToolGateway({
       }
     }
 
-    function invalidateGatewayObservations() {
+function invalidateGatewayObservations() {
       currentPage = { ...currentPage, domGeneration: currentPage.domGeneration + 1 };
       recentObservations = [];
       handles.clear();
@@ -375,6 +452,34 @@ export async function openPlaywrightBrowserToolGateway({
     await closeGatewayBrowser(browser).catch(() => undefined);
     throw error;
   }
+}
+
+function pointerInterceptionFailure(error) {
+  return /intercepts pointer events/i.test(String(error?.message ?? ""));
+}
+
+function isReadOnlyAllowedOriginUrl(requestUrl, method, allowedOrigins) {
+  return ["GET", "HEAD"].includes(method)
+    && ["http:", "https:"].includes(requestUrl.protocol)
+    && allowedOrigins.includes(requestUrl.origin)
+    && !requestUrl.username && !requestUrl.password;
+}
+
+async function observedAuthoredLocator(page, input, proposal, handles, timing) {
+  if (!ELEMENT_BOUND_ACTIONS.includes(proposal.action)) return undefined;
+  const observation = input.recentObservations.find((item) => item.observationId === proposal.parameters.observationId);
+  const element = observation?.elements.find((item) => item.elementId === proposal.parameters.elementId);
+  const milestone = input.milestones.find((item) => item.id === proposal.milestoneId);
+  const handle = handles.get(`${proposal.parameters.observationId}\0${proposal.parameters.elementId}`);
+  if (!element?.milestoneIds.includes(proposal.milestoneId) || !milestone?.target || !handle) return undefined;
+  const metadata = await runGatewayBrowserOperation(timing, () => handle.evaluate((node, maxChars) => {
+    const tag = node.tagName.toLowerCase();
+    const text = (node.textContent ?? "").trim().slice(0, maxChars + 1);
+    const role = node.getAttribute("role") || (tag === "button" ? "button" : tag === "a" ? "link" : tag === "dialog" ? "dialog" : undefined);
+    return { tag, role, accessibleName: node.getAttribute("aria-label") || text, text, testId: node.getAttribute("data-testid") || undefined };
+  }, GATEWAY_ELEMENT_TEXT_LIMIT));
+  if (!metadata || metadata.text.length > GATEWAY_ELEMENT_TEXT_LIMIT || !gatewayTargetMatches(milestone.target, metadata)) return undefined;
+  return semanticLocator(page, milestone.target, { allowUnsupported: true });
 }
 
 // Shared observation settle: both the strict OBSERVE node and the adaptive gateway route every
@@ -520,7 +625,10 @@ async function observeGatewayElements({ page, input, currentPage, sequence, secr
     const protectedValue = [metadata.accessibleName, metadata.text].some((value) => typeof value === "string" && secrets.some((secret) => secret.length > 0 && value.includes(secret)));
     const safe = !metadata.protected && !protectedValue && !metadata.semanticContainer && !metadata.anchor && !metadata.form && !metadata.editable && !metadata.disabled;
     const elementId = `element-${canonicalHash({ observationId, index }).slice("sha256:".length, "sha256:".length + 16)}`;
-    const milestoneIds = metadata.protected || protectedValue ? [] : input.milestones.filter((milestone) => milestone.target && gatewayTargetMatches(milestone.target, metadata)).map((milestone) => milestone.id);
+    const milestoneIds = metadata.protected || protectedValue ? [] : [
+      ...input.milestones.filter((milestone) => milestone.target && gatewayTargetMatches(milestone.target, metadata)).map((milestone) => milestone.id),
+      ...(safe ? input.milestones.filter((milestone) => milestone.exploratory === true).map((milestone) => milestone.id) : []),
+    ];
     const allowedActions = [
       ...(input.capabilityLease.actions.includes("wait_for_element_state") ? ["wait_for_element_state"] : []),
       ...(safe && input.capabilityLease.actions.includes("click_observed_element") ? ["click_observed_element"] : []),
@@ -604,7 +712,7 @@ function gatewayTargetMatches(target, metadata) {
   return constrained;
 }
 
-function captureGatewayArtifacts(store, proposal, before, after, satisfiedMilestoneIds) {
+function captureGatewayArtifacts(store, proposal, before, after, satisfiedMilestoneIds, status = "ACCEPTED") {
   const auditProposal = structuredClone(proposal);
   if (auditProposal.action === "navigate") {
     const url = new URL(auditProposal.parameters.url);
@@ -617,7 +725,7 @@ function captureGatewayArtifacts(store, proposal, before, after, satisfiedMilest
   const content = {
     "before:dom": { contentType: "text/html", content: before.dom },
     "before:aria": { contentType: "text/plain", content: before.aria },
-    action: { contentType: "application/json", content: JSON.stringify({ proposal: auditProposal, status: "ACCEPTED", before: before.page, after: after.page, satisfiedMilestoneIds }) },
+    action: { contentType: "application/json", content: JSON.stringify({ proposal: auditProposal, status, before: before.page, after: after.page, satisfiedMilestoneIds }) },
     "after:dom": { contentType: "text/html", content: after.dom },
     "after:aria": { contentType: "text/plain", content: after.aria },
   };
@@ -700,6 +808,7 @@ export async function runAdaptiveWithPlaywright({
   projectRoot,
   store,
   priorManifest,
+  returnPartialFailure = false,
   now = () => new Date().toISOString(),
   clock = Date.now,
 } = {}) {
@@ -726,10 +835,23 @@ export async function runAdaptiveWithPlaywright({
       if (!proposed?.proposal || typeof proposed.proposal !== "object") throw new Error("adaptive proposer must return a proposal and token usage");
       if (!Number.isInteger(proposed.tokensUsed) || proposed.tokensUsed < 0) throw new Error("adaptive proposer token usage must be a non-negative integer");
       const execution = await gateway.execute({ proposal: proposed.proposal, tokensUsed: proposed.tokensUsed });
-      bundles.push(execution.bundle);
-      manifest = execution.manifest;
+      if (execution.bundle !== undefined) bundles.push(execution.bundle);
+      if (execution.manifest !== undefined) manifest = execution.manifest;
       outcome = execution.outcome;
     }
+    const execution = Object.freeze({ outcome, bundles: Object.freeze(bundles), manifest, readBlob: gateway.readBlob });
+    adaptiveExecutions.add(execution);
+    return execution;
+  } catch (error) {
+    if (!returnPartialFailure) throw error;
+    outcome = snapshotContract("ExecutionAgentOutcome", {
+      schemaVersion: EXECUTION_AGENT_OUTCOME_VERSION,
+      runId: input.runId,
+      scenarioId: input.scenarioId,
+      type: "ERROR",
+      completedMilestoneIds: [],
+      reason: String(error.message).slice(0, 4_096),
+    });
     const execution = Object.freeze({ outcome, bundles: Object.freeze(bundles), manifest, readBlob: gateway.readBlob });
     adaptiveExecutions.add(execution);
     return execution;
@@ -748,7 +870,7 @@ export async function runAdaptiveSuiteWithPlaywright({ inputs, proposeAction, ..
   for (const input of inputs) {
     let execution;
     try {
-      execution = await runAdaptiveWithPlaywright({ input, proposeAction, store, priorManifest: manifest, ...options });
+      execution = await runAdaptiveWithPlaywright({ input, proposeAction, store, priorManifest: manifest, ...options, returnPartialFailure: true });
     } catch (error) {
       executions.push(Object.freeze({
         scenarioId: input.scenarioId,
@@ -814,11 +936,11 @@ export async function executeWithPlaywright({
   // hangs (the start line without a done line names the stuck node); heavyweight logging like
   // DEBUG=pw:api changes scheduling enough to mask races, so keep this the only sanctioned probe.
   const traceTiming = process.env.QA_NATIVE_TRACE_TIMING === "1";
-  const executeNode = !traceTiming ? runtime.executeNode : async (node) => {
+  const executeNode = !traceTiming ? runtime.executeNode : async (node, context) => {
     const startedAt = performance.now();
     process.stderr.write(`qa-native timing: ${node.nodeId} ${node.kind} start\n`);
     try {
-      return await runtime.executeNode(node);
+      return await runtime.executeNode(node, context);
     } finally {
       process.stderr.write(`qa-native timing: ${node.nodeId} ${node.kind} ${Math.round(performance.now() - startedAt)}ms\n`);
     }
@@ -962,21 +1084,21 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
     }
   }
 
-  async function executeNode(node) {
+  async function executeNode(node, { timeoutMs = nodeTimeoutMs } = {}) {
     const entry = scenarios.get(node.scenarioId);
     const step = entry?.steps.get(node.stepId);
     if (!entry || !step || step.kind !== node.kind) throw providerError("CONTRACT_VIOLATION");
     if (node.kind === "NAVIGATE") {
       const target = navigationUrl(step.target, base);
       const page = await openPage();
-      await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: nodeTimeoutMs });
+      await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: timeoutMs });
       // A stale access token can bounce the first hit to a login route while the app silently
       // refreshes the session in the background. One bounded re-navigation reaches the refreshed
       // page; a healthy landing (same pathname) never triggers it, and the observation still
       // records whatever the final page truly shows.
       if (new URL(String(page.url())).pathname !== target.pathname) {
         await new Promise((resolve) => setTimeout(resolve, NAVIGATION_SETTLE_MS));
-        await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: nodeTimeoutMs });
+        await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: timeoutMs });
       }
       assertPageOrigin(page, base);
       return;
@@ -986,14 +1108,16 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       assertPageOrigin(page, base);
       const state = observationState(observations, node.scenarioId);
       try {
-        await settleDomForObservation(page, nodeTimeoutMs);
+        const startedAt = Date.now();
+        await settleDomForObservation(page, timeoutMs);
+        const observationTimeoutMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
         const captured = [];
         for (const type of node.evidence) {
           if (type === "ELEMENT_OBSERVATION") {
-            state.facts.push(...(await observeExpectations(page, entry.scenario.expectations, node.nodeId, nodeTimeoutMs)).map(captureFact));
+            state.facts.push(...(await observeExpectations(page, entry.scenario.expectations, node.nodeId, observationTimeoutMs)).map(captureFact));
             continue;
           }
-          const content = await observe(page, type, nodeTimeoutMs);
+          const content = await observe(page, type, observationTimeoutMs);
           captured.push(captureArtifact(`${node.nodeId}:${type.toLowerCase()}`, type, type === "DOM_SNAPSHOT" ? "text/html" : "text/plain", content));
         }
         state.artifacts.push(...captured);
@@ -1017,7 +1141,7 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
         const locator = semanticLocator(page, step.target, { allowUnsupported: true });
         if (!locator) throw providerError("CONTRACT_VIOLATION");
         interactionStarted = true;
-        await locator.setInputFiles(file, { timeout: nodeTimeoutMs });
+        await locator.setInputFiles(file, { timeout: timeoutMs });
         if (interactionPolicyViolation) throw providerError("POLICY_VIOLATION");
         const afterUrl = evidenceUrl(page, base);
         const content = boundedText(JSON.stringify({ action: "UPLOAD", target: actionLogTarget(step.target), fixture: node.value, beforeUrl, afterUrl, status: "SUCCEEDED", allowedRequests: postInteractionRequests }), ACTION_LOG_LIMIT, "ACTION_LOG");
@@ -1027,9 +1151,9 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       }
       const locator = semanticLocator(page, step.target, { requireAccessibleName: true });
       if (!locator) throw providerError("CONTRACT_VIOLATION");
-      await assertSafeClickTarget(locator, nodeTimeoutMs);
+      await assertSafeClickTarget(locator, timeoutMs);
       interactionStarted = true;
-      await locator.click({ timeout: nodeTimeoutMs });
+      await locator.click({ timeout: timeoutMs });
       if (interactionPolicyViolation) throw providerError("POLICY_VIOLATION");
       const afterUrl = evidenceUrl(page, base);
       const content = boundedText(JSON.stringify({ action: "CLICK", target: actionLogTarget(step.target), beforeUrl, afterUrl, status: "SUCCEEDED", allowedRequests: postInteractionRequests }), ACTION_LOG_LIMIT, "ACTION_LOG");

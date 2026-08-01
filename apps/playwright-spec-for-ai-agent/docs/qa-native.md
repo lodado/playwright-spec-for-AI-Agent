@@ -17,7 +17,7 @@ Generate and store a stable integrity key for authenticated run artifacts:
 export QA_NATIVE_INTEGRITY_KEY="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64'))")"
 ```
 
-## Execute and judge
+## Execute, judge, and review
 
 ```bash
 npx qa-native execute \
@@ -26,9 +26,52 @@ npx qa-native execute \
   --run-dir=.qa/runs/dashboard-1
 
 npx qa-native judge --run-dir=.qa/runs/dashboard-1
+npx qa-native review --run-dir=.qa/runs/dashboard-1
 ```
 
-`execute` writes an authenticated evidence archive. `judge` runs deterministic checks first and sends only unresolved semantic expectations to Hermes in text-only mode. Hermes adaptive runs allow every page-initiated API request and WebSocket connection. Strict runs allow page-initiated read-only (GET/HEAD) requests within the target's registrable domain — sibling API origins like `api.example.com` work — and block every mutation and foreign-site request. Direct browser navigation remains limited to the configured target origin.
+After re-running `judge`, choose the completed set explicitly with
+`--judgment=judgments/<set-dir>` on both `review` and `report`; a single result
+JSON remains accepted for commands that intentionally target one judgment.
+
+`execute` first performs one read-only applicability observation for approved abstract/adaptive specs. High-confidence conflicting scenarios are recorded as `NOT_APPLICABLE`; ambiguous or failed selection falls back to legacy execution. It then writes an authenticated evidence archive. `judge` runs deterministic checks first and sends only unresolved semantic expectations to Hermes in text-only mode. An entirely inapplicable executed scenario is `SKIP`, not `MANUAL_REVIEW`. `review` uses a fresh text-only invocation to reject judgments that are not grounded in their cited sealed evidence; AI-native reports require every review to be approved. Hermes adaptive runs allow only page-initiated `GET`/`HEAD` requests to origins explicitly listed in the capability lease, close WebSockets, and block mutations. Strict runs allow page-initiated read-only (GET/HEAD) requests within the target's registrable domain — sibling API origins like `api.example.com` work — and block every mutation and foreign-site request. Direct browser navigation remains limited to the configured target origin.
+
+## AI-first full-spec abstraction
+
+```bash
+npx qa-native abstract-ai --page=dashboard
+npx qa-native execute --page=dashboard --run-dir=.qa/runs/dashboard-1
+```
+
+`abstract-ai` resolves the same config-selected specs as `execute`, asks one
+text-only model to extract every test's applicability, authored flow, observable
+claims, and live classification, then asks a fresh model invocation to review
+the candidate against the complete source and immutable manifest. It permits up to three reviewed revisions.
+Results are cached as owner-only JSON in `.qa/abstract/cache/` with Markdown
+views in `.qa/abstract/<page>/`;
+unchanged source and provider prompt/model versions make no model calls.
+
+Each extraction and independent-review batch contains at most eight tests. A
+timeout, invalid response envelope, or validation failure reduces only that
+failed batch until it succeeds or a single-test batch fails; successful batches
+are not repeated. A retryable single-test failure gets one final retry before
+the spec fails closed.
+
+Approved applicability descriptions are evaluated against one bounded live-page
+ARIA observation before per-scenario execution. The selector cannot grant
+policy or actions and receives no titles, claims, destination URLs, dialogs,
+toasts, or other post-action state. Only conditions that must already hold
+before the authored flow and can be established by read-only observation may
+form a conflict. Future mock responses and fixture identities stay in authored
+flow or claims. Only a complete
+`NOT_APPLICABLE` decision with confidence at
+least `0.8` skips execution; low-confidence, malformed, missing, or failed
+selection remains `AMBIGUOUS` and executes for backward-compatible coverage.
+
+Hermes/adaptive execution defaults to `--compiler=abstract` for both `--page`
+and `--spec`. Use `--compiler=ast` only as the compatibility fallback. AI output never supplies policy,
+capabilities, selectors, actions, or verdicts. Only the code-owned static manifest's
+nearest test or enclosing-suite `@qa-live-policy` grants live authority; missing or
+unknown authority is blocked. `MOCK_ONLY` and `AMBIGUOUS` tests never become live PASS/FAIL scenarios.
 
 ## Adaptive execution
 
@@ -63,6 +106,11 @@ tokens. Override per run with `--budget-actions`, `--budget-turns`, `--budget-ti
 `--budget-tokens` (positive integers). A scenario that exhausts its budget seals the evidence it
 gathered and ends as `ERROR` with a `BUDGET_EXHAUSTED: …` reason; the run itself still exits 0 and
 reports the scenario on stderr.
+
+The execution prompt forbids unchanged observation loops: an affirmed
+applicability conflict or a still-absent authored target after one safe recovery
+must become an evidence-backed `report_blocked` claim instead of consuming the
+remaining budget.
 
 ### `report_blocked` is a claim, not a verdict
 
@@ -171,6 +219,7 @@ Only an eligible patch that passes deterministic verification, improves the auth
 ├── execution/
 ├── evidence/
 ├── judgments/
+├── reviews/
 ├── reports/
 └── remediation/<proposal-id>/
 ```

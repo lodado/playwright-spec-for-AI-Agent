@@ -35,7 +35,7 @@ export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, man
     }
     if (!isExactObject(audit, ["proposal", "status", "before", "after"]) && !isExactObject(audit, ["proposal", "status", "before", "after", "satisfiedMilestoneIds"])) throw new Error("adaptive action evidence is invalid");
     const invalidSatisfiedMilestones = audit.satisfiedMilestoneIds !== undefined && (!Array.isArray(audit.satisfiedMilestoneIds) || audit.satisfiedMilestoneIds.some((id) => !input.milestones.some((milestone) => milestone.id === id)));
-    if (audit.status !== "ACCEPTED" || invalidSatisfiedMilestones) throw new Error("adaptive action evidence is invalid");
+    if (!["ACCEPTED", "EXECUTION_FAILED"].includes(audit.status) || invalidSatisfiedMilestones) throw new Error("adaptive action evidence is invalid");
     const proposal = validateContract("ExecutionActionProposal", audit.proposal);
     if (!matchesAuditArtifactShape(verified.bundle.artifacts, auditArtifactShape(proposal.action))) throw new Error("adaptive checkpoint evidence is incomplete");
     if (proposal.runId !== input.runId || proposal.scenarioId !== input.scenarioId || proposal.leaseId !== input.capabilityLease.leaseId || !input.capabilityLease.actions.includes(proposal.action)) throw new Error("adaptive action evidence is bound to a different execution");
@@ -43,7 +43,8 @@ export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, man
     validateAuditPage(audit.before, input.capabilityLease.allowedOrigins);
     validateAuditPage(audit.after, input.capabilityLease.allowedOrigins);
     if (verified.bundle.environment.targetUrl !== audit.after.url) throw new Error("adaptive action evidence does not match its checkpoint");
-    return { proposal, before: audit.before, after: audit.after, satisfiedMilestoneIds: audit.satisfiedMilestoneIds };
+    if (audit.status === "EXECUTION_FAILED" && !sameAuditPage(audit.before, audit.after)) throw new Error("rejected adaptive action changed page state");
+    return { proposal, before: audit.before, after: audit.after, status: audit.status, satisfiedMilestoneIds: audit.satisfiedMilestoneIds };
   });
 
   const requiredMilestones = input.milestones.filter((milestone) => milestone.class !== "OPTIONAL_HINT");
@@ -59,6 +60,7 @@ export function validateAdaptiveExecutionEvidence({ input, outcome, bundles, man
       : sameAuditPage(audit.before, expectedPage);
     if (milestone === undefined || audit.proposal.milestoneId !== milestone.id || !samePage) throw new Error("adaptive action evidence is out of sequence");
     expectedPage = audit.after;
+    if (audit.status !== "ACCEPTED") return;
     // Legacy audits (the 4-key form, sealed before the gateway evaluated semantic milestones) carry
     // no satisfiedMilestoneIds; synthesize membership so pre-2.3 runs stay judgeable. Current
     // gateways always seal the field, so new evidence is held to the strict rule.

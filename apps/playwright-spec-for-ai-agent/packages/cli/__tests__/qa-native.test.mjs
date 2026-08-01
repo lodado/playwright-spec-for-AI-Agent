@@ -251,12 +251,17 @@ describe("qa-native CLI security foundation", () => {
     writeFileSync(join(cwd, "a.spec.ts"), "test('a', () => {})");
     const key = Buffer.alloc(32, 0x61).toString("base64");
     const handler = vi.fn(() => 0);
-    const handlers = { execute: handler, judge: handler, replay: handler, diagnose: handler, "suggest-fix": handler, report: handler, "publish-issue": handler, "propose-patch": handler, "verify-patch": handler, publish: handler, remediate: handler };
+    const handlers = { "abstract-ai": handler, execute: handler, judge: handler, review: handler, replay: handler, diagnose: handler, "suggest-fix": handler, report: handler, "publish-issue": handler, "propose-patch": handler, "verify-patch": handler, publish: handler, remediate: handler };
     const shared = { cwd, env: { QA_NATIVE_INTEGRITY_KEY: key, QA_NATIVE_PUBLICATION_KEY: Buffer.alloc(32, 0x62).toString("base64") }, handlers, stdout: vi.fn(), stderr: vi.fn() };
+    expect(await runQaNative(["abstract-ai", "--spec=a.spec.ts"], shared)).toBe(0);
+    expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ command: "abstract-ai", specPath: realpathSync(join(cwd, "a.spec.ts")) }));
     expect(await runQaNative(["execute", "--spec=a.spec.ts", "--base-url=https://example.test", "--run-dir=.qa/runs/new"], shared)).toBe(0);
-    expect(handler.mock.calls[0][0]).toMatchObject({ provider: "hermes", mode: "adaptive" }); // AI-native default
+    expect(handler.mock.calls[1][0]).toMatchObject({ provider: "hermes", mode: "adaptive", compiler: "abstract" });
     createExclusiveQaDirectory(".qa/runs/existing", { cwd });
+    const judgmentSet = createExclusiveQaDirectory(".qa/runs/existing/judgments/set-1", { cwd });
     expect(await runQaNative(["judge", "--run-dir=.qa/runs/existing"], shared)).toBe(0);
+    expect(await runQaNative(["review", "--run-dir=.qa/runs/existing", "--judgment=judgments/set-1"], shared)).toBe(0);
+    expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ judgmentPath: judgmentSet }));
     expect(await runQaNative(["replay", "--run-dir=.qa/runs/existing"], shared)).toBe(0);
     expect(await runQaNative(["diagnose", "--run-dir=.qa/runs/existing", "--repository-root=."], shared)).toBe(0);
     expect(await runQaNative(["suggest-fix", "--run-dir=.qa/runs/existing", "--repository-root=."], shared)).toBe(0);
@@ -266,7 +271,7 @@ describe("qa-native CLI security foundation", () => {
     expect(await runQaNative(["publish-issue", "--run-dir=.qa/runs/existing", "--repository-root=.", "--repository=owner/example"], shared)).toBe(0);
     expect(await runQaNative(["publish", "--run-dir=.qa/runs/existing", "--repository-root=.", "--repository=owner/example", "--publish=auto"], shared)).toBe(0);
     expect(await runQaNative(["remediate", "--run-dir=.qa/runs/existing", "--repository-root=.", "--repository=owner/example"], shared)).toBe(0);
-    expect(handler).toHaveBeenCalledTimes(11);
+    expect(handler).toHaveBeenCalledTimes(13);
     expect(handler.mock.calls.at(-1)[0]).toMatchObject({
       command: "remediate",
       publicationKey: Buffer.alloc(32),

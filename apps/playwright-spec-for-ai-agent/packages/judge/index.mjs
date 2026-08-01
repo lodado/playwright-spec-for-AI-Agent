@@ -27,10 +27,15 @@ export function evaluateDeterministically({ qaIr, bundle, manifest, readBlob }) 
 
 function evaluateVerified(qaIr, verified) {
   const scenario = findScenario(qaIr, verified.bundle.scenarioId);
+  const isSemantic = scenario.semantics !== undefined || (qaIr.extensions?.semanticJudgmentScenarioIds ?? []).includes(scenario.id);
   const resolvedChecks = [];
   const unresolvedChecks = [];
 
   for (const expectation of scenario.expectations) {
+    if (isSemantic) {
+      unresolvedChecks.push({ expectationId: expectation.id, reason: "Semantic expectation requires independent evidence judgment" });
+      continue;
+    }
     const check = deterministicCheck(expectation, verified.bundle, verified.readBlob);
     if (check) resolvedChecks.push(check);
     else unresolvedChecks.push({ expectationId: expectation.id, reason: "No structured element observation was captured" });
@@ -245,7 +250,7 @@ function withConfidence(check, confidence) {
 
 function buildSemanticInput(qaIr, verified, evaluation, secrets) {
   const scenario = findScenario(qaIr, verified.bundle.scenarioId);
-  const isSemantic = (qaIr.extensions?.semanticJudgmentScenarioIds ?? []).includes(scenario.id);
+  const isSemantic = scenario.semantics !== undefined || (qaIr.extensions?.semanticJudgmentScenarioIds ?? []).includes(scenario.id);
   const unresolved = new Set(evaluation.unresolvedChecks.map((check) => check.expectationId));
   const candidates = [];
 
@@ -286,13 +291,23 @@ function buildSemanticInput(qaIr, verified, evaluation, secrets) {
     schemaVersion: SEMANTIC_JUDGE_INPUT_VERSION,
     qaIrId: qaIr.id,
     evidenceBundleId: verified.bundle.bundleId,
-    scenario: { id: scenario.id, title: scenario.title },
+    scenario: {
+      id: scenario.id,
+      title: scenario.title,
+      ...(scenario.semantics === undefined ? {} : { semantics: structuredClone(scenario.semantics) }),
+      ...requiredPathFromScenario(scenario),
+    },
     expectations: scenario.expectations.filter((expectation) => unresolved.has(expectation.id)).map((expectation) => copyExpectationForPrompt(expectation, isSemantic)),
     evidence,
   }, secrets);
   const validated = validateContract("SemanticJudgeInput", input);
   if (JSON.stringify(validated).length > MAX_SEMANTIC_INPUT_CHARS) throw new Error("Semantic judge input exceeds size limit");
   return deepFreeze(validated);
+}
+
+function requiredPathFromScenario(scenario) {
+  const step = scenario.steps.find(item => item.kind === "NAVIGATE" && item.target?.type === "PATH");
+  return step ? { requiredPath: step.target.value } : {};
 }
 
 // Literal strings that identify what the routed expectations are about: testIds, accessible
@@ -368,7 +383,8 @@ function statusFromChecks(resolvedChecks, unresolvedChecks) {
 
 function verdictFromExpectationResults(results) {
   if (results.length === 0) return "MANUAL_REVIEW";
-  if (results.every((item) => ["MATCHED", "NOT_APPLICABLE"].includes(item.status))) return "PASS";
+  if (results.every((item) => item.status === "NOT_APPLICABLE")) return "SKIP";
+  if (results.some((item) => item.status === "MATCHED") && results.every((item) => ["MATCHED", "NOT_APPLICABLE"].includes(item.status))) return "PASS";
   if (results.some((item) => item.status === "CONTRADICTED")) return "FAIL";
   return "MANUAL_REVIEW";
 }

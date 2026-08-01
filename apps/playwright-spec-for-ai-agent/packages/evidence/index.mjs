@@ -300,8 +300,8 @@ function writeEvidenceArchiveWithKey({ directory, bundles, manifest, readBlob, s
       assertStoredBlob(artifact, blob);
       if (blob.byteLength > MAX_ARCHIVE_BLOB_BYTES) throw new Error(`evidence blob ${artifact.storageRef} exceeds archive size limit`);
       assertNoSecretBytes(`evidence blob ${artifact.storageRef}`, blob, secretList);
-      assertNoHighConfidenceTokenBytes(`evidence blob ${artifact.storageRef}`, blob);
-      if (isTextContentType(artifact.contentType)) assertSecretFreeText(`evidence blob ${artifact.storageRef}`, decodeUtf8(blob, artifact.storageRef), secretList);
+      assertNoHighConfidenceTokenBytes(`evidence blob ${artifact.storageRef}`, blob, { artifact, bundle });
+      if (isTextContentType(artifact.contentType)) assertSecretFreeText(`evidence blob ${artifact.storageRef}`, textSecretScanText(blob, artifact.storageRef, { artifact, bundle }), secretList);
     }
   }
   const totalBlobBytes = [...blobs.values()].reduce((sum, blob) => sum + blob.byteLength, 0);
@@ -395,8 +395,8 @@ function readEvidenceArchiveWithKey({ directory, secrets = [] } = {}, key) {
       const blob = loadBlob(artifact.storageRef);
       assertStoredBlob(artifact, blob);
       assertNoSecretBytes(`evidence blob ${artifact.storageRef}`, blob, secretList);
-      assertNoHighConfidenceTokenBytes(`evidence blob ${artifact.storageRef}`, blob);
-      if (isTextContentType(artifact.contentType)) assertSecretFreeText(`evidence blob ${artifact.storageRef}`, decodeUtf8(blob, artifact.storageRef), secretList);
+      assertNoHighConfidenceTokenBytes(`evidence blob ${artifact.storageRef}`, blob, { artifact, bundle: verified.bundle });
+      if (isTextContentType(artifact.contentType)) assertSecretFreeText(`evidence blob ${artifact.storageRef}`, textSecretScanText(blob, artifact.storageRef, { artifact, bundle: verified.bundle }), secretList);
     }
   }
 
@@ -742,12 +742,39 @@ function assertNoSecretBytes(label, value, secrets) {
   for (const secret of secrets) if (value.indexOf(Buffer.from(secret)) !== -1) throw new Error(`${label} contains sensitive data`);
 }
 
-function assertNoHighConfidenceTokenBytes(label, value) {
+function assertNoHighConfidenceTokenBytes(label, value, context = {}) {
   // ponytail: raw-byte checks complement the required binary redactor; add OCR/archive inspection when those artifacts are enabled.
-  const text = value.toString("latin1");
+  const text = highConfidenceTokenScanText(value, context);
   if (new RegExp(HIGH_CONFIDENCE_TOKEN_PATTERN.source, "i").test(text) || new RegExp(HIGH_ENTROPY_QUOTED_PATTERN.source, "i").test(text)) {
     throw new Error(`${label} contains sensitive data`);
   }
+}
+
+function highConfidenceTokenScanText(value, { artifact, bundle } = {}) {
+  const raw = value.toString("latin1");
+  if (artifact?.type !== "ACTION_LOG" || !isJsonContentType(artifact.contentType) || !bundle) return raw;
+  return actionLogBindingMaskedText(value, raw, { artifact, bundle });
+}
+
+function textSecretScanText(value, storageRef, { artifact, bundle } = {}) {
+  const raw = decodeUtf8(value, storageRef);
+  if (artifact?.type !== "ACTION_LOG" || !isJsonContentType(artifact.contentType) || !bundle) return raw;
+  return actionLogBindingMaskedText(value, raw, { artifact, bundle });
+}
+
+function actionLogBindingMaskedText(value, fallback, { bundle }) {
+  let audit;
+  try {
+    audit = JSON.parse(value.toString("utf8"));
+  } catch {
+    return fallback;
+  }
+  if (!audit || typeof audit !== "object" || Array.isArray(audit) || !audit.proposal || typeof audit.proposal !== "object" || Array.isArray(audit.proposal)) return fallback;
+  const scan = structuredClone(audit);
+  if (scan.proposal.runId === bundle.runId) scan.proposal.runId = "[QA_NATIVE_BINDING]";
+  if (scan.proposal.scenarioId === bundle.scenarioId) scan.proposal.scenarioId = "[QA_NATIVE_BINDING]";
+  if (scan.proposal.proposalId === bundle.checkpointId) scan.proposal.proposalId = "[QA_NATIVE_BINDING]";
+  return exactJson(scan);
 }
 
 function archiveSecrets(secrets) {

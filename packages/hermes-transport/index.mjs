@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 export const REQUIRED_HERMES_AGENT_BIN = "hermes-agent";
+const DEFAULT_HERMES_TIMEOUT_MS = 180_000;
 export const HERMES_QA_COMMAND =
   process.env.HERMES_QA_COMMAND?.trim() || REQUIRED_HERMES_AGENT_BIN;
 
@@ -374,7 +375,7 @@ export function runHermes(
     requiredKeys = ["status"],
     requiredKeyGroups = null,
     mode = "browse",
-    timeoutMs,
+    timeoutMs = DEFAULT_HERMES_TIMEOUT_MS,
   } = {}
 ) {
   if (HERMES_QA_COMMAND !== REQUIRED_HERMES_AGENT_BIN) {

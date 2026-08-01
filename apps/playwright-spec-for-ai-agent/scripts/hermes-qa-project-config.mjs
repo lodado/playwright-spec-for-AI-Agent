@@ -313,16 +313,21 @@ export function resolveSpecFilesForPage(page, { readdir = readdirSync } = {}) {
 export function selectSpecFilesForPage(page, { readFile = readFileSync } = {}) {
   const files = resolveSpecFilesForPage(page);
   const expected = resolveExpectedStatusForPage(page);
-  if (!expected) return files;
   const kept = [];
   const seen = new Set();
+  let skippedDesignated = 0;
   for (const file of files) {
     const { scenario, liveSkip, alwaysRun } = parseAnnotations(readFile(file, "utf8"));
     const scenarioStatus = scenario ? scenario.trim().toUpperCase() : null;
     if (scenarioStatus) seen.add(scenarioStatus);
-    if (liveSkip) continue;
-    if (alwaysRun || scenarioStatus === expected) kept.push(file);
+    const designated = !expected || alwaysRun || scenarioStatus === expected;
+    if (liveSkip) {
+      if (designated) skippedDesignated += 1;
+      continue;
+    }
+    if (designated) kept.push(file);
   }
+  if (kept.length === 0 && skippedDesignated > 0) throw new Error(`page "${page}": all ${skippedDesignated} config-designated spec(s) are excluded by // @qa-live-skip: true`);
   if (kept.length === 0) throw new Error(`page "${page}": no spec matches expectedSubscriptionStatus "${expected}" (@qa-scenario found: ${[...seen].join(", ") || "none"}; mark cross-state specs with // @qa-always-run: true)`);
   return kept;
 }

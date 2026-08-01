@@ -3,6 +3,7 @@ import { chromium } from "@playwright/test";
 import { describe, expect, it } from "vitest";
 import { EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_AGENT_INPUT_VERSION } from "../../contracts/index.mjs";
 import { createHermesExecutionProposer } from "../../provider-hermes/index.mjs";
+import { validateAdaptiveExecutionEvidence } from "../../cli/qa-native-adaptive-evidence.mjs";
 import { assertPlaywrightAdaptiveExecution, openPlaywrightBrowserToolGateway, runAdaptiveSuiteWithPlaywright, runAdaptiveWithPlaywright } from "../index.mjs";
 
 const html = `<!doctype html>
@@ -34,6 +35,19 @@ const hostileOverlayHtml = `<!doctype html>
         document.querySelector('#cookie-banner').remove();
         document.querySelector('[data-testid=content-ready]').hidden = false;
       });
+    </script>
+  </body>
+</html>`;
+
+const blockingOverlayHtml = `<!doctype html>
+<html>
+  <head><link rel="icon" href="data:,"><style>#overlay{position:fixed;inset:0;z-index:10}</style></head>
+  <body>
+    <button data-testid="target">Open target</button>
+    <div id="overlay"><button data-testid="recovery-close">Dismiss overlay</button></div>
+    <script>
+      addEventListener('keydown', (event) => { if (event.key === 'Escape') document.querySelector('#overlay').remove(); });
+      document.querySelector('[data-testid=recovery-close]').onclick = () => document.querySelector('#overlay').remove();
     </script>
   </body>
 </html>`;
@@ -120,7 +134,7 @@ describe("adaptive Playwright runner", () => {
       currentMilestoneId: "refresh",
       currentPage: { pageId: "page-external-read", domGeneration: 1, url },
       recentObservations: [],
-      capabilityLease: { leaseId: "lease-external-read", actions: ["observe_dom", "click_observed_element"], allowedOrigins: [new URL(url).origin] },
+      capabilityLease: { leaseId: "lease-external-read", actions: ["observe_dom", "click_observed_element"], allowedOrigins: [new URL(url).origin, new URL(apiUrl).origin] },
       remainingBudget: { actions: 2, turns: 2, timeMs: 30_000, tokens: 2 },
     };
     let proposalId = 0;
@@ -291,6 +305,48 @@ describe("adaptive Playwright runner", () => {
     }
   }, 30_000);
 
+  it("returns pointer interception to the agent for autonomous recovery", async () => {
+    const server = createServer((_request, response) => response.end(blockingOverlayHtml));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${server.address().port}/`;
+    const agentInput = {
+      schemaVersion: EXECUTION_AGENT_INPUT_VERSION,
+      runId: "run-autonomous-recovery",
+      scenarioId: "scenario-autonomous-recovery",
+      goal: { id: "goal-autonomous-recovery", description: "Open the authored target." },
+      milestones: [
+        { id: "open-target", class: "REQUIRED_EXACT_ACTION", status: "PENDING", description: "Open target.", requiredAction: "click_observed_element", target: { testId: "target" } },
+        { id: "collect-evidence", class: "REQUIRED_SEMANTIC_MILESTONE", status: "PENDING", description: "Collect evidence." },
+      ],
+      currentMilestoneId: "open-target",
+      currentPage: { pageId: "page-autonomous-recovery", domGeneration: 1, url },
+      recentObservations: [],
+      capabilityLease: { leaseId: "lease-autonomous-recovery", actions: ["observe_dom", "click_observed_element", "press_key"], allowedOrigins: [new URL(url).origin] },
+      remainingBudget: { actions: 7, turns: 7, timeMs: 30_000, tokens: 30_000 },
+    };
+    const seenInputs = [];
+    let proposalId = 0;
+    const proposeAction = async (currentInput) => {
+      seenInputs.push(currentInput);
+      const observation = currentInput.recentObservations[0];
+      const target = observation?.elements.find((element) => element.milestoneIds.includes("open-target"));
+      const recovery = observation?.elements.find((element) => element.accessibleName === "Dismiss overlay");
+      const clickedElement = currentInput.goal.description.includes("Runtime fact:") ? recovery : target;
+      const action = clickedElement ? "click_observed_element" : "observe_dom";
+      return { tokensUsed: 0, proposal: { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: `proposal-autonomous-${++proposalId}`, runId: currentInput.runId, scenarioId: currentInput.scenarioId, milestoneId: currentInput.currentMilestoneId, leaseId: currentInput.capabilityLease.leaseId, action, parameters: clickedElement ? { observationId: observation.observationId, elementId: clickedElement.elementId } : {} } };
+    };
+
+    try {
+      const execution = await runAdaptiveWithPlaywright({ input: agentInput, proposeAction, browserType: chromium });
+      expect(execution.outcome).toMatchObject({ type: "COMPLETED", completedMilestoneIds: ["open-target", "collect-evidence"] });
+      expect(seenInputs.some((item) => item.goal.description.includes("Runtime fact:"))).toBe(true);
+      expect(execution.bundles).toHaveLength(7);
+      expect(() => validateAdaptiveExecutionEvidence({ input: agentInput, outcome: execution.outcome, bundles: execution.bundles, manifest: execution.manifest, readBlob: execution.readBlob })).not.toThrow();
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }, 30_000);
+
   function suiteScenario(url, scenarioId) {
     return {
       schemaVersion: EXECUTION_AGENT_INPUT_VERSION,
@@ -344,6 +400,29 @@ describe("adaptive Playwright runner", () => {
       expect(suite.executions[2].outcome.type).toBe("COMPLETED");
       expect(suite.outcome).toBe(suite.executions[2].outcome);
       expect(() => assertPlaywrightAdaptiveExecution(suite)).not.toThrow();
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }, 30_000);
+
+  it("preserves a failed scenario's prior evidence before continuing the suite", async () => {
+    const server = createServer((_request, response) => response.end('<!doctype html><main data-testid="dashboard">Enterprise Dashboard</main>'));
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${server.address().port}/`;
+    const failing = suiteScenario(url, "s1");
+    failing.milestones[0].expectation.expected.value = "Never Present";
+    const completing = suiteScenario(url, "s2");
+    let proposalId = 0;
+    const proposeAction = async (agentInput) => {
+      if (agentInput.scenarioId === "s1" && agentInput.recentObservations.length > 0) throw new Error("failed after evidence");
+      return { tokensUsed: 0, proposal: { schemaVersion: EXECUTION_ACTION_PROPOSAL_VERSION, proposalId: `proposal-${++proposalId}`, runId: agentInput.runId, scenarioId: agentInput.scenarioId, milestoneId: agentInput.currentMilestoneId, leaseId: agentInput.capabilityLease.leaseId, action: "observe_dom", parameters: {} } };
+    };
+    try {
+      const suite = await runAdaptiveSuiteWithPlaywright({ inputs: [failing, completing], proposeAction, browserType: chromium });
+      expect(suite.executions[0].outcome).toMatchObject({ type: "ERROR", reason: "failed after evidence" });
+      expect(suite.executions[0].bundleIds).toHaveLength(1);
+      expect(suite.executions[1].outcome.type).toBe("COMPLETED");
+      expect(suite.manifest.checkpoints).toHaveLength(suite.bundles.length);
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }

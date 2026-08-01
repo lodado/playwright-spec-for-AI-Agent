@@ -308,6 +308,22 @@ describe("readonly Playwright execution provider", () => {
     expect(result.bundles[0].facts[0]).toMatchObject({ kind: "ELEMENT_OBSERVATION", value: { expectationId: "heading-visible", resolution: "FOUND", visible: false } });
   });
 
+  it("shares the run budget across missing expectations in a multi-scenario page plan", async () => {
+    const input = qaIr();
+    const scenario = input.suites[0].scenarios[0];
+    input.suites[0].scenarios = Array.from({ length: 3 }, (_, index) => ({
+      ...structuredClone(scenario),
+      id: `scenario-${index}`,
+      steps: scenario.steps.map((step) => step.kind === "CHECKPOINT" ? { ...step, checkpointId: `loaded-${index}` } : { ...step }),
+    }));
+    const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities(), timeoutPolicy: { perNodeMs: 400, runMs: 900 } });
+    const fixture = fakeBrowser({ elementCount: 0, waitForVisible: false });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-multi-missing", browserType: fixture.browserType });
+
+    expect(result.outcome.type, JSON.stringify(result.outcome)).toBe("COMPLETED");
+    expect(result.bundles).toHaveLength(3);
+  });
+
   it("re-navigates once when the first navigation bounces off the target path", async () => {
     // A stale access token bounces the first hit to /login while the app silently refreshes the
     // session; one bounded re-navigation reaches the refreshed page. A healthy landing (same

@@ -72,7 +72,7 @@ function scriptedProposer({ blockScenarioIds = [] } = {}) {
 }
 
 async function executeMatrix({ cwd, baseUrl, runDir, proposer, extraArgs = [] }) {
-  return runQaNative(["execute", "--spec=dashboard.spec.ts", `--base-url=${baseUrl}`, `--run-dir=${runDir}`, "--provider=hermes", "--mode=adaptive", ...extraArgs], {
+  return runQaNative(["execute", "--spec=dashboard.spec.ts", `--base-url=${baseUrl}`, `--run-dir=${runDir}`, "--provider=hermes", "--mode=adaptive", "--compiler=ast", ...extraArgs], {
     cwd,
     env: { QA_NATIVE_INTEGRITY_KEY: integrityKey.toString("base64") },
     handlers: { execute: (args) => executeQaNative(args, { createProposer: proposer, executeAdaptive: (options) => runAdaptiveSuiteWithPlaywright({ ...options, browserType: chromium }) }) },

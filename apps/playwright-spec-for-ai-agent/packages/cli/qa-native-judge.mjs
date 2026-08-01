@@ -1,49 +1,14 @@
 import { rmSync } from "node:fs";
 import { join, relative } from "node:path";
 import { RUNTIME_OUTCOME_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
-import { readEvidenceArchive } from "../evidence/index.mjs";
 import { judgeWithHermes } from "../provider-hermes/index.mjs";
-import { validateAdaptiveExecutionEvidence } from "./qa-native-adaptive-evidence.mjs";
-import { readAuthenticatedRunEnvelope, verifyRunEnvelopeBindings } from "./qa-native-run-envelope.mjs";
-import { CliError, createExclusiveQaDirectory, readPrivateJson, writePrivateJsonExclusive } from "./qa-native.mjs";
+import { loadValidatedExecution } from "./qa-native-result-set.mjs";
+import { CliError, createExclusiveQaDirectory, writePrivateJsonExclusive } from "./qa-native.mjs";
 
 export async function judgeQaNative({ runDirectory, integrityKey, cwd, failOn }, overrides = {}) {
   const judge = overrides.judge ?? judgeWithHermes;
   const reportVerdicts = overrides.reportVerdicts ?? defaultReportVerdicts;
-  const outcome = readPrivateJson(relative(cwd, join(runDirectory, "run.json")), { cwd });
-  validateContract("RuntimeOutcome", outcome);
-  if (outcome.stage !== "execute" || outcome.type !== "COMPLETED") throw new Error("QA execution is incomplete");
-
-  const qaIr = readPrivateJson(relative(cwd, join(runDirectory, "qa-ir.json")), { cwd });
-  validateContract("QaIrDocument", qaIr);
-  const archive = readEvidenceArchive({ directory: join(runDirectory, "evidence"), integrityKey });
-  const envelope = readAuthenticatedRunEnvelope({ runDirectory, cwd, integrityKey });
-  let bundles = archive.bundles;
-  if (envelope.mode === "adaptive") {
-    const agentInputs = readPrivateJson(relative(cwd, join(runDirectory, "execution-agent-inputs.json")), { cwd });
-    const agentOutcomes = readPrivateJson(relative(cwd, join(runDirectory, "execution-agent-outcomes.json")), { cwd });
-    if (!Array.isArray(agentInputs) || !Array.isArray(agentOutcomes) || agentInputs.length === 0 || agentInputs.length !== agentOutcomes.length) throw new Error("adaptive execution metadata is invalid");
-    agentInputs.forEach((agentInput, index) => {
-      validateContract("ExecutionAgentInput", agentInput);
-      validateContract("ExecutionAgentOutcome", agentOutcomes[index], { input: agentInput });
-      if (agentInput.runId !== archive.manifest.runId) throw new Error("adaptive execution metadata does not match evidence");
-    });
-    verifyRunEnvelopeBindings({ envelope, runId: envelope.runId, mode: "adaptive", qaIr, runtimeOutcome: outcome, evidenceManifest: archive.manifest, executionAgentInputs: agentInputs, executionAgentOutcomes: agentOutcomes });
-    const finalBundles = agentInputs.map((agentInput, index) => {
-      const scenarioBundles = archive.bundles.filter((bundle) => bundle.scenarioId === agentInput.scenarioId);
-      // A non-COMPLETED scenario may have failed before sealing any evidence — there is nothing to
-      // judge, so skip it rather than failing the whole judgment.
-      if (scenarioBundles.length === 0 && agentOutcomes[index].type !== "COMPLETED") return undefined;
-      validateAdaptiveExecutionEvidence({ input: agentInput, outcome: agentOutcomes[index], bundles: scenarioBundles, manifest: archive.manifest, readBlob: archive.readBlob });
-      const finalBundle = scenarioBundles.at(-1);
-      if (finalBundle === undefined) throw new Error("adaptive final evidence is missing");
-      return finalBundle;
-    }).filter((bundle) => bundle !== undefined);
-    bundles = finalBundles;
-  } else {
-    const executionPlan = readPrivateJson(relative(cwd, join(runDirectory, "execution-plan.json")), { cwd });
-    verifyRunEnvelopeBindings({ envelope, runId: envelope.runId, mode: "strict", qaIr, runtimeOutcome: outcome, evidenceManifest: archive.manifest, executionPlan });
-  }
+  const { qaIr, archive, bundles } = loadValidatedExecution({ runDirectory, integrityKey, cwd });
   const results = [];
   const perScenario = [];
   for (const bundle of bundles) {
@@ -75,11 +40,13 @@ export async function judgeQaNative({ runDirectory, integrityKey, cwd, failOn },
       stage: "judge",
       type: "COMPLETED",
     }, { cwd });
-    const totals = perScenario.reduce((counts, { verdict }) => ({
+    const counted = perScenario.reduce((counts, { verdict }) => ({
       pass: counts.pass + (verdict === "PASS" ? 1 : 0),
       fail: counts.fail + (verdict === "FAIL" ? 1 : 0),
+      skip: counts.skip + (verdict === "SKIP" ? 1 : 0),
       manualReview: counts.manualReview + (verdict === "MANUAL_REVIEW" ? 1 : 0),
-    }), { pass: 0, fail: 0, manualReview: 0 });
+    }), { pass: 0, fail: 0, skip: 0, manualReview: 0 });
+    const totals = counted.skip > 0 ? counted : { pass: counted.pass, fail: counted.fail, manualReview: counted.manualReview };
     reportVerdicts({ perScenario, totals });
     if (failOn === "fail" && totals.fail > 0) return 1;
     if (failOn === "manual-review" && (totals.fail > 0 || totals.manualReview > 0)) return 1;
@@ -97,7 +64,8 @@ function defaultReportVerdicts({ perScenario, totals }) {
   for (const { scenarioId, verdict, confidence } of perScenario) {
     process.stdout.write(`qa-native judge: ${scenarioId} ${verdict} (confidence ${confidence})\n`);
   }
-  process.stdout.write(`verdicts: ${totals.pass} pass, ${totals.fail} fail, ${totals.manualReview} manual-review\n`);
+  const skipNote = (totals.skip ?? 0) > 0 ? `, ${totals.skip} skip` : "";
+  process.stdout.write(`verdicts: ${totals.pass} pass, ${totals.fail} fail${skipNote}, ${totals.manualReview} manual-review\n`);
 }
 
 function shortHash(value) {

@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.9.0
+
+### Minor Changes
+
+- Add AI-first Playwright spec extraction and judgment review with bounded independent model calls, private content-addressed artifacts, and an abstract adaptive compiler that joins AI meaning to immutable parser-owned test identities, inherited policies, fixtures, and page metadata. Large specs are extracted in bounded batches, and judges receive applicability, authored-flow, and required-route context so redirected pages cannot become false contradiction evidence.
+- Retry only timed-out or invalid full-spec batches at a smaller size, and constrain live applicability to runtime-mapped scenario keys and pre-flow prerequisites so copied hashes or post-action titles cannot drop coverage.
+- Limit extracted applicability to read-only observable initial state; future mock responses, fixture identities, uploads, destinations, and toasts remain authored flow or claims instead of becoming false preflight skips.
+- Allow one additional independently reviewed abstraction revision before failing closed, and invalidate old abstraction cache decisions without changing QA IR or run-artifact schemas.
+
+## 2.8.0
+
+### Minor Changes
+
+- Add a cached, fail-closed semantic AI fallback for Playwright tests that static analysis cannot represent. Static actions and policy remain authoritative, while a separate evidence-only AI judge evaluates extracted DOM, URL, network, ordering, and state claims.
+- Make strict `--allow-partial` page runs skip scenarios whose parsed actions exceed strict runtime capabilities instead of aborting the entire page.
+
 ## 2.7.0
 
 ### Minor Changes

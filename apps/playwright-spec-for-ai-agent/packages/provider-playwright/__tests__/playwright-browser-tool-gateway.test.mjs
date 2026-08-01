@@ -8,7 +8,7 @@ import { createInMemoryEvidenceStore } from "../../evidence/index.mjs";
 import { judgeEvidence } from "../../judge/index.mjs";
 import * as provider from "../index.mjs";
 
-const { openPlaywrightBrowserToolGateway, playwrightBrowserToolCapabilities, runAdaptiveWithPlaywright } = provider;
+const { observeAdaptiveApplicabilityPage, openPlaywrightBrowserToolGateway, playwrightBrowserToolCapabilities, runAdaptiveWithPlaywright } = provider;
 
 function executionAgentInput() {
   return {
@@ -65,6 +65,7 @@ function fakeBrowser({
   elementText = "Settings",
   protectedElement = false,
   requestAfterClick,
+  webSocketAfterClick = false,
   routeNavigationRequests = false,
   historyMissing = false,
 } = {}) {
@@ -72,6 +73,7 @@ function fakeBrowser({
   const screenshots = [];
   let pageUrl = url;
   let routeHandler;
+  let webSocketHandler;
 
   const htmlLocator = {
     evaluate: vi.fn(async (evaluate, maxChars) => {
@@ -106,6 +108,7 @@ function fakeBrowser({
           continue: vi.fn(async () => calls.push(["continue"])),
         });
       }
+      if (webSocketAfterClick) webSocketHandler({ close: () => calls.push(["close-websocket"]) });
     }),
     hover: vi.fn(async () => calls.push(["hover", "settings"])),
     waitForElementState: vi.fn(async (state) => calls.push(["wait", state])),
@@ -165,12 +168,15 @@ function fakeBrowser({
     },
     waitForFunction: vi.fn(async () => calls.push(["wait-for-function"])),
     evaluate: vi.fn(async () => undefined),
+    getByTestId: vi.fn(() => candidate),
   };
   const context = {
     route: vi.fn(async (_pattern, handler) => {
       routeHandler = handler;
     }),
-    routeWebSocket: vi.fn(async () => undefined),
+    routeWebSocket: vi.fn(async (_pattern, handler) => {
+      webSocketHandler = handler;
+    }),
     newPage: vi.fn(async () => page),
     close: vi.fn(async () => calls.push(["close-context"])),
   };
@@ -254,6 +260,15 @@ async function artifactText(gateway, bundle) {
 }
 
 describe("Playwright browser tool gateway", () => {
+  it("captures one bounded read-only applicability observation", async () => {
+    const fixture = fakeBrowser();
+    const observation = await observeAdaptiveApplicabilityPage({ input: executionAgentInput(), browserType: fixture.browserType });
+
+    expect(observation).toMatchObject({ url: "https://example.test/dashboard", aria: expect.stringContaining("Settings"), elements: [expect.objectContaining({ accessibleName: "Settings" })] });
+    expect(fixture.calls).not.toContainEqual(["click", "settings"]);
+    expect(fixture.browser.close).toHaveBeenCalledOnce();
+  });
+
   it("closes the browser when the adaptive proposer fails", async () => {
     const fixture = fakeBrowser();
 
@@ -512,6 +527,22 @@ describe("Playwright browser tool gateway", () => {
     await gateway.close();
   });
 
+  it("binds safe elements to a targetless semantic milestone without inventing selectors", async () => {
+    const fixture = fakeBrowser();
+    const input = executionAgentInput();
+    input.milestones = [input.milestones[1]];
+    input.milestones[0].exploratory = true;
+    input.currentMilestoneId = "dialog-visible";
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
+
+    const execution = await gateway.execute({ proposal: proposal(gateway.agentInput(), "observe_dom"), tokensUsed: 1 });
+    const observed = execution.observation.elements[0];
+    expect(observed.milestoneIds).toEqual(["dialog-visible"]);
+    expect(observed.allowedActions).toContain("click_observed_element");
+
+    await gateway.close();
+  });
+
   it("observes ARIA as opaque actionable elements", async () => {
     const fixture = fakeBrowser();
     const input = executionAgentInput();
@@ -566,6 +597,22 @@ describe("Playwright browser tool gateway", () => {
     });
     expect(fixture.screenshots).toEqual([]);
 
+    await gateway.close();
+  });
+
+  it("does not prove an exact milestone when the observed node identity changes before click", async () => {
+    const fixture = fakeBrowser();
+    const gateway = await openGateway({ browserType: fixture.browserType });
+    const observed = await gateway.execute({ proposal: proposal(gateway.agentInput(), "observe_dom"), tokensUsed: 1 });
+    const element = observed.observation.elements[0];
+    fixture.candidate.evaluate.mockResolvedValue({ tag: "button", role: "button", accessibleName: "Replaced", text: "Replaced", testId: "replaced", protected: false, anchor: false, form: false, editable: false, disabled: false });
+
+    const execution = await gateway.execute({ proposal: proposal(gateway.agentInput(), "click_observed_element", { observationId: observed.observation.observationId, elementId: element.elementId }), tokensUsed: 1 });
+
+    expect(execution.result.accepted).toBe(true);
+    expect(gateway.agentInput().currentMilestoneId).toBe("open-settings");
+    expect(gateway.agentInput().milestones[0]).toMatchObject({ id: "open-settings", status: "PENDING" });
+    expect(await artifactText(gateway, execution.bundle)).toContain('"satisfiedMilestoneIds":[]');
     await gateway.close();
   });
 
@@ -913,7 +960,7 @@ describe("Playwright browser tool gateway", () => {
     }
   });
 
-  it("allows every page API request triggered by a click", async () => {
+  it("blocks a mutation triggered by an autonomous browser click", async () => {
     const fixture = fakeBrowser({ requestAfterClick: "POST" });
     const gateway = await openGateway({ browserType: fixture.browserType });
     const observed = await gateway.execute({
@@ -928,12 +975,39 @@ describe("Playwright browser tool gateway", () => {
         elementId: element.elementId,
       }),
       tokensUsed: 1,
-    })).resolves.toMatchObject({ result: { accepted: true } });
+    })).rejects.toMatchObject({ code: "POLICY_VIOLATION" });
 
-    expect(fixture.calls).toContainEqual(["continue"]);
-    expect(fixture.calls).not.toContainEqual(["abort", "blockedbyclient"]);
-    expect(fixture.context.routeWebSocket).not.toHaveBeenCalled();
+    expect(fixture.calls).toContainEqual(["abort", "blockedbyclient"]);
+    expect(fixture.context.routeWebSocket).toHaveBeenCalledTimes(1);
     expect(fixture.screenshots).toEqual([]);
+  });
+
+  it("blocks an unleased sibling-origin read after an autonomous browser click", async () => {
+    const fixture = fakeBrowser({ requestAfterClick: "GET" });
+    const gateway = await openGateway({ browserType: fixture.browserType });
+    const observed = await gateway.execute({ proposal: proposal(gateway.agentInput(), "observe_dom"), tokensUsed: 1 });
+    const element = observed.observation.elements[0];
+
+    await expect(gateway.execute({ proposal: proposal(gateway.agentInput(), "click_observed_element", { observationId: observed.observation.observationId, elementId: element.elementId }), tokensUsed: 1 })).resolves.toMatchObject({ result: { accepted: true } });
+    expect(fixture.calls).toContainEqual(["abort", "blockedbyclient"]);
+    expect(fixture.calls).not.toContainEqual(["continue"]);
+  });
+
+  it("blocks a WebSocket triggered by an autonomous browser click", async () => {
+    const fixture = fakeBrowser({ webSocketAfterClick: true });
+    const gateway = await openGateway({ browserType: fixture.browserType });
+    const observed = await gateway.execute({ proposal: proposal(gateway.agentInput(), "observe_dom"), tokensUsed: 1 });
+    const element = observed.observation.elements[0];
+
+    await expect(gateway.execute({
+      proposal: proposal(gateway.agentInput(), "click_observed_element", {
+        observationId: observed.observation.observationId,
+        elementId: element.elementId,
+      }),
+      tokensUsed: 1,
+    })).rejects.toMatchObject({ code: "POLICY_VIOLATION" });
+
+    expect(fixture.calls).toContainEqual(["close-websocket"]);
   });
 
   it("withholds protected element text and actions from observations", async () => {

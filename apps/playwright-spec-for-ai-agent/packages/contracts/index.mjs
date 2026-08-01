@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 
 export const CONTRACT_VIOLATION = "CONTRACT_VIOLATION";
 export const ARTIFACT_VERSION = "artifact/0.1";
-export const QA_IR_VERSION = "qa-ir/0.2";
+export const QA_IR_VERSION = "qa-ir/0.3";
+const LEGACY_QA_IR_VERSION = "qa-ir/0.2";
 export const COMPILE_RESULT_VERSION = "compile-result/0.1";
 export const DIAGNOSTIC_VERSION = "diagnostic/0.1";
 export const PROVIDER_CAPABILITIES_VERSION = "provider-capabilities/0.1";
@@ -17,7 +18,8 @@ export const DETERMINISTIC_EVALUATION_VERSION = "deterministic-evaluation/0.1";
 export const EVIDENCE_BUNDLE_VERSION = "evidence-bundle/0.1";
 export const EVIDENCE_MANIFEST_VERSION = "evidence-manifest/0.1";
 export const JUDGE_RESULT_VERSION = "judge-result/0.1";
-export const SEMANTIC_JUDGE_INPUT_VERSION = "semantic-judge-input/0.2";
+export const JUDGMENT_REVIEW_VERSION = "judgment-review/0.1";
+export const SEMANTIC_JUDGE_INPUT_VERSION = "semantic-judge-input/0.3";
 export const SEMANTIC_JUDGE_DECISION_VERSION = "semantic-judge-decision/0.1";
 export const FAILURE_DIAGNOSIS_VERSION = "failure-diagnosis/0.1";
 export const CODE_CONTEXT_VERSION = "code-context/0.1";
@@ -96,7 +98,7 @@ export const RUNTIME_ERROR_CODES = Object.freeze([
   "UNKNOWN_RUNTIME_ERROR",
 ]);
 
-const runtimeStages = ["compile", "plan", "execute", "evidence", "evaluate", "judge", "diagnose", "report", "propose-patch", "apply-patch", "verify-patch"];
+const runtimeStages = ["compile", "plan", "execute", "evidence", "evaluate", "judge", "review", "diagnose", "report", "propose-patch", "apply-patch", "verify-patch"];
 const failureOrigins = ["PRODUCT_CODE", "TEST_CODE", "QA_SPEC", "API_CONTRACT", "FIXTURE_OR_MOCK", "TEST_DATA", "ENVIRONMENT", "THIRD_PARTY", "UNKNOWN"];
 const codeMatchReasons = ["TEST_ID_MATCH", "VISIBLE_TEXT_MATCH", "ROUTE_MATCH", "NETWORK_ENDPOINT_MATCH", "STACK_TRACE_MATCH", "RECENTLY_CHANGED", "DEPENDENCY_MATCH"];
 const payloadHashNoise = new Set([
@@ -133,6 +135,7 @@ const schemas = {
   EvidenceBundle: validateEvidenceBundle,
   EvidenceManifest: validateEvidenceManifest,
   JudgeResult: validateJudgeResult,
+  JudgmentReview: validateJudgmentReview,
   SemanticJudgeInput: validateSemanticJudgeInput,
   SemanticJudgeDecision: validateSemanticJudgeDecision,
   FailureDiagnosis: validateFailureDiagnosis,
@@ -243,7 +246,7 @@ function validateArtifactEnvelope(value, path) {
 function validateQaIrDocument(value, path) {
   object(value, path, "QaIrDocument");
   allowedKeys(value, ["schemaVersion", "id", "source", "suites", "extensions"], path, "QaIrDocument");
-  exact(value.schemaVersion, QA_IR_VERSION, `${path}.schemaVersion`, "QaIrDocument");
+  oneOf(value.schemaVersion, [QA_IR_VERSION, LEGACY_QA_IR_VERSION], `${path}.schemaVersion`, "QaIrDocument");
   string(value.id, `${path}.id`, "QaIrDocument");
   object(value.source, `${path}.source`, "QaIrDocument");
   allowedKeys(value.source, ["adapter", "adapterVersion", "uri", "revision"], `${path}.source`, "QaIrDocument");
@@ -272,7 +275,7 @@ function validateQaSuite(value, path) {
 
 function validateQaScenario(value, path) {
   object(value, path, "QaIrDocument");
-  allowedKeys(value, ["id", "title", "preconditions", "steps", "expectations", "policy", "provenance", "fixtures"], path, "QaIrDocument");
+  allowedKeys(value, ["id", "title", "preconditions", "steps", "expectations", "policy", "provenance", "fixtures", "semantics"], path, "QaIrDocument");
   string(value.id, `${path}.id`, "QaIrDocument");
   string(value.title, `${path}.title`, "QaIrDocument");
   // Optional additive field (no schemaVersion bump): `@qa-fixture` name→repo-relative path map for
@@ -284,6 +287,7 @@ function validateQaScenario(value, path) {
       boundedString(fixturePath, 1_024, `${path}.fixtures.${name}`, "QaIrDocument");
     }
   }
+  if (value.semantics !== undefined) validateScenarioSemantics(value.semantics, `${path}.semantics`);
   recordArray(value.preconditions, `${path}.preconditions`, "QaIrDocument");
   array(value.steps, `${path}.steps`, "QaIrDocument");
   value.steps.forEach((step, index) => validateQaStep(step, `${path}.steps[${index}]`));
@@ -295,7 +299,7 @@ function validateQaScenario(value, path) {
     object(expectation, expectationPath, "QaIrDocument");
     allowedKeys(expectation, ["id", "kind", "target", "expected", "url", "value", "text", "attribute", "provenance"], expectationPath, "QaIrDocument");
     string(expectation.id, `${expectationPath}.id`, "QaIrDocument");
-    oneOf(expectation.kind, ["CONTAINS_TEXT", "VISIBLE", "NOT_VISIBLE", "PRESENT", "DISABLED", "ROLE", "NAME", "ATTRIBUTE", "URL", "URL_MATCH", "VISIBLE_TEXT", "VISUAL_CONSISTENCY", "VISUAL_STABILITY"], `${expectationPath}.kind`, "QaIrDocument");
+    oneOf(expectation.kind, ["CONTAINS_TEXT", "VISIBLE", "NOT_VISIBLE", "PRESENT", "DISABLED", "ROLE", "NAME", "ATTRIBUTE", "URL", "URL_MATCH", "VISIBLE_TEXT", "SEMANTIC_CLAIM", "VISUAL_CONSISTENCY", "VISUAL_STABILITY"], `${expectationPath}.kind`, "QaIrDocument");
     if (expectation.target !== undefined) validateSemanticTarget(expectation.target, `${expectationPath}.target`);
     if (expectation.provenance !== undefined) {
       array(expectation.provenance, `${expectationPath}.provenance`, "QaIrDocument");
@@ -308,6 +312,17 @@ function validateQaScenario(value, path) {
   validateCapabilityPolicy(value.policy, `${path}.policy`, "QaIrDocument");
   array(value.provenance, `${path}.provenance`, "QaIrDocument");
   value.provenance.forEach((item, index) => validateSourceProvenance(item, `${path}.provenance[${index}]`, "QaIrDocument"));
+}
+
+function validateScenarioSemantics(value, path, contract = "QaIrDocument") {
+  object(value, path, contract);
+  allowedKeys(value, ["applicability", "when", "claims", "classification"], path, contract);
+  for (const key of ["applicability", "when", "claims"]) {
+    array(value[key], `${path}.${key}`, contract);
+    if (value[key].length > 20 || (key === "claims" && value[key].length === 0)) fail(contract, `${path}.${key}`, `must contain ${key === "claims" ? "1 to" : "at most"} 20 items`);
+    value[key].forEach((item, index) => boundedString(item, 4_096, `${path}.${key}[${index}]`, contract));
+  }
+  oneOf(value.classification, ["LIVE_EXECUTABLE", "LIVE_JUDGMENT_ONLY", "MOCK_ONLY", "AMBIGUOUS"], `${path}.classification`, contract);
 }
 
 function validateQaStep(value, path) {
@@ -472,11 +487,15 @@ function validateExecutionAgentInput(value, path) {
   value.milestones.forEach((milestone, index) => {
     const milestonePath = `${path}.milestones[${index}]`;
     object(milestone, milestonePath, contract);
-    allowedKeys(milestone, ["id", "class", "status", "description", "requiredAction", "target", "expectation", "fixture"], milestonePath, contract);
+    allowedKeys(milestone, ["id", "class", "status", "description", "requiredAction", "target", "expectation", "fixture", "exploratory"], milestonePath, contract);
     boundedString(milestone.id, 256, `${milestonePath}.id`, contract);
     oneOf(milestone.class, MILESTONE_CLASSES, `${milestonePath}.class`, contract);
     oneOf(milestone.status, ["PENDING", "COMPLETED", "BLOCKED"], `${milestonePath}.status`, contract);
     boundedString(milestone.description, 4_096, `${milestonePath}.description`, contract);
+    if (milestone.exploratory !== undefined) {
+      bool(milestone.exploratory, `${milestonePath}.exploratory`, contract);
+      if (milestone.exploratory !== true || milestone.class !== "REQUIRED_SEMANTIC_MILESTONE" || milestone.target !== undefined || milestone.expectation !== undefined) fail(contract, `${milestonePath}.exploratory`, "is only allowed on a targetless semantic milestone");
+    }
     if (milestone.target !== undefined) validateSemanticTarget(milestone.target, `${milestonePath}.target`, contract);
     if (milestone.expectation !== undefined) {
       object(milestone.expectation, `${milestonePath}.expectation`, contract);
@@ -785,9 +804,11 @@ function validateSemanticJudgeInput(value, path) {
   string(value.qaIrId, `${path}.qaIrId`, "SemanticJudgeInput");
   string(value.evidenceBundleId, `${path}.evidenceBundleId`, "SemanticJudgeInput");
   object(value.scenario, `${path}.scenario`, "SemanticJudgeInput");
-  allowedKeys(value.scenario, ["id", "title"], `${path}.scenario`, "SemanticJudgeInput");
+  allowedKeys(value.scenario, ["id", "title", "semantics", "requiredPath"], `${path}.scenario`, "SemanticJudgeInput");
   string(value.scenario.id, `${path}.scenario.id`, "SemanticJudgeInput");
   string(value.scenario.title, `${path}.scenario.title`, "SemanticJudgeInput");
+  if (value.scenario.semantics !== undefined) validateScenarioSemantics(value.scenario.semantics, `${path}.scenario.semantics`, "SemanticJudgeInput");
+  if (value.scenario.requiredPath !== undefined) boundedString(value.scenario.requiredPath, 2_048, `${path}.scenario.requiredPath`, "SemanticJudgeInput");
   array(value.expectations, `${path}.expectations`, "SemanticJudgeInput");
   const expectationIds = new Set();
   value.expectations.forEach((item, index) => {
@@ -899,6 +920,31 @@ function validateJudgeResult(value, path, context) {
   allowedKeys(value.judge, ["provider", "model", "modelVersion", "promptVersion"], `${path}.judge`, "JudgeResult");
   for (const key of ["provider", "model", "promptVersion"]) string(value.judge[key], `${path}.judge.${key}`, "JudgeResult");
   if (value.judge.modelVersion !== undefined) string(value.judge.modelVersion, `${path}.judge.modelVersion`, "JudgeResult");
+}
+
+function validateJudgmentReview(value, path, context = {}) {
+  const contract = "JudgmentReview";
+  object(value, path, contract);
+  allowedKeys(value, ["schemaVersion", "reviewId", "qaIrId", "evidenceBundleId", "judgeResultId", "status", "issues", "reviewer", "inputHash"], path, contract);
+  exact(value.schemaVersion, JUDGMENT_REVIEW_VERSION, `${path}.schemaVersion`, contract);
+  for (const key of ["reviewId", "qaIrId", "evidenceBundleId", "judgeResultId", "inputHash"]) boundedString(value[key], 512, `${path}.${key}`, contract);
+  oneOf(value.status, ["APPROVED", "REVISE", "MANUAL_REVIEW"], `${path}.status`, contract);
+  array(value.issues, `${path}.issues`, contract);
+  if (value.issues.length > 20 || (value.status === "APPROVED" && value.issues.length !== 0) || (value.status !== "APPROVED" && value.issues.length === 0)) fail(contract, `${path}.issues`, "must agree with review status");
+  value.issues.forEach((issue, index) => boundedString(issue, 2_000, `${path}.issues[${index}]`, contract));
+  object(value.reviewer, `${path}.reviewer`, contract);
+  allowedKeys(value.reviewer, ["provider", "model", "modelVersion", "promptVersion"], `${path}.reviewer`, contract);
+  for (const key of ["provider", "model", "promptVersion"]) boundedString(value.reviewer[key], 512, `${path}.reviewer.${key}`, contract);
+  if (value.reviewer.modelVersion !== undefined) boundedString(value.reviewer.modelVersion, 512, `${path}.reviewer.modelVersion`, contract);
+  if (context.qaIr !== undefined) {
+    validateQaIrDocument(context.qaIr, "$.qaIr");
+    exact(value.qaIrId, context.qaIr.id, `${path}.qaIrId`, contract);
+  }
+  if (context.judgeResult !== undefined) {
+    validateJudgeResult(context.judgeResult, "$.judgeResult", context);
+    exact(value.judgeResultId, context.judgeResult.resultId, `${path}.judgeResultId`, contract);
+    exact(value.evidenceBundleId, context.judgeResult.evidenceBundleId, `${path}.evidenceBundleId`, contract);
+  }
 }
 
 function validateExpectationJudgment(value, path, verdict, evidenceIds, contract = "JudgeResult", expectationIds) {

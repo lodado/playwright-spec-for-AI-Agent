@@ -12,6 +12,7 @@ import { runAdaptiveSuiteWithPlaywright } from "../../provider-playwright/index.
 import { executeQaNative } from "../qa-native-execute.mjs";
 import { judgeQaNative } from "../qa-native-judge.mjs";
 import { reportQaNative } from "../qa-native-report.mjs";
+import { reviewQaNative } from "../qa-native-review.mjs";
 import { runQaNative } from "../qa-native.mjs";
 
 const temporaryDirectories = [];
@@ -50,8 +51,8 @@ function repository() {
   return cwd;
 }
 
-describe("qa-native one-shot execute -> judge -> report", () => {
-  it("runs three adaptive scenarios through execute, judge, and report against one sealed run", async () => {
+describe("qa-native one-shot execute -> judge -> review -> report", () => {
+  it("runs three abstract adaptive scenarios through independent judgment review and reporting", async () => {
     const cwd = repository();
     const server = createServer((_request, response) => {
       response.setHeader("content-type", "text/html; charset=utf-8");
@@ -72,7 +73,12 @@ describe("qa-native one-shot execute -> judge -> report", () => {
       const executeStatus = await runQaNative(["execute", "--spec=dashboard.spec.ts", `--base-url=${baseUrl}`, "--run-dir=.qa/runs/one-shot", "--provider=hermes", "--mode=adaptive"], {
         cwd,
         env,
-        handlers: { execute: (options) => executeQaNative(options, { createProposer, executeAdaptive: (adaptive) => runAdaptiveSuiteWithPlaywright({ ...adaptive, browserType: chromium }) }) },
+        handlers: { execute: (options) => executeQaNative(options, {
+          createProposer,
+          executeAdaptive: (adaptive) => runAdaptiveSuiteWithPlaywright({ ...adaptive, browserType: chromium }),
+          extractFull: async ({ manifest }) => ({ status: "ABSTRACTED", tests: manifest.tests.map((test) => ({ testId: test.testId, applicability: ["the dashboard is available"], when: ["the page is observed"], claims: ["Dashboard content is visible"], classification: "LIVE_EXECUTABLE" })) }),
+          reviewFull: async () => ({ status: "APPROVED" }),
+        }) },
         stdout: vi.fn(),
         stderr: vi.fn(),
       });
@@ -86,6 +92,19 @@ describe("qa-native one-shot execute -> judge -> report", () => {
         stderr: vi.fn(),
       });
       expect(judgeStatus).toBe(0);
+
+      const judgmentRoot = join(cwd, ".qa", "runs", "one-shot", "judgments");
+      const judgmentSet = readdirSync(judgmentRoot)[0];
+      const selectedJudgment = readdirSync(join(judgmentRoot, judgmentSet)).find((file) => file.startsWith("judge-result-"));
+
+      const reviewStatus = await runQaNative(["review", "--run-dir=.qa/runs/one-shot", `--judgment=judgments/${judgmentSet}/${selectedJudgment}`], {
+        cwd,
+        env,
+        handlers: { review: (options) => reviewQaNative(options, { reviewer: async () => ({ status: "APPROVED" }) }) },
+        stdout: vi.fn(),
+        stderr: vi.fn(),
+      });
+      expect(reviewStatus).toBe(0);
 
       const reportStatus = await runQaNative(["report", "--run-dir=.qa/runs/one-shot", "--repository-root=."], {
         cwd,
@@ -106,6 +125,10 @@ describe("qa-native one-shot execute -> judge -> report", () => {
     const judgmentRoot = join(runDirectory, "judgments");
     const judgmentDirectory = join(judgmentRoot, readdirSync(judgmentRoot)[0]);
     expect(readdirSync(judgmentDirectory).filter((file) => file.startsWith("judge-result-"))).toHaveLength(3);
+
+    const reviewRoot = join(runDirectory, "reviews");
+    const reviewDirectory = join(reviewRoot, readdirSync(reviewRoot)[0]);
+    expect(readdirSync(reviewDirectory).filter((file) => file.startsWith("review-result-"))).toHaveLength(3);
 
     const reportRoot = join(runDirectory, "reports");
     const reportDirectory = join(reportRoot, readdirSync(reportRoot)[0]);

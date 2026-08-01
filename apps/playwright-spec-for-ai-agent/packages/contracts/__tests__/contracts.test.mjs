@@ -152,7 +152,17 @@ function semanticJudgeInput(overrides = {}) {
     schemaVersion: SEMANTIC_JUDGE_INPUT_VERSION,
     qaIrId: "qa-ir-dashboard",
     evidenceBundleId: "bundle-1",
-    scenario: { id: "scenario-dashboard-loads", title: "Dashboard loads" },
+    scenario: {
+      id: "scenario-dashboard-loads",
+      title: "Dashboard loads",
+      requiredPath: "/dashboard",
+      semantics: {
+        applicability: ["the user is signed in"],
+        when: ["the dashboard is observed"],
+        claims: ["Dashboard is visible"],
+        classification: "LIVE_EXECUTABLE",
+      },
+    },
     expectations: [
       {
         id: "expect-heading",

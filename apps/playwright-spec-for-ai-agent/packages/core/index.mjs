@@ -16,6 +16,7 @@ import {
 
 export const DEFAULT_RETRY_POLICY = Object.freeze({ maxAttempts: 1 });
 export const DEFAULT_TIMEOUT_POLICY = Object.freeze({ perNodeMs: 30000, runMs: 120000 });
+const MAX_DEFAULT_RUN_TIMEOUT_MS = 300_000;
 export const DEFAULT_ADAPTIVE_BUDGET = Object.freeze({ actions: 32, turns: 32, timeMs: 300_000, tokens: 100_000 });
 
 // Single observation-settle policy: how long any evidence capture (a strict OBSERVE node or an
@@ -39,13 +40,18 @@ const REQUIRED_ACTIONS = Object.freeze({
   CHECKPOINT: "CHECKPOINT",
 });
 
-export function createExecutionPlan({ qaIr, providerCapabilities, retryPolicy = DEFAULT_RETRY_POLICY, timeoutPolicy = DEFAULT_TIMEOUT_POLICY } = {}) {
+export function createExecutionPlan({ qaIr, providerCapabilities, retryPolicy = DEFAULT_RETRY_POLICY, timeoutPolicy } = {}) {
   validateContract("QaIrDocument", qaIr);
   validateProviderCapabilitiesInput(providerCapabilities);
   validateRetryPolicy(retryPolicy, "plan");
-  validateTimeoutPolicy(timeoutPolicy, "plan");
 
   const scenarios = qaIr.suites.flatMap((suite) => suite.scenarios.map((scenario) => ({ suite, scenario })));
+  // ponytail: page runs cap at the provider's five-minute limit; split larger suites if they exhaust it.
+  const effectiveTimeoutPolicy = timeoutPolicy ?? {
+    ...DEFAULT_TIMEOUT_POLICY,
+    runMs: Math.min(MAX_DEFAULT_RUN_TIMEOUT_MS, Math.max(DEFAULT_TIMEOUT_POLICY.runMs, scenarios.length * DEFAULT_TIMEOUT_POLICY.perNodeMs)),
+  };
+  validateTimeoutPolicy(effectiveTimeoutPolicy, "plan");
   const nodes = scenarios.flatMap(({ suite, scenario }) => nodesForScenario(suite, scenario));
   const edges = nodes.slice(1).map((node, index) => ({ from: nodes[index].nodeId, to: node.nodeId }));
   const body = {
@@ -54,7 +60,7 @@ export function createExecutionPlan({ qaIr, providerCapabilities, retryPolicy = 
     nodes,
     edges,
     retryPolicy: { ...retryPolicy },
-    timeoutPolicy: { ...timeoutPolicy },
+    timeoutPolicy: { ...effectiveTimeoutPolicy },
   };
   const plan = { ...body, planId: stableId("plan", { ...body, qaIrHash: canonicalHash(qaIr) }) };
 
@@ -72,8 +78,9 @@ export async function executePlan({ plan, providerCapabilities, executeNode } = 
     validatePolicyAndCapabilities(plan, providerCapabilities, "execute");
 
     const startedAt = Date.now();
-    for (const node of topologicalNodes(plan)) {
-      await runWithRetries({ node, executeNode, retryPolicy: plan.retryPolicy, timeoutPolicy: plan.timeoutPolicy, startedAt });
+    const nodes = topologicalNodes(plan);
+    for (const [index, node] of nodes.entries()) {
+      await runWithRetries({ node, executeNode, retryPolicy: plan.retryPolicy, timeoutPolicy: plan.timeoutPolicy, startedAt, remainingNodes: nodes.length - index });
     }
 
     return completed("execute");
@@ -149,7 +156,8 @@ export function createAdaptiveActionAuthorizer({ input, now = Date.now } = {}) {
       if (!element.allowedActions.includes(proposalSnapshot.action)) throw contractError("execute", "element does not allow the proposed action");
       if (proposalSnapshot.action === "click_observed_element" && !element.milestoneIds.includes(milestone.id)) {
         const optionalRecovery = element.milestoneIds.some((id) => inputSnapshot.milestones.some((item) => item.id === id && item.class === "OPTIONAL_HINT"));
-        if (!optionalRecovery) throw contractError("execute", "observed click is outside exact and optional milestone boundaries");
+        const autonomousRecovery = milestone.class === "REQUIRED_EXACT_ACTION";
+        if (!optionalRecovery && !autonomousRecovery) throw contractError("execute", "observed click is outside exact and recovery boundaries");
       }
     }
     if (proposalSnapshot.action === "navigate" && !inputSnapshot.capabilityLease.allowedOrigins.includes(new URL(proposalSnapshot.parameters.url).origin)) throw contractError("execute", "navigation origin is outside the capability lease");
@@ -169,7 +177,9 @@ export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId,
   if (scenario.policy.readDom !== true) throw policyError("execute", "adaptive DOM observation is blocked by scenario policy");
   if (navigationStep && scenario.policy.navigation !== "ALLOWED") throw policyError("execute", "adaptive startup navigation is blocked by scenario policy");
   if (interactionSteps.length > 0 && !["SAFE_ONLY", "ALL"].includes(scenario.policy.click)) throw policyError("execute", "adaptive interaction is blocked by scenario policy");
-  const isSemantic = (qaIrSnapshot.extensions?.semanticJudgmentScenarioIds ?? []).includes(scenario.id);
+  const semantics = scenario.semantics ?? qaIrSnapshot.extensions?.abstractScenarios?.[scenario.id];
+  const isSemantic = semantics !== undefined || (qaIrSnapshot.extensions?.semanticJudgmentScenarioIds ?? []).includes(scenario.id);
+  const abstractGoal = abstractScenarioGoal(semantics, scenario.title);
   if (!isSemantic) {
     const unsupportedExpectations = scenario.expectations.filter((expectation) => !adaptiveSemanticExpectation(expectation));
     if (unsupportedExpectations.length > 0) throw contractError("execute", `adaptive execution does not support expectation ${unsupportedExpectations[0].kind}`);
@@ -197,6 +207,7 @@ export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId,
           class: "REQUIRED_SEMANTIC_MILESTONE",
           status: "PENDING",
           description: "Observe the page and collect visible text and ARIA evidence for semantic judgment.",
+          ...(semantics === undefined ? {} : { exploratory: true }),
         },
       ]
     : [
@@ -228,7 +239,7 @@ export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId,
     schemaVersion: EXECUTION_AGENT_INPUT_VERSION,
     runId,
     scenarioId: scenario.id,
-    goal: { id: `goal-${canonicalHash({ qaIrId: qaIrSnapshot.id, scenarioId: scenario.id }).slice("sha256:".length, "sha256:".length + 16)}`, description: scenario.title },
+    goal: { id: `goal-${canonicalHash({ qaIrId: qaIrSnapshot.id, scenarioId: scenario.id }).slice("sha256:".length, "sha256:".length + 16)}`, description: abstractGoal },
     milestones,
     currentMilestoneId: milestones[0].id,
     currentPage: { pageId: `page-${canonicalHash({ runId, scenarioId: scenario.id, startUrl }).slice("sha256:".length, "sha256:".length + 12)}`, domGeneration: 1, url: startUrl },
@@ -236,6 +247,14 @@ export function createAdaptiveExecutionInput({ qaIr, scenarioId, baseUrl, runId,
     capabilityLease: { leaseId: `lease-${canonicalHash({ runId, scenarioId: scenario.id, actions, origins: leaseOrigins }).slice("sha256:".length, "sha256:".length + 16)}`, actions, allowedOrigins: leaseOrigins },
     remainingBudget: { ...budget },
   });
+}
+
+function abstractScenarioGoal(value, fallback) {
+  if (value === undefined) return fallback;
+  if (!value || typeof value !== "object" || !Array.isArray(value.applicability) || !Array.isArray(value.when) || !Array.isArray(value.claims)) throw contractError("execute", "abstract scenario metadata is invalid");
+  const items = [fallback, ...value.applicability.map(item => `Applicable when: ${item}`), ...value.when.map(item => `Authored flow: ${item}`), ...value.claims.map(item => `Required evidence: ${item}`)];
+  if (items.some(item => typeof item !== "string")) throw contractError("execute", "abstract scenario metadata is invalid");
+  return items.join("\n").slice(0, 4_096);
 }
 
 function adaptiveAllowedOrigins(startUrl, allowedOrigins) {
@@ -279,7 +298,10 @@ function adaptiveSemanticExpectation(expectation) {
 // applies exactly this rule — so validator acceptance stays a necessary condition of runtime
 // acceptance and the two can never drift apart again.
 export function milestoneCompletionRule({ action, parameters, satisfiedMilestoneIds } = {}, milestone) {
-  if (milestone.class === "REQUIRED_EXACT_ACTION") return action === milestone.requiredAction;
+  if (milestone.class === "REQUIRED_EXACT_ACTION") {
+    if (action !== milestone.requiredAction) return false;
+    return ACTION_SPECS[action]?.elementBound !== true || satisfiedMilestoneIds?.includes(milestone.id) === true;
+  }
   if (milestone.class !== "REQUIRED_SEMANTIC_MILESTONE") return false;
   const proof = ACTION_SPECS[action]?.provesSemantic;
   const observeAction = proof === true;
@@ -291,7 +313,7 @@ export function milestoneCompletionRule({ action, parameters, satisfiedMilestone
   return waitAction || satisfiedMilestoneIds?.includes(milestone.id) === true;
 }
 
-export function advanceAdaptiveMilestone({ input, proposal, result, observation } = {}) {
+export function advanceAdaptiveMilestone({ input, proposal, result, observation, satisfiedMilestoneIds = [] } = {}) {
   const inputSnapshot = snapshotContract("ExecutionAgentInput", input);
   const proposalSnapshot = snapshotContract("ExecutionActionProposal", proposal);
   const resultSnapshot = snapshotContract("ExecutionActionResult", result, { input: inputSnapshot, proposal: proposalSnapshot });
@@ -330,7 +352,7 @@ export function advanceAdaptiveMilestone({ input, proposal, result, observation 
   const ruleProof = milestoneCompletionRule({
     action: proposalSnapshot.action,
     parameters: proposalSnapshot.parameters,
-    satisfiedMilestoneIds: observationSnapshot?.satisfiedMilestoneIds,
+    satisfiedMilestoneIds: [...new Set([...(observationSnapshot?.satisfiedMilestoneIds ?? []), ...satisfiedMilestoneIds])],
   }, milestone);
   const satisfied = resultSnapshot.accepted && (
     (ruleProof && (ACTION_SPECS[proposalSnapshot.action]?.provesSemantic === true ? matchedObservation : !boundAction || boundElement !== undefined))
@@ -445,12 +467,14 @@ function topologicalNodes(plan, stage = "execute") {
   return ordered;
 }
 
-async function runWithRetries({ node, executeNode, retryPolicy, timeoutPolicy, startedAt }) {
+async function runWithRetries({ node, executeNode, retryPolicy, timeoutPolicy, startedAt, remainingNodes }) {
   let lastError;
   for (let attempt = 1; attempt <= retryPolicy.maxAttempts; attempt += 1) {
     try {
-      await withTimeout(runRemainingMs(timeoutPolicy, startedAt), "Execution timed out", () =>
-        withTimeout(timeoutPolicy.perNodeMs, "Execution timed out", () => executeNode(node))
+      const remainingRunMs = runRemainingMs(timeoutPolicy, startedAt);
+      const nodeTimeoutMs = Math.max(1, Math.min(timeoutPolicy.perNodeMs, Math.floor(remainingRunMs / remainingNodes)));
+      await withTimeout(remainingRunMs, "Execution timed out", () =>
+        withTimeout(nodeTimeoutMs, "Execution timed out", () => executeNode(node, { timeoutMs: nodeTimeoutMs }))
       );
       return;
     } catch (error) {

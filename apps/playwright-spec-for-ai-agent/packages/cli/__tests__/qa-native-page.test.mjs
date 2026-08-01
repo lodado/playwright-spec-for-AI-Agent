@@ -51,6 +51,7 @@ describe("qa-native execute --page selection", () => {
     const names = request.specPaths.map((path) => path.split("/").at(-1)).sort();
     expect(names).toEqual(["dashboard-always.spec.ts", "dashboard-inactive.spec.ts"]); // INACTIVE match + always-run; not ACTIVE, not skip
     expect(request.allowPartial).toBe(true);
+    expect(request.compiler).toBe("abstract");
     expect(request.pageTargetPath).toBe("/ko/dashboard"); // config target overrides @qa-page
   });
 
@@ -62,7 +63,8 @@ describe("qa-native execute --page selection", () => {
 
   it("runs the whole directory when no expectedSubscriptionStatus is configured", async () => {
     const { request } = await pageSpecPaths(pageProject({ omitStatus: true }));
-    expect(request.specPaths).toHaveLength(4); // all specs, helper excluded, no status filter
+    expect(request.specPaths).toHaveLength(3); // all non-skipped specs, helper excluded, no status filter
+    expect(request.specPaths.every((path) => !path.endsWith("dashboard-skip.spec.ts"))).toBe(true);
   });
 
   it("fails with the available @qa-scenario list when nothing matches", async () => {
@@ -80,6 +82,39 @@ describe("qa-native execute --page selection", () => {
     expect(exitCode).toBe(1);
     expect(stderr.mock.calls[0][0]).toContain('no spec matches expectedSubscriptionStatus "NONEXISTENT"');
     expect(stderr.mock.calls[0][0]).toContain("ACTIVE");
+  });
+
+  it("reports when every designated spec is explicitly live-skipped", async () => {
+    const cwd = pageProject({ expectedStatus: "INACTIVE" });
+    const specDir = join(cwd, "src", "page", "dashboard", "__tests__");
+    rmSync(join(specDir, "dashboard-always.spec.ts"));
+    rmSync(join(specDir, "dashboard-inactive.spec.ts"));
+    const stderr = vi.fn();
+    const exitCode = await runQaNative(["execute", "--page=dashboard", "--run-dir=.qa/runs/page"], {
+      cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: integrityKey },
+      handlers: { execute: vi.fn() },
+      stdout: vi.fn(),
+      stderr,
+    });
+    expect(exitCode).toBe(1);
+    expect(stderr.mock.calls[0][0]).toContain("all 1 config-designated spec(s) are excluded by // @qa-live-skip: true");
+  });
+
+  it("reports an all-skipped page when no subscription status is configured", async () => {
+    const cwd = pageProject({ omitStatus: true });
+    const specDir = join(cwd, "src", "page", "dashboard", "__tests__");
+    for (const file of ["dashboard-active.spec.ts", "dashboard-always.spec.ts", "dashboard-inactive.spec.ts"]) rmSync(join(specDir, file));
+    const stderr = vi.fn();
+    const exitCode = await runQaNative(["execute", "--page=dashboard", "--run-dir=.qa/runs/page"], {
+      cwd,
+      env: { QA_NATIVE_INTEGRITY_KEY: integrityKey },
+      handlers: { execute: vi.fn() },
+      stdout: vi.fn(),
+      stderr,
+    });
+    expect(exitCode).toBe(1);
+    expect(stderr.mock.calls[0][0]).toContain("all 1 config-designated spec(s) are excluded by // @qa-live-skip: true");
   });
 
   it("resolves the base URL from batch.defaultBaseUrl and lets --base-url override it", async () => {

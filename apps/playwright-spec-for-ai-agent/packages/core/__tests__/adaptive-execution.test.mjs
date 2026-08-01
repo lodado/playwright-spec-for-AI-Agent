@@ -188,7 +188,12 @@ describe("adaptive execution authorization", () => {
 
     const undeclared = executionAgentInput();
     undeclared.recentObservations[0].elements[0].milestoneIds = ["dialog-visible"];
-    expect(() => createAdaptiveActionAuthorizer({ input: undeclared }).authorize({ proposal: clickProposal() })).toThrow(/outside exact and optional milestone boundaries/);
+    expect(createAdaptiveActionAuthorizer({ input: undeclared }).authorize({ proposal: clickProposal() }).proposal).toEqual(clickProposal());
+    expect(advanceAdaptiveMilestone({ input: undeclared, proposal: clickProposal(), result: acceptedResult(undeclared, clickProposal()) })).toBeUndefined();
+
+    const semanticMilestone = executionAgentInput();
+    semanticMilestone.currentMilestoneId = "dialog-visible";
+    expect(() => createAdaptiveActionAuthorizer({ input: semanticMilestone }).authorize({ proposal: { ...clickProposal(), milestoneId: "dialog-visible" } })).toThrow(/recovery boundaries/);
 
     for (const [action, parameters] of [["hover_observed_element", { observationId: "observation-3", elementId: "element-settings" }], ["press_key", { key: "Escape" }]]) {
       const recoveryInput = executionAgentInput();
@@ -223,7 +228,7 @@ describe("adaptive execution authorization", () => {
     expect(advanceAdaptiveMilestone({ input, proposal: observe, result: acceptedResult(input, observe), observation: input.recentObservations[0] })).toBeUndefined();
 
     const click = clickProposal();
-    const transition = advanceAdaptiveMilestone({ input, proposal: click, result: acceptedResult(input, click) });
+    const transition = advanceAdaptiveMilestone({ input, proposal: click, result: acceptedResult(input, click), satisfiedMilestoneIds: ["open-settings"] });
     expect(transition.input).toMatchObject({
       currentMilestoneId: "dialog-visible",
       milestones: [
@@ -333,6 +338,24 @@ describe("adaptive execution authorization", () => {
     expect(() => createAdaptiveExecutionInput({ qaIr, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-semantic-unsupported" })).not.toThrow();
   });
 
+  it("passes approved abstract applicability, flow, and claims into the bounded agent goal", () => {
+    const qaIr = semanticJudgmentQaIr();
+    qaIr.extensions.abstractScenarios = {
+      "scenario-settings": {
+        applicability: ["a signed-in user has settings"],
+        when: ["the user opens settings"],
+        claims: ["the settings dialog is visible"],
+        classification: "LIVE_EXECUTABLE",
+      },
+    };
+    const input = createAdaptiveExecutionInput({ qaIr, scenarioId: "scenario-settings", baseUrl: "https://example.test", runId: "run-abstract-goal" });
+
+    expect(input.goal.description).toContain("Open settings dialog");
+    expect(input.goal.description).toContain("Applicable when: a signed-in user has settings");
+    expect(input.goal.description).toContain("Authored flow: the user opens settings");
+    expect(input.goal.description).toContain("Required evidence: the settings dialog is visible");
+  });
+
   it("completes an observe-only semantic milestone from any fresh accepted observation", () => {
     const qaIr = semanticJudgmentQaIr();
     qaIr.suites[0].scenarios[0].steps = qaIr.suites[0].scenarios[0].steps.filter((step) => step.kind !== "INTERACT");
@@ -397,7 +420,8 @@ describe("milestone completion rule", () => {
   });
 
   it("requires exactly the required action for an exact-action milestone", () => {
-    expect(milestoneCompletionRule({ action: "click_observed_element", parameters: {} }, exactClick)).toBe(true);
+    expect(milestoneCompletionRule({ action: "click_observed_element", parameters: {}, satisfiedMilestoneIds: ["m-click"] }, exactClick)).toBe(true);
+    expect(milestoneCompletionRule({ action: "click_observed_element", parameters: {}, satisfiedMilestoneIds: [] }, exactClick)).toBe(false);
     expect(milestoneCompletionRule({ action: "hover_observed_element", parameters: {} }, exactClick)).toBe(false);
   });
 

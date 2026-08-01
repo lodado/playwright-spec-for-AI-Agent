@@ -73,7 +73,7 @@ function fixture(options = {}) {
       schemaVersion: PROVIDER_CAPABILITIES_VERSION,
       providerId: "fixture-provider",
       actions: [],
-      evidence: ["VISIBLE_TEXT"],
+      evidence: ["VISIBLE_TEXT", ...(options.actionLog ? ["ACTION_LOG"] : [])],
     },
     secrets: ["stored-secret"],
   });
@@ -83,6 +83,15 @@ function fixture(options = {}) {
     contentType: "text/plain",
     content: options.artifactContent ?? "Dashboard Save balanced layout stored-secret",
   });
+  const artifacts = [artifact];
+  if (options.actionLog) {
+    artifacts.push(target.captureArtifact({
+      id: "action-log",
+      type: "ACTION_LOG",
+      contentType: "application/json",
+      content: JSON.stringify(options.actionLog),
+    }));
+  }
   const facts = [
     { id: "fact-url", kind: "URL", value: options.url ?? "https://example.test/dashboard" },
     observation("text", options.omitText ? {} : { text: options.text ?? "Dashboard overview" }),
@@ -103,7 +112,7 @@ function fixture(options = {}) {
       browser: "chromium",
       viewport: { width: 1280, height: 720 },
     },
-    artifacts: [artifact],
+    artifacts,
     facts,
   });
   const manifest = target.appendCheckpoint(bundle);
@@ -194,13 +203,33 @@ describe("deterministic evidence evaluation", () => {
 });
 
 describe("semantic-judgment routing", () => {
+  it("includes first-class semantics and the required path in the judge input", () => {
+    const evidence = fixture({ url: "https://example.test/login" });
+    const ir = qaIr({ semantic: false });
+    const scenario = ir.suites[0].scenarios[0];
+    scenario.semantics = {
+      applicability: ["the user is signed in"],
+      when: ["the dashboard is observed"],
+      claims: ["Dashboard is visible"],
+      classification: "LIVE_EXECUTABLE",
+    };
+    scenario.steps.unshift({ id: "navigate", kind: "NAVIGATE", milestoneClass: "REQUIRED_SEMANTIC_MILESTONE", target: { type: "PATH", value: "/dashboard" } });
+    const evaluation = evaluateDeterministically({ qaIr: ir, ...evidence });
+    const input = buildSemanticJudgeInput({ qaIr: ir, ...evidence, evaluation });
+
+    expect(input.scenario).toMatchObject({ requiredPath: "/dashboard", semantics: scenario.semantics });
+    expect(input.expectations.every(item => item.judgment === "SEMANTIC")).toBe(true);
+    expect(validateContract("SemanticJudgeInput", input)).toBe(input);
+  });
+
   it("marks routed expectations judgment SEMANTIC when the scenario is listed", () => {
-    const evidence = fixture({ text: "Overview panel" });
+    const evidence = fixture();
     const ir = qaIr({ semantic: false, semanticJudgment: true });
     const evaluation = evaluateDeterministically({ qaIr: ir, ...evidence });
     const input = buildSemanticJudgeInput({ qaIr: ir, ...evidence, evaluation });
 
-    expect(input.expectations.map((item) => item.id)).toContain("text");
+    expect(evaluation.resolvedChecks).toEqual([]);
+    expect(input.expectations.map((item) => item.id)).toEqual(["url", "text", "visible", "role", "name", "attribute"]);
     expect(input.expectations.every((item) => item.judgment === "SEMANTIC")).toBe(true);
     expect(validateContract("SemanticJudgeInput", input)).toBe(input);
   });
@@ -280,6 +309,43 @@ describe("offline judge runtime", () => {
     expect(result.verdict).toBe("PASS");
     expect(result.judge.provider).toBe("deterministic");
     expect(semanticJudge).not.toHaveBeenCalled();
+  });
+
+  it("sends an AI-extracted claim and sealed action log to the independent judge", async () => {
+    const ir = qaIr({ semantic: false, semanticJudgment: true });
+    ir.suites[0].scenarios[0].expectations = [{
+      id: "claim",
+      kind: "VISIBLE_TEXT",
+      text: { kind: "literal", value: "No restore POST request is sent" },
+    }];
+    const evidence = fixture({ actionLog: { action: "CLICK", allowedRequests: [] } });
+    const semanticJudge = vi.fn(async input => semanticDecision(input));
+
+    const result = await judgeEvidence({ qaIr: ir, ...evidence, semanticJudge });
+
+    expect(semanticJudge).toHaveBeenCalledTimes(1);
+    expect(semanticJudge.mock.calls[0][0].expectations[0]).toMatchObject({ id: "claim", judgment: "SEMANTIC" });
+    expect(semanticJudge.mock.calls[0][0].evidence).toContainEqual(expect.objectContaining({ kind: "ACTION_LOG", content: expect.stringContaining("allowedRequests") }));
+    expect(result.judge.provider).toBe("fake");
+  });
+
+  it("classifies an entirely inapplicable scenario as SKIP instead of PASS", async () => {
+    const evidence = fixture();
+    const result = await judgeEvidence({
+      qaIr: qaIr({ semantic: false, semanticJudgment: true }),
+      ...evidence,
+      semanticJudge: async input => semanticDecision(input, {
+        expectationResults: input.expectations.map(expectation => ({
+          expectationId: expectation.id,
+          status: "NOT_APPLICABLE",
+          confidence: 0.9,
+          evidenceRefs: [input.evidence[0].id],
+          rationale: "The scenario applicability was not reached.",
+        })),
+      }),
+    });
+
+    expect(result.verdict).toBe("SKIP");
   });
 
   it("routes only unresolved checks and produces stable offline judgments", async () => {

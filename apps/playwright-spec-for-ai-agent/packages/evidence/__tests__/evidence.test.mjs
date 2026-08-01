@@ -70,6 +70,25 @@ function bundle(target = store(), overrides = {}) {
   });
 }
 
+function actionLog({ runId, scenarioId, proposalId, leaseId = "lease-1" }) {
+  return {
+    proposal: {
+      schemaVersion: "execution-action-proposal/0.2",
+      proposalId,
+      runId,
+      scenarioId,
+      milestoneId: "milestone-1",
+      leaseId,
+      action: "observe_dom",
+      parameters: {},
+    },
+    status: "ACCEPTED",
+    before: { pageId: "page-1", domGeneration: 1, url: "https://example.test/dashboard" },
+    after: { pageId: "page-1", domGeneration: 1, url: "https://example.test/dashboard" },
+    satisfiedMilestoneIds: ["milestone-1"],
+  };
+}
+
 describe("evidence store", () => {
   it("persists sealed multi-checkpoint evidence for offline replay and rejects tampering", () => {
     const target = store();
@@ -168,6 +187,76 @@ describe("evidence store", () => {
       secrets: ["[REDACTED]"],
       integrityKey: archiveIntegrityKey,
     })).toThrow(/cannot equal the redaction marker/);
+  });
+
+  it("allows code-owned ACTION_LOG bindings without changing archived bytes", () => {
+    const target = store({
+      providerCapabilities: {
+        ...providerCapabilities,
+        evidence: ["ACTION_LOG", "VISIBLE_TEXT"],
+      },
+      secrets: [],
+    });
+    const runId = "ai-native-live-templates-list-auth-20260801-probe";
+    const artifact = target.captureArtifact({
+      id: "action",
+      type: "ACTION_LOG",
+      contentType: "application/json",
+      content: actionLog({ runId, scenarioId: "scenario-1", proposalId: "checkpoint-1" }),
+    });
+    const evidenceBundle = bundle(target, {
+      runId,
+      scenarioId: "scenario-1",
+      checkpointId: "checkpoint-1",
+      artifacts: [artifact],
+      facts: [],
+    });
+    const manifest = target.appendCheckpoint(evidenceBundle);
+    const parent = mkdtempSync(join(tmpdir(), "qa-evidence-action-log-"));
+    temporaryDirectories.push(parent);
+    const directory = join(parent, "run-action-log");
+
+    writeEvidenceArchive({ directory, bundles: [evidenceBundle], manifest, readBlob: target.readBlob, integrityKey: archiveIntegrityKey });
+    const replay = readEvidenceArchive({ directory, integrityKey: archiveIntegrityKey });
+
+    expect(replay.readBlob(artifact.storageRef)).toEqual(target.readBlob(artifact.storageRef));
+    expect(replay.readBlob(artifact.storageRef).toString("utf8")).toContain(runId);
+  });
+
+  it("still rejects token-like ACTION_LOG fields outside trusted bindings", () => {
+    const target = store({
+      providerCapabilities: {
+        ...providerCapabilities,
+        evidence: ["ACTION_LOG", "VISIBLE_TEXT"],
+      },
+      secrets: [],
+    });
+    const artifact = target.captureArtifact({
+      id: "action",
+      type: "ACTION_LOG",
+      contentType: "application/json",
+      content: actionLog({
+        runId: "run-1",
+        scenarioId: "scenario-1",
+        proposalId: "checkpoint-1",
+        leaseId: "a".repeat(48),
+      }),
+    });
+    const evidenceBundle = bundle(target, {
+      artifacts: [artifact],
+      facts: [],
+    });
+    const manifest = target.appendCheckpoint(evidenceBundle);
+    const parent = mkdtempSync(join(tmpdir(), "qa-evidence-action-log-secret-"));
+    temporaryDirectories.push(parent);
+
+    expect(() => writeEvidenceArchive({
+      directory: join(parent, "run-action-log-secret"),
+      bundles: [evidenceBundle],
+      manifest,
+      readBlob: target.readBlob,
+      integrityKey: archiveIntegrityKey,
+    })).toThrow(/sensitive data/);
   });
 
   it("bounds archive checkpoint fan-out before persistence", () => {

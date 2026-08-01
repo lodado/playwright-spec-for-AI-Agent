@@ -1,23 +1,22 @@
-import { readdirSync, realpathSync, rmSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { rmSync } from "node:fs";
+import { join, relative } from "node:path";
 
-import { RUNTIME_OUTCOME_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
-import { readEvidenceArchive } from "../evidence/index.mjs";
+import { RUNTIME_OUTCOME_VERSION, canonicalHash } from "../contracts/index.mjs";
 import { diagnoseFailure, recommendRepair } from "../remediation/index.mjs";
 import { createLocalRepositorySnapshot, locateCode } from "../repository-provider/index.mjs";
 import { renderRemediationReport } from "../reporter-markdown/index.mjs";
-import { validateAdaptiveExecutionEvidence } from "./qa-native-adaptive-evidence.mjs";
-import { readAuthenticatedRunEnvelope, verifyRunEnvelopeBindings } from "./qa-native-run-envelope.mjs";
-import { createExclusiveQaDirectory, readPrivateJson, writePrivateFileExclusive, writePrivateJsonExclusive } from "./qa-native.mjs";
+import { loadCompletedJudgmentSet, loadCompletedReviewSet, loadValidatedExecution } from "./qa-native-result-set.mjs";
+import { createExclusiveQaDirectory, writePrivateFileExclusive, writePrivateJsonExclusive } from "./qa-native.mjs";
 
 export async function reportQaNative({ runDirectory, repositoryRoot, revision, judgmentPath, integrityKey, cwd }, overrides = {}) {
   const reportSummary = overrides.reportSummary ?? defaultReportSummary;
-  const prepared = prepareQaNativeRemediation({ runDirectory, repositoryRoot, revision, judgmentPath, integrityKey, cwd, requireFailing: false });
-  if (prepared.items.length === 0) {
-    reportSummary({ judged: prepared.judged, failing: 0 });
+  const prepare = overrides.prepare ?? prepareQaNativeRemediation;
+  const prepared = prepare({ runDirectory, repositoryRoot, revision, judgmentPath, integrityKey, cwd, requireFailing: false, requireApprovedReviews: false });
+  if (prepared.items.length === 0 && prepared.unapprovedReviews.length === 0) {
+    reportSummary({ judged: prepared.judged, failing: 0, ...(prepared.notApplicable > 0 ? { notApplicable: prepared.notApplicable } : {}) });
     return 0;
   }
-  const reportHash = shortHash({ results: prepared.items.map(({ judgeResult }) => judgeResult.resultId), repositoryRevision: prepared.repositoryRevision });
+  const reportHash = shortHash({ results: prepared.items.map(({ judgeResult }) => judgeResult.resultId), reviews: prepared.unapprovedReviews.map((review) => review.reviewId), repositoryRevision: prepared.repositoryRevision });
   const reportDirectory = join(runDirectory, "reports", `report-${reportHash}`);
   let created = false;
   try {
@@ -30,8 +29,13 @@ export async function reportQaNative({ runDirectory, repositoryRoot, revision, j
       writePrivateJsonExclusive(relative(cwd, join(reportDirectory, `repair-recommendation-${suffix}.json`)), recommendation, { cwd });
       writePrivateFileExclusive(relative(cwd, join(reportDirectory, `report-${suffix}.md`)), renderRemediationReport({ diagnosis, codeContext, recommendation, qaIr: prepared.qaIr, judgeResult, evidenceBundle }), { cwd });
     }
+    for (const review of prepared.unapprovedReviews) {
+      const suffix = shortHash(review.reviewId);
+      writePrivateJsonExclusive(relative(cwd, join(reportDirectory, `judgment-review-${suffix}.json`)), review, { cwd });
+      writePrivateFileExclusive(relative(cwd, join(reportDirectory, `judgment-review-${suffix}.md`)), renderJudgmentReview(review), { cwd });
+    }
     writePrivateJsonExclusive(relative(cwd, join(reportDirectory, "run.json")), { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "report", type: "COMPLETED" }, { cwd });
-    reportSummary({ judged: prepared.judged, failing: prepared.items.length, reportDirectory: relative(cwd, reportDirectory) });
+    reportSummary({ judged: prepared.judged, failing: prepared.items.length, ...(prepared.notApplicable > 0 ? { notApplicable: prepared.notApplicable } : {}), ...(prepared.unapprovedReviews.length === 0 ? {} : { reviewRequired: prepared.unapprovedReviews.length }), reportDirectory: relative(cwd, reportDirectory) });
     return 0;
   } catch (error) {
     if (created) rmSync(reportDirectory, { recursive: true, force: true });
@@ -41,33 +45,31 @@ export async function reportQaNative({ runDirectory, repositoryRoot, revision, j
 
 // A successful report was previously silent (and an all-pass run was an error); one summary line
 // tells CI and operators what was judged and where the remediation artifacts landed.
-function defaultReportSummary({ judged, failing, reportDirectory }) {
-  process.stdout.write(failing === 0
-    ? `qa-native report: ${judged} judgment(s), 0 failing — nothing to remediate\n`
-    : `qa-native report: ${judged} judgment(s), ${failing} failing → ${reportDirectory}\n`);
+function defaultReportSummary({ judged, failing, notApplicable = 0, reviewRequired = 0, reportDirectory }) {
+  const applicabilityNote = notApplicable > 0 ? `, ${notApplicable} not-applicable` : "";
+  if (failing === 0 && reviewRequired === 0) {
+    process.stdout.write(`qa-native report: ${judged} judgment(s), 0 failing${applicabilityNote} — nothing to remediate\n`);
+  } else if (reviewRequired === 0) {
+    process.stdout.write(`qa-native report: ${judged} judgment(s), ${failing} failing${applicabilityNote} → ${reportDirectory}\n`);
+  } else {
+    process.stdout.write(`qa-native report: ${judged} judgment(s), ${failing} failing${applicabilityNote}, ${reviewRequired} review-required → ${reportDirectory}\n`);
+  }
 }
 
-export function prepareQaNativeRemediation({ runDirectory, repositoryRoot, revision, judgmentPath, integrityKey, cwd, repositoryId, requireFailing = true }) {
-  const outcome = readPrivateJson(relative(cwd, join(runDirectory, "run.json")), { cwd });
-  validateContract("RuntimeOutcome", outcome);
-  if (outcome.stage !== "execute" || outcome.type !== "COMPLETED") throw new Error("QA execution is incomplete");
-
-  const qaIr = readPrivateJson(relative(cwd, join(runDirectory, "qa-ir.json")), { cwd });
-  validateContract("QaIrDocument", qaIr);
-  const archive = readEvidenceArchive({ directory: join(runDirectory, "evidence"), integrityKey });
-  const envelope = readAuthenticatedRunEnvelope({ runDirectory, cwd, integrityKey });
-  const expectedBundles = expectedJudgedBundles({ runDirectory, archive, envelope, qaIr, runtimeOutcome: outcome, cwd });
-  const judgments = readJudgeResults({ runDirectory, judgmentPath, cwd }).map((result) => {
-    const bundle = archive.bundles.find((candidate) => candidate.bundleId === result.evidenceBundleId);
-    if (!bundle) throw new Error("QA judgment evidence is missing");
-    validateContract("JudgeResult", result, { qaIr, evidenceBundle: bundle });
-    return { result, bundle };
-  });
-  if (judgmentPath === undefined) assertCompleteJudgmentSet(judgments, expectedBundles);
-  const selected = judgments.filter(({ result }) => ["FAIL", "MANUAL_REVIEW"].includes(result.verdict));
+export function prepareQaNativeRemediation({ runDirectory, repositoryRoot, revision, judgmentPath, integrityKey, cwd, repositoryId, requireFailing = true, requireApprovedReviews = true }) {
+  const { qaIr, bundles } = loadValidatedExecution({ runDirectory, integrityKey, cwd });
+  const notApplicable = qaIr.extensions?.applicabilityDecisions?.filter((decision) => decision.status === "NOT_APPLICABLE").length ?? 0;
+  const judgments = loadCompletedJudgmentSet({ runDirectory, judgmentPath, cwd, qaIr, bundles });
+  const reviews = qaIr.suites.some((suite) => suite.scenarios.some((scenario) => scenario.semantics !== undefined))
+    ? loadCompletedReviewSet({ runDirectory, cwd, qaIr, judgments })
+    : [];
+  const unapprovedReviews = reviews.filter((review) => review.status !== "APPROVED");
+  if (requireApprovedReviews && unapprovedReviews.length > 0) throw new Error("QA judgment review is not approved");
+  const approvedJudgeResultIds = new Set(reviews.filter((review) => review.status === "APPROVED").map((review) => review.judgeResultId));
+  const selected = judgments.filter(({ result }) => ["FAIL", "MANUAL_REVIEW"].includes(result.verdict) && (reviews.length === 0 || approvedJudgeResultIds.has(result.resultId)));
   if (selected.length === 0) {
     if (requireFailing) throw new Error("QA report has no failing judgments");
-    return Object.freeze({ qaIr, judged: judgments.length, items: Object.freeze([]) });
+    return Object.freeze({ qaIr, judged: judgments.length, notApplicable, unapprovedReviews: Object.freeze(unapprovedReviews), items: Object.freeze([]) });
   }
 
   const snapshot = createLocalRepositorySnapshot({ root: repositoryRoot, revision, repositoryId });
@@ -77,82 +79,25 @@ export function prepareQaNativeRemediation({ runDirectory, repositoryRoot, revis
     const recommendation = recommendRepair({ diagnosis, codeContext, qaIr, judgeResult: result, evidenceBundle: bundle });
     return { judgeResult: result, evidenceBundle: bundle, diagnosis, codeContext, recommendation };
   });
-  return Object.freeze({ qaIr, repositoryRevision: snapshot.revision, judged: judgments.length, items: Object.freeze(items) });
+  return Object.freeze({ qaIr, repositoryRevision: snapshot.revision, judged: judgments.length, notApplicable, unapprovedReviews: Object.freeze(unapprovedReviews), items: Object.freeze(items) });
 }
 
-function expectedJudgedBundles({ runDirectory, archive, envelope, qaIr, runtimeOutcome, cwd }) {
-  if (envelope.mode === "strict") {
-    const executionPlan = readPrivateJson(relative(cwd, join(runDirectory, "execution-plan.json")), { cwd });
-    verifyRunEnvelopeBindings({ envelope, runId: envelope.runId, mode: "strict", qaIr, runtimeOutcome, evidenceManifest: archive.manifest, executionPlan });
-    return archive.bundles;
-  }
-  const inputs = readPrivateJson(relative(cwd, join(runDirectory, "execution-agent-inputs.json")), { cwd });
-  const outcomes = readPrivateJson(relative(cwd, join(runDirectory, "execution-agent-outcomes.json")), { cwd });
-  if (!Array.isArray(inputs) || !Array.isArray(outcomes) || inputs.length === 0 || inputs.length !== outcomes.length) throw new Error("adaptive execution metadata is invalid");
-  inputs.forEach((input, index) => {
-    validateContract("ExecutionAgentInput", input);
-    const outcome = validateContract("ExecutionAgentOutcome", outcomes[index], { input });
-    if (outcome.type !== "COMPLETED" || input.runId !== archive.manifest.runId) throw new Error("adaptive execution metadata does not match evidence");
-  });
-  verifyRunEnvelopeBindings({ envelope, runId: envelope.runId, mode: "adaptive", qaIr, runtimeOutcome, evidenceManifest: archive.manifest, executionAgentInputs: inputs, executionAgentOutcomes: outcomes });
-  return inputs.map((input, index) => {
-    const scenarioBundles = archive.bundles.filter((bundle) => bundle.scenarioId === input.scenarioId);
-    validateAdaptiveExecutionEvidence({ input, outcome: outcomes[index], bundles: scenarioBundles, manifest: archive.manifest, readBlob: archive.readBlob });
-    const finalBundle = scenarioBundles.at(-1);
-    if (finalBundle === undefined) throw new Error("adaptive final evidence is missing");
-    return finalBundle;
-  });
+function renderJudgmentReview(review) {
+  return [
+    "# QA Judgment Review",
+    "",
+    `- Judge result: \`${review.judgeResultId}\``,
+    `- Status: **${review.status}**`,
+    "",
+    "## Issues",
+    "",
+    ...review.issues.map((issue) => `- ${safeMarkdownText(issue)}`),
+    "",
+  ].join("\n");
 }
 
-function readJudgeResults({ runDirectory, judgmentPath, cwd }) {
-  const paths = judgmentPath === undefined ? discoverJudgeResults(runDirectory, cwd) : completedJudgmentFile(judgmentPath, cwd);
-  return paths.map((path) => readPrivateJson(privateRelative(cwd, path), { cwd }));
-}
-
-function discoverJudgeResults(runDirectory, cwd) {
-  const root = join(runDirectory, "judgments");
-  const entries = readdirSync(root, { withFileTypes: true });
-  if (entries.some((entry) => !entry.isDirectory())) throw new Error("judgment storage contains an unexpected entry");
-  const directories = entries;
-  if (directories.length !== 1) throw new Error("an explicit judgment path is required");
-  const directory = join(root, directories[0].name);
-  assertCompletedJudgment(directory, cwd);
-  const files = readdirSync(directory, { withFileTypes: true });
-  if (files.some((file) => !file.isFile() || (file.name !== "run.json" && !(file.name.startsWith("judge-result-") && file.name.endsWith(".json"))))) {
-    throw new Error("judgment set contains an unexpected entry");
-  }
-  return files
-      .filter((file) => file.name.startsWith("judge-result-"))
-      .map((file) => join(directory, file.name))
-    .sort();
-}
-
-function assertCompleteJudgmentSet(judgments, bundles) {
-  const expected = new Set(bundles.map((bundle) => bundle.bundleId));
-  const actual = judgments.map(({ result }) => result.evidenceBundleId);
-  const resultIds = judgments.map(({ result }) => result.resultId);
-  if (new Set(resultIds).size !== resultIds.length || new Set(actual).size !== actual.length || actual.length !== expected.size || actual.some((id) => !expected.has(id))) {
-    throw new Error("judgment set does not cover every evidence bundle exactly once");
-  }
-}
-
-function completedJudgmentFile(path, cwd) {
-  assertCompletedJudgment(dirname(path), cwd);
-  return [path];
-}
-
-function assertCompletedJudgment(directory, cwd) {
-  const outcome = readPrivateJson(privateRelative(cwd, join(directory, "run.json")), { cwd });
-  validateContract("RuntimeOutcome", outcome);
-  if (outcome.stage !== "judge" || outcome.type !== "COMPLETED") throw new Error("QA judgment is incomplete");
-}
-
-function privateRelative(cwd, path) {
-  for (const root of [resolve(cwd), realpathSync(cwd)]) {
-    const value = relative(root, path);
-    if (value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value)) return value;
-  }
-  return relative(resolve(cwd), path);
+function safeMarkdownText(value) {
+  return String(value).replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1").replaceAll("@", "@\u200b");
 }
 
 function shortHash(value) {

@@ -168,15 +168,23 @@ function literalOf(value) {
 
 function rootLocator(method, args, sourceFile, values) {
   const first = staticValue(args[0], sourceFile, values);
-  if (method === "getByTestId") return { kind: "testId", value: literalOf(first) };
-  if (method === "getByText") return { kind: "text", value: literalOf(first) };
+  if (method === "getByTestId") return { kind: "testId", value: literalOf(first), ...(args.length > 1 ? { unrepresentable: true } : {}) };
+  if (method === "getByText") return { kind: "text", value: literalOf(first), ...(args.length > 1 ? { unrepresentable: true } : {}) };
   if (method === "getByRole") {
     const options = staticValue(args[1], sourceFile, values);
     const name = options.kind === "object" ? options.value.name : undefined;
+    const representableOptions = args.length === 1 || (
+      options.kind === "object"
+      && Object.keys(options.value).length === 1
+      && name?.kind === "literal"
+      && typeof name.value === "string"
+      && name.value.length > 0
+    );
     return {
       kind: "role",
       role: literalOf(first),
       ...(name ? { name: literalOf(name) } : {}),
+      ...(!representableOptions ? { unrepresentable: true } : {}),
     };
   }
   const kind = {

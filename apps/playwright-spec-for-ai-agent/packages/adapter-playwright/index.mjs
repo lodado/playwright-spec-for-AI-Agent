@@ -8,7 +8,10 @@ import {
 import { parsePlaywrightSource } from "../../scripts/dashboard-spec-parser.mjs";
 
 const ADAPTER_NAME = "adapter-playwright";
-const ADAPTER_VERSION = "0.2.0";
+const ADAPTER_VERSION = "0.3.0";
+export const PLAYWRIGHT_STATIC_MANIFEST_VERSION = "playwright-static-manifest/0.2";
+const AI_FALLBACK_CACHE_VERSION = "playwright-spec-ai-cache/0.1";
+const AI_RECOVERABLE_DIAGNOSTICS = new Set(["UNSUPPORTED_MATCHER", "OPAQUE_ASSERTION_TARGET", "DYNAMIC_EXPECTED_VALUE", "DYNAMIC_EXECUTION_VALUE", "OPAQUE_ACTION_TARGET", "OPAQUE_INTERACTION_STEP"]);
 
 const POLICY_BY_LIVE_RUN = {
   "executable-readonly": allowedPolicy({ click: "NONE", type: "NONE" }),
@@ -21,24 +24,58 @@ const POLICY_BY_LIVE_RUN = {
   "blocked-unknown": blockedPolicy(),
 };
 
+export function extractPlaywrightStaticManifest({ source, sourcePath } = {}) {
+  if (typeof source !== "string") throw new TypeError("source must be a string");
+  if (typeof sourcePath !== "string" || sourcePath.length === 0) throw new TypeError("sourcePath must be a non-empty string");
+  const parsed = parsePlaywrightSource(sourcePath, source);
+  if (!parsed.scenario || parsed.scenario.tests.length !== parsed.blocks.length) throw new TypeError("static manifest requires an annotated Playwright scenario");
+  const scenario = parsed.scenario;
+  return {
+    schemaVersion: PLAYWRIGHT_STATIC_MANIFEST_VERSION,
+    source: { path: sourcePath, contentHash: canonicalHash(source) },
+    scenario: {
+      id: scenario.scenarioId,
+      label: scenario.label,
+      ...(scenario.page ? { page: scenario.page } : {}),
+      liveSkip: scenario.liveSkip,
+      alwaysRun: scenario.alwaysRun,
+    },
+    tests: scenario.tests.map((test, index) => {
+      const actions = staticManifestActions(test, parsed.diagnostics, index);
+      return {
+        testId: stableId("static-test", sourcePath, scenario.scenarioId, index, parsed.blocks[index].index),
+        title: test.title,
+        checkId: test.checkId,
+        range: { start: parsed.blocks[index].index, end: parsed.blocks[index].endIndex },
+        livePolicyAnnotation: test.livePolicyAnnotation ?? null,
+        liveRunPolicy: test.liveRunPolicy,
+        policy: clonePolicy(POLICY_BY_LIVE_RUN[test.liveRunPolicy] ?? blockedPolicy()),
+        ...(test.modifier ? { modifier: test.modifier } : {}),
+        ...(test.fixtures ? { fixtures: clone(test.fixtures) } : {}),
+        ...(actions ? { actions } : {}),
+      };
+    }),
+  };
+}
+
 export function compilePlaywrightSpec({ source, sourcePath, revision } = {}) {
   if (typeof source !== "string") throw new TypeError("source must be a string");
   if (typeof sourcePath !== "string" || sourcePath.length === 0) throw new TypeError("sourcePath must be a non-empty string");
 
   const parsed = parsePlaywrightSource(sourcePath, source);
+  const blocks = parsed.blocks;
   const diagnostics = parsed.diagnostics.map(item => diagnostic(
     item.code,
     item.severity,
     item.message,
     sourcePath,
-    positionFromPath(item.path),
+    positionFromPath(item.path) ?? (typeof item.testIndex === "number" ? positionAt(source, blocks[item.testIndex]?.index ?? 0) : undefined),
   ));
   const annotations = parsed.annotations;
   if (!annotations.scenario) {
     diagnostics.push(diagnostic("MISSING_QA_SCENARIO", "ERROR", "Missing @qa-scenario annotation.", sourcePath));
   }
 
-  const blocks = parsed.blocks;
   const legacy = parsed.scenario;
 
   // A parse error tied to a specific test (`testIndex`) blocks only that test's static
@@ -87,11 +124,148 @@ export function compilePlaywrightSpec({ source, sourcePath, revision } = {}) {
   });
 }
 
+export async function recoverPlaywrightSpecWithAi({ compileResult, source, abstractScenario, cache, promptVersion = "unknown", model = "unknown", modelVersion = "unknown" } = {}) {
+  validateContract("CompileResult", compileResult);
+  if (typeof source !== "string") throw new TypeError("source must be a string");
+  const blocked = new Set(compileResult.qaIr.extensions?.blockedScenarioIds ?? []);
+  if (blocked.size === 0) return compileResult;
+  if (canonicalHash(source) !== compileResult.qaIr.extensions?.sourceContentHash) throw new TypeError("source does not match compile result");
+  if (typeof abstractScenario !== "function") throw new TypeError("abstractScenario must be a function");
+
+  const qaIr = clone(compileResult.qaIr);
+  const diagnostics = clone(compileResult.diagnostics);
+  const recoveries = [...(qaIr.extensions.aiFallbacks ?? [])];
+
+  for (const suite of qaIr.suites) {
+    for (let index = 0; index < suite.scenarios.length; index += 1) {
+      const scenario = suite.scenarios[index];
+      const provenance = scenario.provenance[0];
+      const errors = diagnostics.filter(item => item.severity === "ERROR" && diagnosticInRange(item, provenance));
+      if (!blocked.has(scenario.id) || errors.length === 0 || errors.some(item => !AI_RECOVERABLE_DIAGNOSTICS.has(item.code))) continue;
+
+      const diagnosticCodes = [...new Set(errors.map(item => item.code))].sort();
+      const sourceSlice = source.slice(provenance.range.start.offset, provenance.range.end.offset);
+      const metadata = {
+        sourceSliceHash: canonicalHash(sourceSlice),
+        staticDiagnosticCodes: diagnosticCodes,
+        qaLivePolicy: scenario.policy,
+        parserVersion: compileResult.qaIr.source.adapterVersion,
+        fallbackPromptVersion: promptVersion,
+        model,
+        modelVersion,
+      };
+      const cacheKey = canonicalHash(metadata).slice("sha256:".length);
+
+      try {
+        let artifact = cache?.read ? await cache.read(cacheKey) : undefined;
+        if (artifact === undefined) {
+          const result = normalizePlaywrightSpecFallback(await abstractScenario({
+            sourcePath: provenance.path,
+            range: provenance.range,
+            sourceSlice,
+            diagnosticCodes,
+            qaLivePolicy: scenario.policy,
+          }));
+          artifact = { cacheVersion: AI_FALLBACK_CACHE_VERSION, cacheKey, metadata, result };
+          if (cache?.write) await cache.write(cacheKey, artifact);
+        } else {
+          validateCacheArtifact(artifact, cacheKey, metadata);
+        }
+        const result = normalizePlaywrightSpecFallback(artifact.result);
+        if (result.status !== "ABSTRACTED") {
+          diagnostics.push(diagnostic("AI_FALLBACK_MANUAL_REVIEW", "WARNING", "AI fallback found the test meaning too ambiguous for semantic extraction.", provenance.path, provenance.range.start));
+          continue;
+        }
+
+        suite.scenarios[index] = scenarioWithAiClaims(scenario, result.claims);
+        if (scenario.policy.navigation === "ALLOWED" && scenario.policy.readDom === true) blocked.delete(scenario.id);
+        const semanticIds = new Set(qaIr.extensions.semanticJudgmentScenarioIds ?? []);
+        semanticIds.add(scenario.id);
+        qaIr.extensions.semanticJudgmentScenarioIds = [...semanticIds];
+        for (const item of diagnostics) {
+          if (item.severity === "ERROR" && diagnosticInRange(item, provenance) && diagnosticCodes.includes(item.code)) item.severity = "WARNING";
+        }
+        recoveries.push({
+          scenarioId: scenario.id,
+          source: { path: provenance.path, range: provenance.range, contentHash: provenance.contentHash },
+          diagnosticCodes,
+          cacheKey,
+          promptVersion,
+          model,
+          modelVersion,
+        });
+      } catch {
+        // Invalid/tampered cache or model output stays blocked. Existing diagnostics retain the reason.
+        diagnostics.push(diagnostic("AI_FALLBACK_FAILED", "WARNING", "AI fallback failed closed; the original static diagnostic remains authoritative.", provenance.path, provenance.range.start));
+      }
+    }
+  }
+
+  if (blocked.size > 0) qaIr.extensions.blockedScenarioIds = [...blocked];
+  else delete qaIr.extensions.blockedScenarioIds;
+  if (recoveries.length > 0) qaIr.extensions.aiFallbacks = recoveries;
+  return validateContract("CompileResult", {
+    ...compileResult,
+    ok: diagnostics.every(item => item.severity !== "ERROR"),
+    qaIr,
+    diagnostics,
+  });
+}
+
+export function normalizePlaywrightSpecFallback(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("AI fallback must be an object");
+  if (Object.keys(value).some(key => !["status", "claims", "reason"].includes(key))) throw new TypeError("AI fallback contains unsupported fields");
+  if (value.status === "MANUAL_REVIEW") {
+    if (typeof value.reason !== "string" || value.reason.length === 0 || value.reason.length > 2_000 || value.claims !== undefined) throw new TypeError("AI fallback manual review is invalid");
+    return { status: value.status, reason: value.reason };
+  }
+  if (value.status !== "ABSTRACTED" || !Array.isArray(value.claims) || value.claims.length === 0 || value.claims.length > 10 || value.reason !== undefined) throw new TypeError("AI fallback abstraction is invalid");
+  const claims = value.claims.map(claim => {
+    if (typeof claim !== "string") throw new TypeError("AI fallback claim is invalid");
+    const normalized = claim.trim();
+    if (normalized.length === 0 || normalized.length > 4_096) throw new TypeError("AI fallback claim is invalid");
+    return normalized;
+  });
+  return { status: value.status, claims };
+}
+
+function scenarioWithAiClaims(scenario, claims) {
+  const expectations = claims.map((claim, index) => ({
+    id: stableId("expectation-ai", scenario.id, index, claim),
+    kind: "VISIBLE_TEXT",
+    text: { kind: "literal", value: claim },
+    provenance: clone(scenario.provenance),
+  }));
+  const steps = scenario.steps.filter(step => step.kind !== "OBSERVE");
+  const checkpointIndex = steps.findIndex(step => step.kind === "CHECKPOINT");
+  steps.splice(checkpointIndex < 0 ? steps.length : checkpointIndex, 0, {
+    id: stableId("step-observe-ai", scenario.id, canonicalHash(expectations)),
+    kind: "OBSERVE",
+    requests: [{ type: "DOM_SNAPSHOT" }, { type: "VISIBLE_TEXT" }],
+  });
+  return { ...scenario, steps, expectations };
+}
+
+function diagnosticInRange(item, provenance) {
+  if (!item.path || !provenance?.range) return false;
+  const match = item.path.match(/:(\d+):(\d+)$/);
+  if (!match || !item.path.startsWith(`${provenance.path}:`)) return false;
+  const line = Number(match[1]);
+  const column = Number(match[2]);
+  const { start, end } = provenance.range;
+  return (line > start.line || (line === start.line && column >= start.column)) && (line < end.line || (line === end.line && column <= end.column));
+}
+
+function validateCacheArtifact(artifact, cacheKey, metadata) {
+  if (!artifact || typeof artifact !== "object" || Array.isArray(artifact) || Object.keys(artifact).some(key => !["cacheVersion", "cacheKey", "metadata", "result"].includes(key))) throw new TypeError("AI fallback cache is invalid");
+  if (artifact.cacheVersion !== AI_FALLBACK_CACHE_VERSION || artifact.cacheKey !== cacheKey || canonicalHash(artifact.metadata) !== canonicalHash(metadata)) throw new TypeError("AI fallback cache metadata is invalid");
+}
+
 function scenarioFromLegacyTest(legacy, test, index, block, source, sourcePath, revision, diagnostics, scenarioBlocked, blockedScenarioIds, semanticJudgmentScenarioIds) {
   const provenance = blockProvenance(source, sourcePath, block, revision);
   const discriminator = `${index}:${block?.index ?? "unknown"}`;
   const executableInteraction = test.liveRunPolicy === "executable-interaction";
-  const parsedActions = executableInteraction && !scenarioBlocked ? normalizeActions(test.actions ?? []) : [];
+  const parsedActions = executableInteraction ? normalizeActions(test.actions ?? []) : [];
   const expectations = (test.expectations ?? []).map((expectation, expectationIndex) =>
     expectationFromLegacy(legacy, test, discriminator, expectation, expectationIndex, provenance),
   );
@@ -173,6 +347,25 @@ function normalizeActions(actions) {
     result.push({ action: mapped, target: action.target, ...(value !== undefined ? { value } : {}) });
   }
   return result;
+}
+
+function staticManifestActions(test, diagnostics, testIndex) {
+  if (test.liveRunPolicy !== "executable-interaction" || !Array.isArray(test.actions) || test.actions.length === 0) return undefined;
+  if (diagnostics.some(item => item.testIndex === testIndex && ["OPAQUE_ACTION_TARGET", "OPAQUE_INTERACTION_STEP", "DYNAMIC_EXECUTION_VALUE"].includes(item.code))) return undefined;
+  if (test.actions.some(item => item.type !== "click" || (item.arguments?.length ?? 0) > 0)) return undefined;
+  const actions = normalizeActions(test.actions);
+  if (!actions || actions.some(item => item.action !== "CLICK" || !isStaticSemanticLocator(item.target))) return undefined;
+  return actions.map(item => ({ action: item.action, target: semanticTargetFromLocator(item.target) }));
+}
+
+function isStaticSemanticLocator(locator = {}) {
+  if (locator.unrepresentable === true) return false;
+  if (["testId", "text"].includes(locator.kind)) return typeof locator.value === "string" && locator.value.length > 0;
+  if (locator.kind === "role") {
+    const role = locator.role ?? locator.value;
+    return typeof role === "string" && role.length > 0 && (locator.name === undefined || typeof locator.name === "string");
+  }
+  return false;
 }
 
 function expectationFromLegacy(legacy, test, discriminator, expectation, index, provenance) {

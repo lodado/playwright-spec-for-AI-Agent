@@ -9,7 +9,7 @@
 [![Playwright](https://img.shields.io/badge/Playwright-%3E%3D1.48-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)](https://playwright.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-[Quick start](#quick-start) · [Providers & modes](#providers-and-modes) · [Config](#project-config-hermes-qaconfigmjs) · [Options](#execute-options) · [Annotations](#annotations) · [Commands](#commands) · [Env vars](#environment-variables) · [Code-backed Issues](#publish-a-code-backed-github-issue) · [Safety](#safety-and-limits)
+[Quick start](#quick-start) · [Architecture](ARCHITECTURE.md) · [Providers & modes](#providers-and-modes) · [Config](#project-config-hermes-qaconfigmjs) · [Options](#execute-options) · [Annotations](#annotations) · [Commands](#commands) · [Env vars](#environment-variables) · [Code-backed Issues](#publish-a-code-backed-github-issue) · [Safety](#safety-and-limits)
 
 </div>
 
@@ -20,8 +20,25 @@ read-only browser policy, seals the browser evidence, and judges the result as
 flows or mutating staging state.
 
 ```text
-Playwright spec → QA IR → sealed browser evidence → browserless judgment → code-backed report
+Playwright spec → AST policy manifest → independent AI extraction → live applicability preflight → policy-bounded browser evidence → judgment → independent review → code-backed report
 ```
+
+Page runs send each complete selected spec to a text-only Hermes extractor, then
+give only the source, immutable manifest, and candidate to a fresh independent reviewer. Up to three
+reviewed revisions are allowed; a fourth rejection fails closed. Approved meaning is cached as
+private JSON under `.qa/abstract/cache/` and page-local Markdown under
+`.qa/abstract/<page>/`, keyed by source,
+extractor, reviewer, model, and prompt versions. The model cannot add actions,
+policy, selectors, or a verdict: the nearest test or enclosing-suite `@qa-live-policy` resolved into the immutable manifest still owns
+authority, the gateway owns capabilities, and a separate evidence-only judge
+compares claims with sealed runtime evidence. A fresh reviewer then checks that
+each judgment is grounded in its cited evidence. Missing evidence never proves a
+claim. Hermes/adaptive runs use the abstract compiler by default for both `--page`
+and `--spec`; `--compiler=ast` remains a compatibility escape hatch.
+
+Large specs are extracted and independently reviewed in batches of at most
+eight tests. Only a timed-out or invalid batch is recursively reduced and
+retried; successful batches are retained.
 
 Use it when your app already has Playwright specs and you want a bounded live QA
 layer. Keep deterministic Playwright CI and API contract tests as the primary
@@ -58,7 +75,7 @@ test("shows pricing options", async ({ page }) => {
 });
 ```
 
-### 3. Execute → judge → report
+### 3. Execute → judge → review → report
 
 ```bash
 export QA_NATIVE_INTEGRITY_KEY="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64'))")"
@@ -70,12 +87,24 @@ npx qa-native execute \
   --provider=hermes \
   --mode=adaptive
 npx qa-native judge --run-dir=.qa/runs/pricing-1
+npx qa-native review --run-dir=.qa/runs/pricing-1
 npx qa-native report --run-dir=.qa/runs/pricing-1 --repository-root=. --revision=HEAD
 ```
 
-`execute` runs every declared scenario of the spec sequentially into one sealed
-evidence manifest. Unclear live states become `MANUAL_REVIEW`; they are not
-forced into pass or fail. **AI-native (`--provider=hermes --mode=adaptive`) is the
+If a run is judged again, select the completed judgment-set directory for the
+independent review: `npx qa-native review --run-dir=.qa/runs/pricing-1
+--judgment=judgments/<set-dir>`. The same directory may be passed to `report`.
+
+For approved abstract specs, `execute` first observes the live page once and
+selects scenario applicability. High-confidence conflicts become
+`NOT_APPLICABLE` and are not executed; ambiguous scenarios retain the legacy
+execute path so coverage cannot disappear silently. The selector receives only
+pre-flow applicability conditions, not titles, claims, destination URLs,
+dialogs, toasts, future mock responses, fixture identities, or other post-action
+state. Only read-only observable initial route/account/product state can skip a
+scenario. Executed scenarios are
+sealed into one evidence manifest. Unclear executed states become
+`MANUAL_REVIEW`; they are not forced into pass or fail. **AI-native (`--provider=hermes --mode=adaptive`) is the
 default**; pass `--mode=strict` for the deterministic read-only provider that needs
 no inference model. See [Providers and modes](#providers-and-modes).
 
@@ -96,13 +125,20 @@ no inference model. See [Providers and modes](#providers-and-modes).
   `--base-url` defaults to `batch.defaultBaseUrl`, navigation uses the config's
   per-page `targetPath` (e.g. a locale-prefixed route), and scenarios blocked by
   `@qa-live-policy` (`skip` / `auth-mock` / `subscription-mutation`) are still
-  skipped. `--config=<file>` overrides config auto-discovery.
+  skipped. Abstract/adaptive runs then perform scenario-level live applicability
+  preflight inside those designated specs. `--config=<file>` overrides config auto-discovery.
 
 ```bash
+# Extract and independently review the page specs without opening a browser:
+npx qa-native abstract-ai --page=dashboard
+
 # Run the dashboard page's designated specs, base URL from config:
 npx qa-native execute --page=dashboard --run-dir=.qa/runs/dashboard-1 \
   --provider=hermes --mode=adaptive
 ```
+
+Hermes/adaptive runs use `--compiler=abstract` by default for both `--page` and
+`--spec`. Pass `--compiler=ast` only for the compatibility compiler.
 
 Giving both `--spec` and `--page`, or neither, is an error. This keeps a QA run
 tied to the specs you defined for a page rather than an ad-hoc plan.
@@ -123,7 +159,8 @@ operator setup, and verdict handling.
 Both run `@qa-fixture` file uploads (the file is author-designated, never agent-chosen).
 
 Both seal the same tamper-evident browser evidence and hand it to a **browserless
-judge**. Strict is the safe default; adaptive trades determinism for resilience.
+judge**. Adaptive is the default; strict trades resilience for deterministic,
+model-free replay.
 The adaptive agent can never declare a verdict itself — it only gathers evidence.
 
 ## Verdicts
@@ -135,9 +172,11 @@ The adaptive agent can never declare a verdict itself — it only gathers eviden
 | `PASS`          | The evidence shows the expected state.                                  |
 | `FAIL`          | The evidence contradicts the expectation. Feed it to `report`.          |
 | `MANUAL_REVIEW` | Live state is plausible but uncertain — a human should look. Not a bug. |
-| `SKIP`          | The scenario was blocked or skipped on live (see `@qa-live-policy`).    |
+| `SKIP`          | Sealed evidence establishes that the scenario is not applicable.        |
 
-Unclear states resolve to `MANUAL_REVIEW`; they are never forced into pass or fail.
+Preflight `NOT_APPLICABLE` scenarios are reported separately and are not judged
+or counted as failures. An executed scenario whose evidence proves every claim
+inapplicable receives `SKIP`. Other unclear states resolve to `MANUAL_REVIEW`.
 
 ## Project config (`hermes-qa.config.mjs`)
 
@@ -190,7 +229,8 @@ qa-native execute (--spec=<file> | --page=<name>) [--base-url=<url>] --run-dir=.
 | `--config=<file>`         | Use a specific project config instead of auto-discovery.                                       |
 | `--base-url=<url>`        | Staging origin. Required with `--spec`; defaults to `batch.defaultBaseUrl` with `--page`.      |
 | `--run-dir=.qa/runs/<id>` | Where evidence is sealed (must not already exist). Required.                                   |
-| `--provider` / `--mode`   | `playwright`/`strict` (default) or `hermes`/`adaptive` — see above.                            |
+| `--provider` / `--mode`   | `hermes`/`adaptive` (default) or `playwright`/`strict` — see above.                            |
+| `--compiler`              | `abstract` for AST metadata plus AI semantics (Hermes default); `ast` for compatibility.     |
 | `--storage-state=<file>`  | Signed-in session; auto-discovers `.private/storage-state.json`.                               |
 | `--auth-bootstrap=<file>` | SSO/session-refresh page with origin/endpoint allowlists.                                      |
 | `--allowed-origin=<url>`  | Extra origin(s) the page may read from; comma-separated, up to 7.                              |
@@ -388,8 +428,17 @@ Each `execute` writes a sealed, tamper-evident run directory:
 ├── execution-plan.json   # strict mode only
 ├── run.json              # runtime outcome
 ├── evidence/             # sealed DOM/ARIA/action-log bundles + HMAC manifest
-└── judgments/            # written by `judge`
+├── judgments/            # written by `judge`
+└── reviews/              # independent grounding decisions written by `review`
+
+.qa/abstract/cache/       # owner-only, reviewed full-spec JSON shared across pages
+.qa/abstract/<page>/      # page-local Markdown views
+.qa/abstract-cache/       # compatibility cache for AST slice fallback
 ```
+
+For abstract/adaptive runs, `qa-ir.json` also contains the authenticated
+`extensions.applicabilityDecisions` used to select execution. The run envelope
+hashes the complete QA IR and the exact execution-input list.
 
 Evidence is never deleted. A run that fails validation is quarantined to
 `<id>.invalid/` rather than removed. `.qa/` is workspace-local; keep it gitignored.
@@ -410,7 +459,7 @@ Evidence is never deleted. A run that fails validation is quarantined to
 
 - The CLI reads specs as source material; it does not replace deterministic Playwright CI or API contract tests.
 - Live judgment is non-deterministic; unclear states resolve to `MANUAL_REVIEW`.
-- The browser policy allows only same-origin `GET`/`HEAD` reads after a safe interaction; mutations, cross-origin requests, and destructive confirmations are blocked. File uploads run only from a declared `@qa-fixture` resolved inside the project root — the file is always author-designated, never chosen by the agent, in either mode.
+- Adaptive browser runs allow only `GET`/`HEAD` reads to origins explicitly listed in the capability lease; mutations, WebSockets, unleased origins, and destructive confirmations are blocked. File uploads run only from a declared `@qa-fixture` resolved inside the project root — the file is always author-designated, never chosen by the agent, in either mode.
 - Credentials belong in environment variables, a secret manager, or a private `storageState` file — never committed config or CLI flags.
 - Remediation can create private worktrees and Draft PRs only after strict verification; it has no merge or auto-merge path.
 - Results are first-pass live QA evidence, not a replacement for a QA engineer.

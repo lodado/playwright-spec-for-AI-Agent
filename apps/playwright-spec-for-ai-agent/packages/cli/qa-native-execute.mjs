@@ -1,19 +1,21 @@
-import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, renameSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, readSync, realpathSync, renameSync } from "node:fs";
 import { basename, join, relative } from "node:path";
-import { compilePlaywrightSpec } from "../adapter-playwright/index.mjs";
+import { compileAbstractPlaywrightArtifact } from "../abstract-playwright/index.mjs";
+import { compilePlaywrightSpec, recoverPlaywrightSpecWithAi } from "../adapter-playwright/index.mjs";
 import { RUNTIME_OUTCOME_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
 import { createAdaptiveExecutionInput, createExecutionPlan, DEFAULT_ADAPTIVE_BUDGET } from "../core/index.mjs";
 import { writeEvidenceArchive } from "../evidence/index.mjs";
-import { createHermesExecutionProposer } from "../provider-hermes/index.mjs";
-import { assertPlaywrightAdaptiveExecution, executeWithPlaywright, playwrightExecutionCapabilities, runAdaptiveSuiteWithPlaywright } from "../provider-playwright/index.mjs";
+import { createHermesApplicabilitySelector, createHermesExecutionProposer, createHermesSpecAbstractor } from "../provider-hermes/index.mjs";
+import { assertPlaywrightAdaptiveExecution, executeWithPlaywright, observeAdaptiveApplicabilityPage, playwrightExecutionCapabilities, runAdaptiveSuiteWithPlaywright } from "../provider-playwright/index.mjs";
 import { validateAdaptiveExecutionEvidence } from "./qa-native-adaptive-evidence.mjs";
+import { abstractSpecInputs } from "./qa-native-abstract-ai.mjs";
 import { writeAuthenticatedRunEnvelope } from "./qa-native-run-envelope.mjs";
-import { CliError, createExclusiveQaDirectory, writePrivateJsonExclusive } from "./qa-native.mjs";
+import { CliError, createExclusiveQaDirectory, ensurePrivateQaDirectory, readBoundedSpec, readPrivateJson, writePrivateJsonExclusive } from "./qa-native.mjs";
 
-const MAX_SPEC_BYTES = 4 * 1024 * 1024;
 const MAX_AUTH_BOOTSTRAP_BYTES = 64 * 1024;
 
-export async function executeQaNative({ specPath, specPaths, baseUrl, runDirectory, integrityKey, cwd, provider = "playwright", mode = "strict", storageStatePath, authBootstrapPath, allowedOrigins, allowExternalRead, allowPartial = false, pageTargetPath, pageUrl, budgetOverrides = {} }, overrides = {}) {
+export async function executeQaNative({ specPath, specPaths, baseUrl, runDirectory, integrityKey, cwd, provider = "playwright", mode = "strict", compiler = "ast", page, storageStatePath, authBootstrapPath, allowedOrigins, allowExternalRead, allowPartial = false, pageTargetPath, pageUrl, budgetOverrides = {} }, overrides = {}) {
+  if (!["ast", "abstract"].includes(compiler)) throw new TypeError("compiler is invalid");
   const compile = overrides.compile ?? compilePlaywrightSpec;
   const reportDiagnostics = overrides.reportDiagnostics ?? defaultReportDiagnostics;
   const reportSummary = overrides.reportSummary ?? defaultReportSummary;
@@ -22,6 +24,8 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
   const execute = overrides.execute ?? executeWithPlaywright;
   const createAdaptiveInput = overrides.createAdaptiveInput ?? createAdaptiveExecutionInput;
   const createProposer = overrides.createProposer ?? createHermesExecutionProposer;
+  const createApplicabilitySelector = overrides.createApplicabilitySelector ?? createHermesApplicabilitySelector;
+  const observeApplicability = overrides.observeApplicability ?? observeAdaptiveApplicabilityPage;
   const executeAdaptive = overrides.executeAdaptive ?? runAdaptiveSuiteWithPlaywright;
   const validateEvidence = overrides.validateEvidence ?? validateAdaptiveExecutionEvidence;
   const reportInvalidRun = overrides.reportInvalidRun ?? defaultReportInvalidRun;
@@ -33,7 +37,39 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
     created = true;
     const specPathList = specPaths ?? [specPath];
     const authBootstrap = authBootstrapPath === undefined ? undefined : readAuthBootstrap(authBootstrapPath);
-    const compiledResults = specPathList.map((path) => compile({ source: readBoundedSpec(path), sourcePath: relative(projectRoot, path) }));
+    const specInputs = specPathList.map(path => {
+      const resolvedPath = realpathSync(path);
+      return { source: readBoundedSpec(resolvedPath), sourcePath: relative(projectRoot, resolvedPath) };
+    });
+    let compiledResults;
+    if (compiler === "abstract") {
+      const abstractInputs = overrides.abstractInputs ?? abstractSpecInputs;
+      const records = await abstractInputs({ sourceInputs: specInputs, page, cwd }, { extract: overrides.extractFull, review: overrides.reviewFull });
+      const pairs = records.map((record, index) => ({ record, input: specInputs[index] }));
+      const manual = pairs.filter(pair => pair.record.artifact.status !== "APPROVED");
+      for (const pair of manual) reportDiagnostics([{ severity: "WARNING", code: "ABSTRACT_SPEC_MANUAL_REVIEW", message: "Skipped spec because its AI abstraction requires manual review.", path: pair.input.sourcePath }]);
+      if (manual.length > 0 && !allowPartial) throw new CliError("AI abstraction requires manual review");
+      const approved = pairs.filter(pair => pair.record.artifact.status === "APPROVED");
+      if (approved.length === 0) throw new CliError("no approved AI abstractions remain after skipping manual-review specs");
+      const compileAbstract = overrides.compileAbstract ?? compileAbstractPlaywrightArtifact;
+      compiledResults = approved.map(pair => compileAbstract({ artifact: pair.record.artifact, manifest: pair.record.manifest, ...pair.input }));
+    } else {
+      compiledResults = specInputs.map(input => compile(input));
+    }
+    if (compiler === "ast" && compiledResults.some(result => (result.qaIr.extensions?.blockedScenarioIds ?? []).length > 0)) {
+      const abstractScenario = overrides.abstractScenario ?? createHermesSpecAbstractor();
+      const identity = overrides.abstractIdentity ?? abstractScenario.identity ?? { model: "unknown", modelVersion: "unknown" };
+      const cache = aiAbstractionCache(cwd);
+      compiledResults = await Promise.all(compiledResults.map((result, index) => recoverPlaywrightSpecWithAi({
+        compileResult: result,
+        source: specInputs[index].source,
+        abstractScenario,
+        cache,
+        promptVersion: overrides.abstractPromptVersion ?? abstractScenario.promptVersion ?? "unknown",
+        model: identity.model ?? "unknown",
+        modelVersion: identity.modelVersion ?? "unknown",
+      })));
+    }
     const compileResult = compiledResults.length === 1 ? compiledResults[0] : mergeCompileResults(compiledResults);
     if (compileResult.diagnostics.length > 0) reportDiagnostics(compileResult.diagnostics);
     if (!compileResult.ok && !allowPartial) throw new Error("QA spec compilation failed");
@@ -72,10 +108,52 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
       // against the pre-narrow IR stays consistent after dropping the skipped scenarios.
       if (runnableIds.size < scenarios.length) qaIr = retainScenarios(qaIr, runnableIds);
       agentInputs = builtInputs;
+      if (compiler === "abstract") {
+        let applicabilityDecisions;
+        try {
+          const scenarioBySelectorId = new Map();
+          const selectorScenarios = qaIr.suites.flatMap((suite) => suite.scenarios).map((scenario, index) => {
+            const selectorId = `S${index + 1}`;
+            scenarioBySelectorId.set(selectorId, scenario.id);
+            return { id: selectorId, applicability: scenario.semantics?.applicability ?? [] };
+          });
+          const pageObservation = await observeApplicability({ input: builtInputs[0], storageStatePath, authBootstrap, projectRoot });
+          applicabilityDecisions = normalizeApplicabilityDecisions(
+            selectorScenarios,
+            await createApplicabilitySelector()({
+              page: pageObservation,
+              scenarios: selectorScenarios.map((scenario) => ({
+                scenarioId: scenario.id,
+                applicability: scenario.applicability,
+              })),
+            }),
+          ).map((decision) => Object.freeze({ ...decision, scenarioId: scenarioBySelectorId.get(decision.scenarioId) }));
+        } catch (error) {
+          reportDiagnostics([{ severity: "WARNING", code: "APPLICABILITY_PREFLIGHT_FAILED", message: `Applicability preflight failed; preserving legacy execute-all behavior: ${error instanceof Error ? error.message : "unknown failure"}`, path: qaIr.source?.uri ?? "" }]);
+          applicabilityDecisions = ambiguousApplicabilityDecisions(qaIr.suites.flatMap((suite) => suite.scenarios), "Applicability preflight failed; scenario retained for compatibility.");
+        }
+        let selectedIds = new Set(applicabilityDecisions.filter((decision) => decision.status !== "NOT_APPLICABLE").map((decision) => decision.scenarioId));
+        if (selectedIds.size === 0) {
+          reportDiagnostics([{ severity: "WARNING", code: "APPLICABILITY_PREFLIGHT_EMPTY", message: "Applicability preflight selected no scenarios; preserving legacy execute-all behavior.", path: qaIr.source?.uri ?? "" }]);
+          applicabilityDecisions = ambiguousApplicabilityDecisions(qaIr.suites.flatMap((suite) => suite.scenarios), "Empty applicability selection fell back to legacy execution.");
+          selectedIds = new Set(applicabilityDecisions.map((decision) => decision.scenarioId));
+        }
+        qaIr = { ...qaIr, extensions: { ...(qaIr.extensions ?? {}), applicabilityDecisions } };
+        agentInputs = builtInputs.filter((input) => selectedIds.has(input.scenarioId));
+        for (const decision of applicabilityDecisions.filter((item) => item.status === "NOT_APPLICABLE")) {
+          reportDiagnostics([{ severity: "INFO", code: "SCENARIO_NOT_APPLICABLE", message: `Skipped ${decision.scenarioId}: ${decision.rationale}`, path: qaIr.source?.uri ?? "" }]);
+        }
+      }
       execution = await executeAdaptive({ inputs: agentInputs, proposeAction: createProposer(), storageStatePath, authBootstrap, projectRoot });
       assertPlaywrightAdaptiveExecution(execution);
       try {
         agentOutcomes = execution.executions.map((entry, index) => validateContract("ExecutionAgentOutcome", entry.outcome, { input: agentInputs[index] }));
+        if (execution.bundles.length === 0 && execution.manifest === undefined) {
+          const first = agentOutcomes.find((outcome) => outcome.type !== "COMPLETED") ?? agentOutcomes[0];
+          preserveInvalidRun({ runDirectory, cwd, execution, agentInputs, agentOutcomes, writeArchive, integrityKey, reportInvalidRun });
+          created = false;
+          throw new CliError(`QA adaptive execution failed before evidence was sealed (scenarioId=${first?.scenarioId ?? "unknown"} type=${first?.type ?? "ERROR"} bundles=0)`);
+        }
         execution.executions.forEach((entry, index) => validateEvidence({
           input: agentInputs[index],
           outcome: agentOutcomes[index],
@@ -84,13 +162,30 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
           readBlob: execution.readBlob,
         }));
       } catch (error) {
-        preserveInvalidRun({ runDirectory, cwd, execution, agentInputs, writeArchive, integrityKey, reportInvalidRun });
+        if (!created) throw error;
+        preserveInvalidRun({ runDirectory, cwd, execution, agentInputs, agentOutcomes, writeArchive, integrityKey, reportInvalidRun });
         created = false;
         throw error;
       }
       runtimeOutcome = validateContract("RuntimeOutcome", { schemaVersion: RUNTIME_OUTCOME_VERSION, stage: "execute", type: "COMPLETED" });
     } else if (provider === "playwright" && mode === "strict") {
-      executionPlan = plan({ qaIr, providerCapabilities: playwrightExecutionCapabilities() });
+      const capabilities = playwrightExecutionCapabilities();
+      if (allowPartial) {
+        const scenarios = qaIr.suites.flatMap((suite) => suite.scenarios);
+        const runnableIds = new Set();
+        // ponytail: per-scenario planning is O(n²); export a core preflight validator only if page sizes make this measurable.
+        for (const scenario of scenarios) {
+          try {
+            plan({ qaIr: retainScenarios(qaIr, new Set([scenario.id])), providerCapabilities: capabilities });
+            runnableIds.add(scenario.id);
+          } catch (error) {
+            reportDiagnostics([{ severity: "WARNING", code: "SCENARIO_UNRUNNABLE", message: `Skipped strict scenario ${scenario.id}: ${error instanceof Error ? error.message : "unsupported by strict runtime"}`, path: qaIr.source?.uri ?? "" }]);
+          }
+        }
+        if (runnableIds.size === 0) throw new Error("no strict-runnable scenarios remain after skipping unsupported ones");
+        if (runnableIds.size < scenarios.length) qaIr = retainScenarios(qaIr, runnableIds);
+      }
+      executionPlan = plan({ qaIr, providerCapabilities: capabilities });
       execution = await execute({ qaIr, plan: executionPlan, baseUrl, runId: basename(runDirectory), storageStatePath, authBootstrap, projectRoot });
       runtimeOutcome = validateContract("RuntimeOutcome", execution.outcome);
     } else {
@@ -128,11 +223,12 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
       evidenceManifest: execution.manifest,
       ...(mode === "strict" ? { executionPlan } : { executionAgentInputs: agentInputs, executionAgentOutcomes: agentOutcomes }),
     });
-    const executed = qaIr.suites.reduce((total, suite) => total + suite.scenarios.length, 0);
+    const executed = agentInputs?.length ?? qaIr.suites.reduce((total, suite) => total + suite.scenarios.length, 0);
     const compiled = compileResult.qaIr.suites.reduce((total, suite) => total + suite.scenarios.length, 0);
+    const notApplicable = qaIr.extensions?.applicabilityDecisions?.filter((decision) => decision.status === "NOT_APPLICABLE").length ?? 0;
     const nonCompleted = (agentOutcomes ?? []).filter((outcome) => outcome.type !== "COMPLETED");
     for (const outcome of nonCompleted) reportScenario({ scenarioId: outcome.scenarioId, type: outcome.type, reason: outcome.reason });
-    reportSummary({ runDirectory: relative(cwd, runDirectory), provider, mode, executed, skipped: compiled - executed, nonCompleted: nonCompleted.length });
+    reportSummary({ runDirectory: relative(cwd, runDirectory), provider, mode, executed, skipped: compiled - executed, notApplicable, nonCompleted: nonCompleted.length });
     return 0;
   } catch (error) {
     if (created) quarantineRunDirectory({ runDirectory, cwd, reportInvalidRun });
@@ -140,11 +236,37 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
   }
 }
 
+function aiAbstractionCache(cwd) {
+  const directory = ".qa/abstract-cache";
+  return {
+    read(cacheKey) {
+      assertCacheKey(cacheKey);
+      ensurePrivateQaDirectory(directory, { cwd });
+      const path = `${directory}/${cacheKey}.json`;
+      return existsSync(join(cwd, path)) ? readPrivateJson(path, { cwd }) : undefined;
+    },
+    write(cacheKey, artifact) {
+      assertCacheKey(cacheKey);
+      ensurePrivateQaDirectory(directory, { cwd });
+      const path = `${directory}/${cacheKey}.json`;
+      try {
+        writePrivateJsonExclusive(path, artifact, { cwd });
+      } catch (error) {
+        if (!(error instanceof CliError) || error.message !== "output already exists") throw error;
+      }
+    },
+  };
+}
+
+function assertCacheKey(value) {
+  if (!/^[0-9a-f]{64}$/.test(value)) throw new CliError("AI abstraction cache key is invalid");
+}
+
 // A failed run is itself the debugging record of the failure: seal whatever evidence the provider
 // produced, then quarantine the directory as <run-dir>.invalid instead of deleting it. Nothing in
 // this path may delete evidence; errors here only degrade to stderr notes (fixed strings — never
 // error details, which stay behind QA_NATIVE_DEBUG).
-function preserveInvalidRun({ runDirectory, cwd, execution, agentInputs, writeArchive, integrityKey, reportInvalidRun }) {
+function preserveInvalidRun({ runDirectory, cwd, execution, agentInputs, agentOutcomes, writeArchive, integrityKey, reportInvalidRun }) {
   try {
     if (execution.bundles.length > 0 && execution.manifest !== undefined) {
       writeArchive({
@@ -155,9 +277,14 @@ function preserveInvalidRun({ runDirectory, cwd, execution, agentInputs, writeAr
         integrityKey,
       });
     }
-    if (agentInputs !== undefined) writePrivateJsonExclusive(relative(cwd, join(runDirectory, "execution-agent-inputs.json")), agentInputs, { cwd });
   } catch {
     process.stderr.write("qa-native: failed to seal invalid evidence\n");
+  }
+  try {
+    if (agentInputs !== undefined) writePrivateJsonExclusive(relative(cwd, join(runDirectory, "execution-agent-inputs.json")), agentInputs, { cwd });
+    if (agentOutcomes !== undefined) writePrivateJsonExclusive(relative(cwd, join(runDirectory, "execution-agent-outcomes.json")), agentOutcomes, { cwd });
+  } catch {
+    process.stderr.write("qa-native: failed to preserve invalid metadata\n");
   }
   quarantineRunDirectory({ runDirectory, cwd, reportInvalidRun });
 }
@@ -190,12 +317,36 @@ function defaultReportDiagnostics(diagnostics) {
   }
 }
 
+export function normalizeApplicabilityDecisions(scenarios, value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== 1 || !Array.isArray(value.scenarios)) throw new Error("applicability decision is invalid");
+  const expected = new Set(scenarios.map((scenario) => scenario.id));
+  if (value.scenarios.length !== expected.size) throw new Error("applicability decision coverage is incomplete");
+  const seen = new Set();
+  return value.scenarios.map((decision) => {
+    if (!decision || typeof decision !== "object" || Array.isArray(decision) || Object.keys(decision).some((key) => !["scenarioId", "status", "confidence", "rationale"].includes(key))) throw new Error("applicability decision is invalid");
+    if (!expected.has(decision.scenarioId) || seen.has(decision.scenarioId)) throw new Error("applicability decision scenario is invalid");
+    if (!["APPLICABLE", "NOT_APPLICABLE", "AMBIGUOUS"].includes(decision.status) || !Number.isFinite(decision.confidence) || decision.confidence < 0 || decision.confidence > 1 || typeof decision.rationale !== "string" || decision.rationale.length === 0 || decision.rationale.length > 2_000) throw new Error("applicability decision is invalid");
+    seen.add(decision.scenarioId);
+    return Object.freeze({
+      scenarioId: decision.scenarioId,
+      status: decision.status === "NOT_APPLICABLE" && decision.confidence < 0.8 ? "AMBIGUOUS" : decision.status,
+      confidence: decision.confidence,
+      rationale: decision.rationale,
+    });
+  });
+}
+
+function ambiguousApplicabilityDecisions(scenarios, rationale) {
+  return scenarios.map((scenario) => Object.freeze({ scenarioId: scenario.id, status: "AMBIGUOUS", confidence: 0, rationale }));
+}
+
 // A successful run was previously silent (exit 0, no output), leaving CI and operators unable to
 // tell what ran. Emit a one-line summary of executed vs. skipped scenarios and the artifact path.
-function defaultReportSummary({ runDirectory, provider, mode, executed, skipped, nonCompleted = 0 }) {
+function defaultReportSummary({ runDirectory, provider, mode, executed, skipped, notApplicable = 0, nonCompleted = 0 }) {
   const nonCompletedNote = nonCompleted > 0 ? `, ${nonCompleted} budget-exhausted` : "";
-  const skippedNote = skipped > 0 ? `, skipped ${skipped} blocked` : "";
-  process.stdout.write(`qa-native: ${provider}/${mode} executed ${executed} scenario(s)${nonCompletedNote}${skippedNote} → ${runDirectory}\n`);
+  const blocked = Math.max(0, skipped - notApplicable);
+  const skippedNote = [notApplicable > 0 ? `${notApplicable} not-applicable` : "", blocked > 0 ? `${blocked} blocked` : ""].filter(Boolean).join(", ");
+  process.stdout.write(`qa-native: ${provider}/${mode} executed ${executed} scenario(s)${nonCompletedNote}${skippedNote ? `, skipped ${skippedNote}` : ""} → ${runDirectory}\n`);
 }
 
 // Adaptive scenarios that ended ERROR/BLOCKED still sealed evidence; surface each one's outcome and
@@ -213,6 +364,7 @@ export function mergeCompileResults(results) {
   const suites = results.flatMap((result) => result.qaIr.suites);
   const blockedScenarioIds = results.flatMap((result) => result.qaIr.extensions?.blockedScenarioIds ?? []);
   const semanticJudgmentScenarioIds = results.flatMap((result) => result.qaIr.extensions?.semanticJudgmentScenarioIds ?? []);
+  const abstractScenarios = Object.assign({}, ...results.map(result => result.qaIr.extensions?.abstractScenarios ?? {}));
   const qaIr = {
     ...first,
     id: `qa-ir:${canonicalHash(results.map((result) => result.qaIr.id)).slice("sha256:".length)}`,
@@ -222,6 +374,7 @@ export function mergeCompileResults(results) {
       sourceContentHash: canonicalHash(results.map((result) => result.qaIr.extensions?.sourceContentHash ?? result.qaIr.id)),
       ...(blockedScenarioIds.length > 0 ? { blockedScenarioIds } : {}),
       ...(semanticJudgmentScenarioIds.length > 0 ? { semanticJudgmentScenarioIds } : {}),
+      ...(Object.keys(abstractScenarios).length > 0 ? { abstractScenarios } : {}),
     },
   };
   return { schemaVersion: results[0].schemaVersion, ok: results.every((result) => result.ok), qaIr, diagnostics: results.flatMap((result) => result.diagnostics) };
@@ -261,25 +414,6 @@ export function withoutBlockedScenarios(qaIr) {
     suites: qaIr.suites.map((suite) => ({ ...suite, scenarios: suite.scenarios.filter((scenario) => !blocked.has(scenario.id)) })),
     extensions,
   };
-}
-
-function readBoundedSpec(path) {
-  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const stat = fstatSync(descriptor);
-    if (!stat.isFile() || stat.size > MAX_SPEC_BYTES) throw new Error("QA spec input is invalid");
-    const buffer = Buffer.alloc(MAX_SPEC_BYTES + 1);
-    let offset = 0;
-    while (offset < buffer.byteLength) {
-      const bytesRead = readSync(descriptor, buffer, offset, buffer.byteLength - offset, null);
-      if (bytesRead === 0) break;
-      offset += bytesRead;
-    }
-    if (offset > MAX_SPEC_BYTES) throw new Error("QA spec input is invalid");
-    return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, offset));
-  } finally {
-    closeSync(descriptor);
-  }
 }
 
 function readAuthBootstrap(path) {

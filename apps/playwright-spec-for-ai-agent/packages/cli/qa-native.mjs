@@ -15,8 +15,10 @@ const PUBLISH_ISSUE_OPTIONS = new Set([...REPORT_OPTIONS, "repository"]);
 const REMEDIATION_OPTIONS = new Set([...PUBLISH_ISSUE_OPTIONS, "publish"]);
 const PUBLICATION_COMMANDS = new Set(["publish-issue", "publish", "remediate"]);
 const COMMAND_OPTIONS = Object.freeze({
-  execute: new Set(["spec", "page", "config", "base-url", "run-dir", "provider", "mode", "storage-state", "auth-bootstrap", "allowed-origin", "allow-partial", "budget-actions", "budget-turns", "budget-time-ms", "budget-tokens"]),
+  "abstract-ai": new Set(["spec", "page", "config"]),
+  execute: new Set(["spec", "page", "config", "base-url", "run-dir", "provider", "mode", "compiler", "storage-state", "auth-bootstrap", "allowed-origin", "allow-partial", "budget-actions", "budget-turns", "budget-time-ms", "budget-tokens"]),
   judge: new Set(["run-dir", "fail-on"]),
+  review: new Set(["run-dir", "judgment"]),
   replay: new Set(["run-dir"]),
   diagnose: REPORT_OPTIONS,
   "suggest-fix": REPORT_OPTIONS,
@@ -28,8 +30,10 @@ const COMMAND_OPTIONS = Object.freeze({
   remediate: REMEDIATION_OPTIONS,
 });
 const COMMAND_USAGE = Object.freeze({
-  execute: "qa-native execute (--spec=<file> | --page=<name>) [--base-url=<url>] --run-dir=.qa/runs/<id> [--config=<file> --storage-state=<file> (default .private/storage-state.json when present) --auth-bootstrap=.private/auth-bootstrap.json --allowed-origin=https://api.example.com --provider=playwright --mode=strict | --provider=hermes --mode=adaptive --allow-partial --budget-actions=<n> --budget-turns=<n> --budget-time-ms=<n> --budget-tokens=<n>] (--page resolves the page's designated spec directory and base URL from the project config; --spec always wins when given)",
+  "abstract-ai": "qa-native abstract-ai (--spec=<file> | --page=<name>) [--config=<file>]",
+  execute: "qa-native execute (--spec=<file> | --page=<name>) [--base-url=<url>] --run-dir=.qa/runs/<id> [--config=<file> --compiler=abstract|ast --storage-state=<file> (default .private/storage-state.json when present) --auth-bootstrap=.private/auth-bootstrap.json --allowed-origin=https://api.example.com --provider=playwright --mode=strict | --provider=hermes --mode=adaptive --allow-partial --budget-actions=<n> --budget-turns=<n> --budget-time-ms=<n> --budget-tokens=<n>] (--page resolves the page's designated spec directory and base URL from the project config; --spec always wins when given)",
   judge: "qa-native judge --run-dir=.qa/runs/<id> [--fail-on=fail|manual-review]",
+  review: "qa-native review --run-dir=.qa/runs/<id> [--judgment=<result.json|set-dir>]",
   replay: "qa-native replay --run-dir=.qa/runs/<id>",
   diagnose: "qa-native diagnose --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
   "suggest-fix": "qa-native suggest-fix --run-dir=.qa/runs/<id> --repository-root=. [--revision=<commit>] [--judgment=<result.json>]",
@@ -75,14 +79,9 @@ export function resolvePrivateQaPath(value, { cwd = process.cwd() } = {}) {
 
 export function createExclusiveQaDirectory(value, { cwd = process.cwd() } = {}) {
   const target = resolvePrivateQaPath(value, { cwd });
-  const root = resolve(cwd, ".qa");
-  ensurePrivateDirectory(root);
-  const parts = relative(root, target).split(sep);
-  let current = root;
-  for (const part of parts.slice(0, -1)) {
-    current = join(current, part);
-    ensurePrivateDirectory(current);
-  }
+  const parent = dirname(target);
+  if (parent === resolve(cwd, ".qa")) ensurePrivateDirectory(parent);
+  else ensurePrivateQaDirectory(relative(cwd, parent), { cwd });
   try {
     mkdirSync(target, { mode: PRIVATE_DIRECTORY_MODE });
   } catch (error) {
@@ -90,6 +89,18 @@ export function createExclusiveQaDirectory(value, { cwd = process.cwd() } = {}) 
     throw error;
   }
   assertPrivateDirectory(target);
+  return target;
+}
+
+export function ensurePrivateQaDirectory(value, { cwd = process.cwd() } = {}) {
+  const target = resolvePrivateQaPath(value, { cwd });
+  const root = resolve(cwd, ".qa");
+  ensurePrivateDirectory(root);
+  let current = root;
+  for (const part of relative(root, target).split(sep)) {
+    current = join(current, part);
+    ensurePrivateDirectory(current);
+  }
   return target;
 }
 
@@ -126,6 +137,25 @@ export function readPrivateJson(value, { cwd = process.cwd() } = {}) {
     throw new CliError("private JSON input is invalid");
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+export function readBoundedSpec(path) {
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile() || stat.size > MAX_PRIVATE_JSON_BYTES) throw new Error("QA spec input is invalid");
+    const buffer = Buffer.alloc(MAX_PRIVATE_JSON_BYTES + 1);
+    let offset = 0;
+    while (offset < buffer.byteLength) {
+      const bytesRead = readSync(descriptor, buffer, offset, buffer.byteLength - offset, null);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    if (offset > MAX_PRIVATE_JSON_BYTES) throw new Error("QA spec input is invalid");
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, offset));
+  } finally {
+    closeSync(descriptor);
   }
 }
 
@@ -170,8 +200,8 @@ export async function runQaNative(argv, {
     if (PUBLICATION_COMMANDS.has(request.command)) publicationKey = decodePublicationKey(env[PUBLICATION_KEY_ENV]);
     delete process.env[INTEGRITY_KEY_ENV];
     delete process.env[PUBLICATION_KEY_ENV];
-    const pageSource = request.command === "execute" && typeof request.options.page === "string" && request.options.page.length > 0
-      ? await resolvePageSpecSource(request.options, cwd)
+    const pageSource = ["execute", "abstract-ai"].includes(request.command) && typeof request.options.page === "string" && request.options.page.length > 0
+      ? await resolvePageSpecSource(request.options, cwd, { requireBaseUrl: request.command === "execute" })
       : undefined;
     const normalized = normalizeRequest(request, cwd, pageSource);
     const status = await handler({ ...normalized, integrityKey, ...(publicationKey === undefined ? {} : { publicationKey }) });
@@ -236,6 +266,7 @@ function parseRequest(argv) {
         publish: { type: "string" },
         provider: { type: "string" },
         mode: { type: "string" },
+        compiler: { type: "string" },
         "storage-state": { type: "string" },
         "auth-bootstrap": { type: "string" },
         "allowed-origin": { type: "string" },
@@ -255,22 +286,22 @@ function parseRequest(argv) {
   const command = parsed.positionals[0];
   const supplied = Object.keys(parsed.values).filter((key) => key !== "help");
   if (supplied.some((key) => !COMMAND_OPTIONS[command].has(key))) throw new CliError("invalid command arguments");
-  const required = command === "execute" ? ["run-dir"] : PUBLICATION_COMMANDS.has(command) ? ["run-dir", "repository-root", "repository"] : REPORT_COMMANDS.has(command) ? ["run-dir", "repository-root"] : ["run-dir"];
+  const required = command === "abstract-ai" ? [] : command === "execute" ? ["run-dir"] : PUBLICATION_COMMANDS.has(command) ? ["run-dir", "repository-root", "repository"] : REPORT_COMMANDS.has(command) ? ["run-dir", "repository-root"] : ["run-dir"];
   if (required.some((key) => typeof parsed.values[key] !== "string" || parsed.values[key].length === 0)) throw new CliError("required command argument is missing");
   // execute needs exactly one spec source: an explicit --spec (with --base-url), or a --page the
   // project config resolves to the page's designated specs and base URL.
-  if (command === "execute") {
+  if (["execute", "abstract-ai"].includes(command)) {
     const hasSpec = typeof parsed.values.spec === "string" && parsed.values.spec.length > 0;
     const hasPage = typeof parsed.values.page === "string" && parsed.values.page.length > 0;
-    if (hasSpec === hasPage) throw new CliError("execute requires exactly one of --spec or --page");
-    if (hasSpec && (typeof parsed.values["base-url"] !== "string" || parsed.values["base-url"].length === 0)) throw new CliError("--spec requires --base-url");
+    if (hasSpec === hasPage) throw new CliError(`${command} requires exactly one of --spec or --page`);
+    if (command === "execute" && hasSpec && (typeof parsed.values["base-url"] !== "string" || parsed.values["base-url"].length === 0)) throw new CliError("--spec requires --base-url");
   }
   return { command, options: Object.freeze({ ...parsed.values }) };
 }
 
 // Resolve `--page` to the page's designated spec files and base URL via the project config. The
 // config loader lives in the scripts layer; import it lazily so a plain `--spec` run never loads it.
-async function resolvePageSpecSource(options, cwd) {
+async function resolvePageSpecSource(options, cwd, { requireBaseUrl = true } = {}) {
   const projectRoot = realpathSync(cwd);
   const { loadProjectConfig, selectSpecFilesForPage, resolveConfigBaseUrl, resolveJudgeTarget, resetProjectConfigForTests } =
     await import("../../scripts/hermes-qa-project-config.mjs");
@@ -289,13 +320,19 @@ async function resolvePageSpecSource(options, cwd) {
     if (resolved !== projectRoot && !resolved.startsWith(projectRoot + sep)) throw new CliError("page spec is outside the project root");
   }
   const baseUrl = options["base-url"] ?? resolveConfigBaseUrl() ?? undefined;
-  if (baseUrl === undefined) throw new CliError("--page requires --base-url or a base URL in the project config");
+  if (requireBaseUrl && baseUrl === undefined) throw new CliError("--page requires --base-url or a base URL in the project config");
   // The config's per-page target path (e.g. a locale-prefixed route) overrides the spec's @qa-page.
   const { targetPath, pageUrl } = resolveJudgeTarget([], options.page);
   return { specPaths, baseUrl, ...(targetPath ? { targetPath } : {}), ...(pageUrl ? { pageUrl } : {}) };
 }
 
 function normalizeRequest(request, cwd, pageSource) {
+  if (request.command === "abstract-ai") {
+    const specSource = pageSource === undefined
+      ? { specPath: resolveRegularInput(request.options.spec, { root: cwd, label: "spec" }) }
+      : { specPaths: pageSource.specPaths };
+    return Object.freeze({ command: request.command, cwd, page: request.options.page, ...specSource });
+  }
   const runDirectory = resolvePrivateQaPath(request.options["run-dir"], { cwd });
   if (request.command === "execute") {
     if (lstatIfExists(runDirectory)) throw new CliError("run directory already exists");
@@ -303,6 +340,8 @@ function normalizeRequest(request, cwd, pageSource) {
     const provider = request.options.provider ?? (request.options.mode === "strict" ? "playwright" : "hermes");
     const mode = request.options.mode ?? (provider === "playwright" ? "strict" : "adaptive");
     if (!((provider === "playwright" && mode === "strict") || (provider === "hermes" && mode === "adaptive"))) throw new CliError("execution provider and mode combination is unsupported");
+    const compiler = request.options.compiler ?? (provider === "hermes" ? "abstract" : "ast");
+    if (!["abstract", "ast"].includes(compiler) || (compiler === "abstract" && (provider !== "hermes" || mode !== "adaptive"))) throw new CliError("execution compiler is unsupported");
     const storageStatePath = request.options["storage-state"] === undefined
       ? defaultStorageStatePath(cwd)
       : resolvePrivateRegularInput(request.options["storage-state"], { root: cwd, label: "storage state" });
@@ -330,6 +369,8 @@ function normalizeRequest(request, cwd, pageSource) {
       ...(specSource.pageUrl ? { pageUrl: specSource.pageUrl } : {}),
       provider,
       mode,
+      compiler,
+      ...(request.options.page === undefined ? {} : { page: request.options.page }),
       ...(storageStatePath === undefined ? {} : { storageStatePath }),
       ...(authBootstrapPath === undefined ? {} : { authBootstrapPath }),
       ...(request.options["allowed-origin"] === undefined ? {} : { allowedOrigins: parseAllowedOrigins(request.options["allowed-origin"]) }),
@@ -339,12 +380,16 @@ function normalizeRequest(request, cwd, pageSource) {
   }
 
   assertPrivateDirectory(runDirectory);
+  if (request.command === "review") {
+    const judgmentPath = request.options.judgment === undefined ? undefined : resolveExistingPrivateQaInput(request.options.judgment, { root: runDirectory, cwd });
+    return Object.freeze({ command: request.command, cwd, runDirectory, ...(judgmentPath === undefined ? {} : { judgmentPath }) });
+  }
   if (!REPORT_COMMANDS.has(request.command) && !PUBLICATION_COMMANDS.has(request.command)) {
     const failOn = request.options["fail-on"] === undefined ? undefined : safeFailOn(request.options["fail-on"]);
     return Object.freeze({ command: request.command, cwd, runDirectory, ...(failOn === undefined ? {} : { failOn }) });
   }
   const repositoryRoot = resolveRepositoryRoot(request.options["repository-root"], cwd);
-  const judgmentPath = request.options.judgment === undefined ? undefined : resolveRegularInput(request.options.judgment, { root: runDirectory, label: "judgment" });
+  const judgmentPath = request.options.judgment === undefined ? undefined : resolveExistingPrivateQaInput(request.options.judgment, { root: runDirectory, cwd });
   return Object.freeze({
     command: request.command,
     cwd,
@@ -355,6 +400,13 @@ function normalizeRequest(request, cwd, pageSource) {
     revision: safeRevision(request.options.revision ?? "HEAD"),
     ...(judgmentPath === undefined ? {} : { judgmentPath }),
   });
+}
+
+function resolveExistingPrivateQaInput(value, { root, cwd }) {
+  const path = resolvePrivateQaPath(relative(cwd, resolve(root, value)), { cwd });
+  const stat = lstatIfExists(path);
+  if (!stat || (!stat.isFile() && !stat.isDirectory())) throw new CliError("judgment input is invalid");
+  return path;
 }
 
 function parseAllowedOrigins(value) {

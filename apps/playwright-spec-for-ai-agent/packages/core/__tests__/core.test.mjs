@@ -59,6 +59,20 @@ describe("core execution planner", () => {
     ]);
   });
 
+  it("scales the default run timeout for multi-scenario page plans", () => {
+    const input = qaIr();
+    const scenario = input.suites[0].scenarios[0];
+    input.suites[0].scenarios = Array.from({ length: 10 }, (_, index) => ({
+      ...structuredClone(scenario),
+      id: `scenario-${index}`,
+    }));
+
+    expect(createExecutionPlan({ qaIr: input, providerCapabilities: providerCapabilities() }).timeoutPolicy)
+      .toEqual({ perNodeMs: 30000, runMs: 300000 });
+    expect(createExecutionPlan({ qaIr: input, providerCapabilities: providerCapabilities(), timeoutPolicy: { perNodeMs: 100, runMs: 500 } }).timeoutPolicy)
+      .toEqual({ perNodeMs: 100, runMs: 500 });
+  });
+
   it("binds submitted plans to the exact QA IR and provider capabilities", () => {
     const source = qaIr();
     const capabilities = providerCapabilities();
