@@ -9,7 +9,7 @@
 [![Playwright](https://img.shields.io/badge/Playwright-%3E%3D1.48-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)](https://playwright.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-[Quick start](#quick-start) · [Architecture](ARCHITECTURE.md) · [Providers & modes](#providers-and-modes) · [Config](#project-config-hermes-qaconfigmjs) · [Options](#execute-options) · [Annotations](#annotations) · [Commands](#commands) · [Env vars](#environment-variables) · [Code-backed Issues](#publish-a-code-backed-github-issue) · [Safety](#safety-and-limits)
+[Quick start](#quick-start) · [Architecture](ARCHITECTURE.md) · [Overfitting audit](docs/qa-native-overfitting-audit.md) · [Providers & modes](#providers-and-modes) · [Config](#project-config-hermes-qaconfigmjs) · [Options](#execute-options) · [Annotations](#annotations) · [Commands](#commands) · [Env vars](#environment-variables) · [Code-backed Issues](#publish-a-code-backed-github-issue) · [Safety](#safety-and-limits)
 
 </div>
 
@@ -122,9 +122,10 @@ no inference model. See [Providers and modes](#providers-and-modes).
 - **`--page=<name>`** — resolve the page's _designated_ specs from the project
   config (`hermes-qa.config.mjs` / `playwright-spec-for-ai-agent.config.mjs`)
   instead of naming a file. From the page's `__tests__` directory, `--page`
-  selects the specs whose `@qa-scenario` matches the page's
-  `expectedSubscriptionStatus` (case-insensitive; page config, then the
-  `staging` default), plus any marked `// @qa-always-run: true`, minus any
+  selects the specs whose `@qa-scenario` matches the page's `expectedScenario`
+  (case-insensitive; page config, then the `staging` default;
+  `expectedSubscriptionStatus` remains a legacy alias), plus any marked
+  `// @qa-always-run: true`, minus any
   `// @qa-live-skip: true`. When no status is configured, the whole directory is
   designated. The selected specs are compiled and merged into one run,
   `--base-url` defaults to `batch.defaultBaseUrl`, navigation uses the config's
@@ -204,13 +205,13 @@ export default {
     dashboard: "/ko/dashboard", // navigation path per page (overrides @qa-page)
   },
   staging: {
-    expectedSubscriptionStatus: "INACTIVE", // default account state; --page selects @qa-scenario == this
+    expectedScenario: "INACTIVE", // --page selects @qa-scenario == this
   },
   pages: {
     dashboard: {
       specDir: "src/page/dashboard/__tests__", // per-page override of paths.specDir
       targetPath: "/ko/dashboard", // per-page override of targetPaths
-      expectedSubscriptionStatus: "INACTIVE", // per-page override of staging default
+      expectedScenario: "INACTIVE", // per-page override of staging default
     },
   },
 };
@@ -235,10 +236,10 @@ qa-native execute (--spec=<file> | --page=<name>) [--base-url=<url>] --run-dir=.
 | `--base-url=<url>`        | Staging origin. Required with `--spec`; defaults to `batch.defaultBaseUrl` with `--page`.      |
 | `--run-dir=.qa/runs/<id>` | Where evidence is sealed (must not already exist). Required.                                   |
 | `--provider` / `--mode`   | `hermes`/`adaptive` (default) or `playwright`/`strict` — see above.                            |
-| `--compiler`              | `abstract` for AST metadata plus AI semantics (Hermes default); `ast` for compatibility.     |
+| `--compiler`              | `abstract` for AST metadata plus AI semantics (Hermes default); `ast` for compatibility.       |
 | `--storage-state=<file>`  | Signed-in session; auto-discovers `.private/storage-state.json`.                               |
 | `--auth-bootstrap=<file>` | SSO/session-refresh page with origin/endpoint allowlists.                                      |
-| `--allowed-origin=<url>`  | Extra origin(s) the page may read from; comma-separated, up to 7.                              |
+| `--allowed-origin=<url>`  | Extra exact origin(s) leased to the page; comma-separated, up to 7.                            |
 | `--allow-partial`         | Skip statically un-runnable scenarios instead of failing the whole file (implied by `--page`). |
 | `--budget-actions=<n>`    | Adaptive: max actions (default 32).                                                            |
 | `--budget-turns=<n>`      | Adaptive: max agent turns (default 32).                                                        |
@@ -260,8 +261,8 @@ workspace-local, owner-only regular file. `.private/` is gitignored, so the
 session is never committed.
 
 `--auth-bootstrap=.private/auth-bootstrap.json` can additionally open an
-SSO/session-refresh page with explicit origin and endpoint allowlists;
-bootstrap-only mutations are blocked again before the QA spec runs. See the
+SSO/session-refresh page with explicit origin and endpoint allowlists; after
+bootstrap, the active scenario policy and leased origins take over. See the
 [QA Native guide](docs/qa-native.md#authenticated-pages) for its JSON format and
 secret-handling constraints.
 
@@ -306,7 +307,7 @@ Supported live policies:
 | Policy                                       | Meaning                                                                                                           |
 | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `readonly`                                   | Inspect without interaction.                                                                                      |
-| `safe-interaction`                           | Allow bounded, non-destructive interaction (same-origin reads after a click are allowed and logged).              |
+| `safe-interaction`                           | Allow bounded interaction; HTTP methods and WebSockets are allowed only on exact leased origins.                  |
 | `safe-interaction-no-confirm`                | Interaction allowed, but verifying the outcome on live would be dangerous — verdicts come from semantic judgment. |
 | `mock-judgment`                              | The spec relies on Playwright mocks; the judge rules on live-DOM evidence semantically instead.                   |
 | `subscription-mutation`, `auth-mock`, `skip` | Statically blocked on live; skipped under `--allow-partial`, otherwise the file fails closed.                     |
@@ -464,7 +465,7 @@ Evidence is never deleted. A run that fails validation is quarantined to
 
 - The CLI reads specs as source material; it does not replace deterministic Playwright CI or API contract tests.
 - Live judgment is non-deterministic; unclear states resolve to `MANUAL_REVIEW`.
-- Adaptive browser runs allow only `GET`/`HEAD` reads to origins explicitly listed in the capability lease; mutations, WebSockets, unleased origins, and destructive confirmations are blocked. File uploads run only from a declared `@qa-fixture` resolved inside the project root — the file is always author-designated, never chosen by the agent, in either mode.
+- Browser network access follows each scenario policy: read-only scenarios allow only `GET`/`HEAD`; click-enabled scenarios allow every HTTP method and WebSocket only on exact leased origins. Unleased origins and destructive confirmations remain blocked. File uploads run only from a declared `@qa-fixture` resolved inside the project root — the file is always author-designated, never chosen by the agent, in either mode.
 - Credentials belong in environment variables, a secret manager, or a private `storageState` file — never committed config or CLI flags.
 - Remediation can create private worktrees and Draft PRs only after strict verification; it has no merge or auto-merge path.
 - Results are first-pass live QA evidence, not a replacement for a QA engineer.

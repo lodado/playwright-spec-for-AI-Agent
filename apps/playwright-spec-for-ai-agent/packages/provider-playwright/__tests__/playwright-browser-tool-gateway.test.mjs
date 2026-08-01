@@ -66,7 +66,9 @@ function fakeBrowser({
   protectedElement = false,
   requestAfterClick,
   webSocketAfterClick = false,
+  webSocketUrl = "wss://example.test/events",
   routeNavigationRequests = false,
+  navigationRequestMethod = "GET",
   historyMissing = false,
 } = {}) {
   const calls = [];
@@ -108,7 +110,11 @@ function fakeBrowser({
           continue: vi.fn(async () => calls.push(["continue"])),
         });
       }
-      if (webSocketAfterClick) webSocketHandler({ close: () => calls.push(["close-websocket"]) });
+      if (webSocketAfterClick) webSocketHandler({
+        url: () => webSocketUrl,
+        connectToServer: () => calls.push(["connect-websocket"]),
+        close: () => calls.push(["close-websocket"]),
+      });
     }),
     hover: vi.fn(async () => calls.push(["hover", "settings"])),
     waitForElementState: vi.fn(async (state) => calls.push(["wait", state])),
@@ -127,7 +133,7 @@ function fakeBrowser({
       if (routeNavigationRequests) {
         await routeHandler({
           request: () => ({
-            method: () => "GET",
+            method: () => navigationRequestMethod,
             url: () => target,
             isNavigationRequest: () => true,
             resourceType: () => "document",
@@ -193,6 +199,8 @@ function fakeBrowser({
     candidate,
     page,
     htmlLocator,
+    get routeHandler() { return routeHandler; },
+    get webSocketHandler() { return webSocketHandler; },
   };
 }
 
@@ -261,10 +269,11 @@ async function artifactText(gateway, bundle) {
 
 describe("Playwright browser tool gateway", () => {
   it("captures one bounded read-only applicability observation", async () => {
-    const fixture = fakeBrowser();
+    const fixture = fakeBrowser({ routeNavigationRequests: true, navigationRequestMethod: "POST" });
     const observation = await observeAdaptiveApplicabilityPage({ input: executionAgentInput(), browserType: fixture.browserType });
 
     expect(observation).toMatchObject({ url: "https://example.test/dashboard", aria: expect.stringContaining("Settings"), elements: [expect.objectContaining({ accessibleName: "Settings" })] });
+    expect(fixture.calls).toContainEqual(["abort", "blockedbyclient"]);
     expect(fixture.calls).not.toContainEqual(["click", "settings"]);
     expect(fixture.browser.close).toHaveBeenCalledOnce();
   });
@@ -960,9 +969,11 @@ describe("Playwright browser tool gateway", () => {
     }
   });
 
-  it("blocks a mutation triggered by an autonomous browser click", async () => {
+  it("allows a mutation triggered by an autonomous click on a leased origin", async () => {
+    const input = executionAgentInput();
+    input.capabilityLease.allowedOrigins.push("https://api.example.test");
     const fixture = fakeBrowser({ requestAfterClick: "POST" });
-    const gateway = await openGateway({ browserType: fixture.browserType });
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
     const observed = await gateway.execute({
       proposal: proposal(gateway.agentInput(), "observe_dom"),
       tokensUsed: 1,
@@ -975,11 +986,10 @@ describe("Playwright browser tool gateway", () => {
         elementId: element.elementId,
       }),
       tokensUsed: 1,
-    })).rejects.toMatchObject({ code: "POLICY_VIOLATION" });
+    })).resolves.toMatchObject({ result: { accepted: true } });
 
-    expect(fixture.calls).toContainEqual(["abort", "blockedbyclient"]);
-    expect(fixture.context.routeWebSocket).toHaveBeenCalledTimes(1);
-    expect(fixture.screenshots).toEqual([]);
+    expect(fixture.calls).toContainEqual(["continue"]);
+    expect(fixture.calls).not.toContainEqual(["abort", "blockedbyclient"]);
   });
 
   it("blocks an unleased sibling-origin read after an autonomous browser click", async () => {
@@ -993,7 +1003,7 @@ describe("Playwright browser tool gateway", () => {
     expect(fixture.calls).not.toContainEqual(["continue"]);
   });
 
-  it("blocks a WebSocket triggered by an autonomous browser click", async () => {
+  it("allows a WebSocket triggered by an autonomous click on a leased origin", async () => {
     const fixture = fakeBrowser({ webSocketAfterClick: true });
     const gateway = await openGateway({ browserType: fixture.browserType });
     const observed = await gateway.execute({ proposal: proposal(gateway.agentInput(), "observe_dom"), tokensUsed: 1 });
@@ -1005,9 +1015,30 @@ describe("Playwright browser tool gateway", () => {
         elementId: element.elementId,
       }),
       tokensUsed: 1,
-    })).rejects.toMatchObject({ code: "POLICY_VIOLATION" });
+    })).resolves.toMatchObject({ result: { accepted: true } });
 
-    expect(fixture.calls).toContainEqual(["close-websocket"]);
+    expect(fixture.calls).toContainEqual(["connect-websocket"]);
+    expect(fixture.calls).not.toContainEqual(["close-websocket"]);
+  });
+
+  it("keeps mutations and WebSockets blocked for a read-only lease", async () => {
+    const input = executionAgentInput();
+    input.milestones = [{ id: "observe-settings", class: "REQUIRED_SEMANTIC_MILESTONE", status: "PENDING", description: "Observe settings." }];
+    input.currentMilestoneId = "observe-settings";
+    input.capabilityLease.actions = ["observe_dom"];
+    const fixture = fakeBrowser();
+    const gateway = await openGateway({ input, browserType: fixture.browserType });
+    const mutation = { request: () => ({ method: () => "POST", url: () => "https://example.test/api/update" }), abort: vi.fn(), continue: vi.fn() };
+    const socket = { url: () => "wss://example.test/events", connectToServer: vi.fn(() => ({})), close: vi.fn() };
+
+    await fixture.routeHandler(mutation);
+    fixture.webSocketHandler(socket);
+
+    expect(mutation.abort).toHaveBeenCalledWith("blockedbyclient");
+    expect(mutation.continue).not.toHaveBeenCalled();
+    expect(socket.close).toHaveBeenCalledOnce();
+    expect(socket.connectToServer).not.toHaveBeenCalled();
+    await gateway.close();
   });
 
   it("withholds protected element text and actions from observations", async () => {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.10.3
+
+### Patch Changes
+
+- Remove consumer-specific assumptions and make browser network side effects follow each scenario's code-owned capability lease.
+
 ## 2.10.2
 
 ### Patch Changes

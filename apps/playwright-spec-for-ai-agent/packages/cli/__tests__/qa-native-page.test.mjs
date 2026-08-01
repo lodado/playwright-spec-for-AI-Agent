@@ -80,7 +80,7 @@ describe("qa-native execute --page selection", () => {
       stderr,
     });
     expect(exitCode).toBe(1);
-    expect(stderr.mock.calls[0][0]).toContain('no spec matches expectedSubscriptionStatus "NONEXISTENT"');
+    expect(stderr.mock.calls[0][0]).toContain('no spec matches expectedScenario "NONEXISTENT"');
     expect(stderr.mock.calls[0][0]).toContain("ACTIVE");
   });
 

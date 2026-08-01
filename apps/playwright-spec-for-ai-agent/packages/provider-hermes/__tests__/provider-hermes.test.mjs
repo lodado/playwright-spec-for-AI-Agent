@@ -126,7 +126,7 @@ describe("Playwright full-spec abstraction", () => {
   });
 
   it("bounds full-source prompts independently from the smaller slice prompt", () => {
-    expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("hermes-playwright-full-spec-abstraction/0.21");
+    expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("hermes-playwright-full-spec-abstraction/0.22");
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("explicit Given / When / Then behavioral contract");
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("not a reconstruction of fixtures or hidden setup");
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("must not presuppose the presence");
@@ -136,16 +136,17 @@ describe("Playwright full-spec abstraction", () => {
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("test title and nearby authored comments");
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("Do not classify a test MOCK_ONLY merely");
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("exact stubbed product values");
-    expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("initially visible summary claim for counts 2051/567/6");
+    expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("materially depends on exact counts");
+    expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).not.toContain("FREE/BASIC/INACTIVE");
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("read-only preflight cannot observe it yet");
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest })).toContain("Do not copy shared setup into a test");
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest, previousCandidate: candidate, reviewerIssues: ["fix"] })).toContain("minimum, not an exhaustive list");
     expect(buildHermesFullSpecAbstractionQuery({ sourcePath: "x.spec.ts", source, manifest, previousCandidate: candidate, reviewerIssues: ["fix"] })).toContain("preserve all unchallenged fields");
-    expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("hermes-playwright-full-spec-review/0.20");
+    expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("hermes-playwright-full-spec-review/0.21");
     expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("Given / When / Then boundary");
     expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("Reject fixture reconstruction in Given");
     expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("converts a real regression into NOT_APPLICABLE");
-    expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("Do not request hidden plan");
+    expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("Do not request hidden account");
     expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("assertions alone");
     expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("classification independently from static execution policy");
     expect(buildHermesFullSpecReviewQuery({ sourcePath: "x.spec.ts", source, manifest, candidate })).toContain("policy metadata is the only rationale");

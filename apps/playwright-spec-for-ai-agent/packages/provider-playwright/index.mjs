@@ -1,4 +1,5 @@
 import {
+  ACTION_SPECS,
   ADAPTIVE_ACTIONS,
   ELEMENT_BOUND_ACTIONS,
   EXECUTION_ACTION_PROPOSAL_VERSION,
@@ -23,7 +24,7 @@ import { resolve as resolvePath, sep as pathSep } from "node:path";
 import { createInMemoryEvidenceStore, redactSensitiveText } from "../evidence/index.mjs";
 
 const PROVIDER_ID = "playwright-readonly";
-const PROVIDER_VERSION = "0.1.0";
+const PROVIDER_VERSION = "0.2.0";
 const TEXT_LIMIT = 1024 * 1024;
 const DOM_LIMIT = 4 * 1024 * 1024;
 const ACTION_LOG_LIMIT = 16 * 1024;
@@ -42,7 +43,7 @@ const MAX_RUN_TIMEOUT_MS = 300_000;
 const MAX_VIEWPORT_DIMENSION = 4096;
 const MAX_VIEWPORT_AREA = 4096 * 4096;
 const GATEWAY_PROVIDER_ID = "playwright-browser-tool-gateway";
-const GATEWAY_PROVIDER_VERSION = "0.1.0";
+const GATEWAY_PROVIDER_VERSION = "0.2.0";
 const GATEWAY_DOM_LIMIT = 1024 * 1024;
 const GATEWAY_ARIA_LIMIT = 512 * 1024;
 const GATEWAY_MAX_ELEMENTS = 128;
@@ -113,7 +114,10 @@ export function playwrightBrowserToolCapabilities() {
 }
 
 export async function observeAdaptiveApplicabilityPage({ input, browserName = "chromium", browserType, storageStatePath, authBootstrap, projectRoot } = {}) {
-  const gateway = await openPlaywrightBrowserToolGateway({ input, browserName, browserType, storageStatePath, authBootstrap, projectRoot });
+  const readonlyInput = structuredClone(input);
+  readonlyInput.capabilityLease.actions = readonlyInput.capabilityLease.actions.filter((action) => ACTION_SPECS[action]?.requiresPolicy !== "click");
+  readonlyInput.capabilityLease.leaseId = `lease-applicability-${canonicalHash(readonlyInput.capabilityLease).slice("sha256:".length, "sha256:".length + 16)}`;
+  const gateway = await openPlaywrightBrowserToolGateway({ input: readonlyInput, browserName, browserType, storageStatePath, authBootstrap, projectRoot });
   try {
     const current = gateway.agentInput();
     const proposal = {
@@ -180,6 +184,7 @@ export async function openPlaywrightBrowserToolGateway({
   let executing = false;
   let interactionStarted = false;
   let interactionPolicyViolation = false;
+  const networkSideEffectsAllowed = leaseAllowsNetworkSideEffects(initialInput.capabilityLease);
   const pendingPolicyDecisions = new Set();
   let bootstrapActive = bootstrap !== undefined;
   try {
@@ -196,7 +201,7 @@ export async function openPlaywrightBrowserToolGateway({
           return;
         }
         const url = new URL(request.url());
-        if (isReadOnlyAllowedOriginUrl(url, request.method(), initialInput.capabilityLease.allowedOrigins)) {
+        if (isLeasedHttpRequest(url, request.method(), initialInput.capabilityLease.allowedOrigins, networkSideEffectsAllowed)) {
           await route.continue();
           return;
         }
@@ -210,6 +215,10 @@ export async function openPlaywrightBrowserToolGateway({
       return decision.finally(() => pendingPolicyDecisions.delete(decision));
     }));
     await runGatewayBrowserOperation({ deadline, clock }, () => context.routeWebSocket("**/*", (webSocket) => {
+      if (networkSideEffectsAllowed && isLeasedWebSocket(webSocket, initialInput.capabilityLease.allowedOrigins)) {
+        webSocket.connectToServer();
+        return;
+      }
       if (interactionStarted) interactionPolicyViolation = true;
       webSocket.close();
     }));
@@ -458,11 +467,32 @@ function pointerInterceptionFailure(error) {
   return /intercepts pointer events/i.test(String(error?.message ?? ""));
 }
 
-function isReadOnlyAllowedOriginUrl(requestUrl, method, allowedOrigins) {
-  return ["GET", "HEAD"].includes(method)
+function policyAllowsNetworkSideEffects(policy) {
+  return ["SAFE_ONLY", "ALL"].includes(policy?.click);
+}
+
+function leaseAllowsNetworkSideEffects(lease) {
+  return lease.actions.some((action) => ACTION_SPECS[action]?.requiresPolicy === "click");
+}
+
+function isLeasedHttpRequest(requestUrl, method, allowedOrigins, allowSideEffects) {
+  return (allowSideEffects || ["GET", "HEAD"].includes(method))
     && ["http:", "https:"].includes(requestUrl.protocol)
     && allowedOrigins.includes(requestUrl.origin)
     && !requestUrl.username && !requestUrl.password;
+}
+
+function isLeasedWebSocket(webSocket, allowedOrigins) {
+  if (typeof webSocket?.url !== "function" || typeof webSocket?.connectToServer !== "function") return false;
+  let url;
+  try {
+    url = new URL(webSocket.url());
+  } catch {
+    return false;
+  }
+  if (!["ws:", "wss:"].includes(url.protocol) || url.username || url.password) return false;
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  return allowedOrigins.includes(url.origin);
 }
 
 async function observedAuthoredLocator(page, input, proposal, handles, timing) {
@@ -915,6 +945,7 @@ export async function executeWithPlaywright({
   storageStatePath,
   authBootstrap,
   projectRoot,
+  allowedOrigins = [],
   now = () => new Date().toISOString(),
 } = {}) {
   let runtime;
@@ -927,7 +958,7 @@ export async function executeWithPlaywright({
     validateExecutionPlanBinding({ qaIr, plan, providerCapabilities: capabilities });
     if (plan.nodes.length > MAX_PLAN_NODES || plan.retryPolicy.maxAttempts !== 1) throw new Error("execution plan exceeds readonly provider limits");
     if (plan.timeoutPolicy.perNodeMs > MAX_NODE_TIMEOUT_MS || plan.timeoutPolicy.runMs > MAX_RUN_TIMEOUT_MS) throw new Error("execution timeout exceeds readonly provider limits");
-    runtime = createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, storageStatePath, authBootstrap, projectRoot, now, capabilities, nodeTimeoutMs: plan.timeoutPolicy.perNodeMs });
+    runtime = createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, storageStatePath, authBootstrap, projectRoot, allowedOrigins, now, capabilities, nodeTimeoutMs: plan.timeoutPolicy.perNodeMs });
   } catch {
     return executionResult(runtimeError("CONTRACT_VIOLATION", "Execution provider input is invalid"));
   }
@@ -964,8 +995,9 @@ export async function executeWithPlaywright({
   return executionResult(outcome, runtime);
 }
 
-function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, storageStatePath, authBootstrap, projectRoot, now, capabilities, nodeTimeoutMs }) {
+function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewport, locale, timezoneId, secrets, storageStatePath, authBootstrap, projectRoot, allowedOrigins, now, capabilities, nodeTimeoutMs }) {
   const base = runtimeUrl(baseUrl);
+  const leasedOrigins = runtimeAllowedOrigins(base, allowedOrigins);
   const bootstrap = normalizeAuthBootstrap(authBootstrap, base.href);
   if (typeof runId !== "string" || runId.length === 0) throw new Error("runId must be a non-empty string");
   if (!Array.isArray(secrets)) throw new Error("secrets must be an array");
@@ -995,6 +1027,8 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
   let artifactCount = 0;
   let interactionStarted = false;
   let interactionPolicyViolation = false;
+  let networkSideEffectsAllowed = false;
+  const pendingPolicyDecisions = new Set();
   let bootstrapActive = bootstrap !== undefined;
   let postInteractionRequests = [];
 
@@ -1036,37 +1070,52 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       if (storageStatePath !== undefined) contextOptions.storageState = storageStatePath;
       const context = await browser.newContext(contextOptions);
       if (typeof context.route !== "function" || typeof context.routeWebSocket !== "function") throw new Error("browser context cannot enforce request policy");
-      await context.route("**/*", async (route) => {
-        try {
-          const request = route.request();
-          const requestUrl = new URL(request.url());
-          if (bootstrapActive) {
-            if (bootstrapAllowsRequest(bootstrap, requestUrl, request.method())) await route.continue();
-            else await route.abort("blockedbyclient");
-            return;
-          }
-          if (interactionStarted) {
-            if (isReadOnlySameOriginRequest(requestUrl, request.method())) {
-              if (postInteractionRequests.length < MAX_POST_INTERACTION_REQUESTS) {
+      await context.route("**/*", (route) => {
+        const decision = (async () => {
+          try {
+            const request = route.request();
+            const requestUrl = new URL(request.url());
+            if (bootstrapActive) {
+              if (bootstrapAllowsRequest(bootstrap, requestUrl, request.method())) await route.continue();
+              else await route.abort("blockedbyclient");
+              return;
+            }
+            if (networkSideEffectsAllowed && isLeasedHttpRequest(requestUrl, request.method(), leasedOrigins, true)) {
+              if (interactionStarted && postInteractionRequests.length < MAX_POST_INTERACTION_REQUESTS) {
                 postInteractionRequests.push({ method: request.method(), origin: requestUrl.origin, path: requestUrl.pathname });
               }
               await route.continue();
               return;
             }
-            interactionPolicyViolation = true;
+            if (interactionStarted) {
+              if (isReadOnlySameOriginRequest(requestUrl, request.method())) {
+                if (postInteractionRequests.length < MAX_POST_INTERACTION_REQUESTS) {
+                  postInteractionRequests.push({ method: request.method(), origin: requestUrl.origin, path: requestUrl.pathname });
+                }
+                await route.continue();
+                return;
+              }
+              interactionPolicyViolation = true;
+              await route.abort("blockedbyclient");
+              return;
+            }
+            if (!isReadOnlySameSiteRequest(requestUrl, request.method())) {
+              await route.abort("blockedbyclient");
+              return;
+            }
+            await route.continue();
+          } catch {
             await route.abort("blockedbyclient");
-            return;
           }
-          if (!isReadOnlySameSiteRequest(requestUrl, request.method())) {
-            await route.abort("blockedbyclient");
-            return;
-          }
-          await route.continue();
-        } catch {
-          await route.abort("blockedbyclient");
-        }
+        })();
+        pendingPolicyDecisions.add(decision);
+        return decision.finally(() => pendingPolicyDecisions.delete(decision));
       });
       await context.routeWebSocket("**/*", (webSocket) => {
+        if (networkSideEffectsAllowed && isLeasedWebSocket(webSocket, leasedOrigins)) {
+          webSocket.connectToServer();
+          return;
+        }
         if (interactionStarted) interactionPolicyViolation = true;
         webSocket.close();
       });
@@ -1088,6 +1137,7 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
     const entry = scenarios.get(node.scenarioId);
     const step = entry?.steps.get(node.stepId);
     if (!entry || !step || step.kind !== node.kind) throw providerError("CONTRACT_VIOLATION");
+    networkSideEffectsAllowed = policyAllowsNetworkSideEffects(entry.scenario.policy);
     if (node.kind === "NAVIGATE") {
       const target = navigationUrl(step.target, base);
       const page = await openPage();
@@ -1142,6 +1192,7 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
         if (!locator) throw providerError("CONTRACT_VIOLATION");
         interactionStarted = true;
         await locator.setInputFiles(file, { timeout: timeoutMs });
+        await drainStrictPolicyDecisions(page, pendingPolicyDecisions);
         if (interactionPolicyViolation) throw providerError("POLICY_VIOLATION");
         const afterUrl = evidenceUrl(page, base);
         const content = boundedText(JSON.stringify({ action: "UPLOAD", target: actionLogTarget(step.target), fixture: node.value, beforeUrl, afterUrl, status: "SUCCEEDED", allowedRequests: postInteractionRequests }), ACTION_LOG_LIMIT, "ACTION_LOG");
@@ -1154,6 +1205,7 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
       await assertSafeClickTarget(locator, timeoutMs);
       interactionStarted = true;
       await locator.click({ timeout: timeoutMs });
+      await drainStrictPolicyDecisions(page, pendingPolicyDecisions);
       if (interactionPolicyViolation) throw providerError("POLICY_VIOLATION");
       const afterUrl = evidenceUrl(page, base);
       const content = boundedText(JSON.stringify({ action: "CLICK", target: actionLogTarget(step.target), beforeUrl, afterUrl, status: "SUCCEEDED", allowedRequests: postInteractionRequests }), ACTION_LOG_LIMIT, "ACTION_LOG");
@@ -1163,6 +1215,10 @@ function createRuntime({ qaIr, baseUrl, runId, browserName, browserType, viewpor
     }
     if (node.kind === "CHECKPOINT") {
       const page = await openPage();
+      if (interactionStarted) {
+        await drainStrictPolicyDecisions(page, pendingPolicyDecisions);
+        if (interactionPolicyViolation) throw providerError("POLICY_VIOLATION");
+      }
       const targetUrl = evidenceUrl(page, base);
       const state = observationState(observations, node.scenarioId);
       try {
@@ -1371,6 +1427,16 @@ function boundedText(value, limit, type) {
 function observationState(observations, scenarioId) {
   if (!observations.has(scenarioId)) observations.set(scenarioId, { artifacts: [], facts: [] });
   return observations.get(scenarioId);
+}
+
+async function drainStrictPolicyDecisions(page, pendingPolicyDecisions) {
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+  await Promise.all([...pendingPolicyDecisions]);
+}
+
+function runtimeAllowedOrigins(base, allowedOrigins) {
+  if (!Array.isArray(allowedOrigins) || allowedOrigins.length > 7) throw new Error("allowedOrigins must contain at most seven explicit HTTP(S) origins");
+  return [...new Set([base.origin, ...allowedOrigins.map(bootstrapOrigin)])];
 }
 
 function runtimeUrl(value) {

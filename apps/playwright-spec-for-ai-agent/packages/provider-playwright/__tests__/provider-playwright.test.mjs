@@ -543,21 +543,22 @@ describe("readonly Playwright execution provider", () => {
     expect(fixture.calls.filter(([name]) => name === "close")).toHaveLength(2);
   });
 
-  it("fails a click that attempts a mutating request instead of logging success", async () => {
+  it("allows a mutating request for a click-enabled scenario on a leased origin", async () => {
     const input = clickableQaIr();
     const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
-    const fixture = fakeBrowser({
-      onClick: async ({ routeHandler }) => routeHandler({
-        request: () => ({ method: () => "POST", url: () => "https://example.test/api/update" }),
-        abort: vi.fn(),
-        continue: vi.fn(),
-      }),
-    });
-    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-click-post", browserType: fixture.browserType });
+    const mutation = {
+      request: () => ({ method: () => "POST", url: () => "https://api.example.test/api/update" }),
+      abort: vi.fn(),
+      continue: vi.fn(),
+    };
+    const fixture = fakeBrowser({ onClick: async ({ routeHandler }) => routeHandler(mutation) });
+    const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-click-post", browserType: fixture.browserType, allowedOrigins: ["https://api.example.test"] });
 
-    expect(result.outcome).toMatchObject({ type: "ERROR", code: "POLICY_VIOLATION" });
-    expect(result.bundles).toHaveLength(0);
-    expect(fixture.calls.at(-1)).toEqual(["close"]);
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
+    expect(mutation.continue).toHaveBeenCalledOnce();
+    expect(mutation.abort).not.toHaveBeenCalled();
+    const action = result.bundles[0].artifacts.find((artifact) => artifact.type === "ACTION_LOG");
+    expect(JSON.parse(result.readBlob(action.storageRef).toString()).allowedRequests).toContainEqual({ method: "POST", origin: "https://api.example.test", path: "/api/update" });
   });
 
   it("fails any network request started by a click", async () => {
@@ -576,16 +577,16 @@ describe("readonly Playwright execution provider", () => {
     expect(result.bundles).toHaveLength(0);
   });
 
-  it("fails a WebSocket started by a click", async () => {
+  it("allows a WebSocket for a click-enabled scenario on a leased origin", async () => {
     const input = clickableQaIr();
     const plan = createExecutionPlan({ qaIr: input, providerCapabilities: playwrightExecutionCapabilities() });
-    const socket = { close: vi.fn() };
+    const socket = { url: () => "wss://example.test/events", connectToServer: vi.fn(() => ({})), close: vi.fn() };
     const fixture = fakeBrowser({ onClick: ({ webSocketHandler }) => webSocketHandler(socket) });
     const result = await executeWithPlaywright({ qaIr: input, plan, baseUrl: "https://example.test", runId: "run-click-websocket", browserType: fixture.browserType });
 
-    expect(socket.close).toHaveBeenCalledOnce();
-    expect(result.outcome).toMatchObject({ type: "ERROR", code: "POLICY_VIOLATION" });
-    expect(result.bundles).toHaveLength(0);
+    expect(socket.connectToServer).toHaveBeenCalledOnce();
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(result.outcome).toMatchObject({ type: "COMPLETED" });
   });
 
   it("withholds already sealed evidence when a delayed click request is detected during cleanup", async () => {
@@ -595,7 +596,7 @@ describe("readonly Playwright execution provider", () => {
       closeDelayMs: 5,
       onClick: ({ routeHandler }) => {
         setTimeout(() => void routeHandler({
-          request: () => ({ method: () => "POST", url: () => "https://example.test/delayed" }),
+          request: () => ({ method: () => "POST", url: () => "https://attacker.test/delayed" }),
           abort: vi.fn(),
           continue: vi.fn(),
         }), 0);

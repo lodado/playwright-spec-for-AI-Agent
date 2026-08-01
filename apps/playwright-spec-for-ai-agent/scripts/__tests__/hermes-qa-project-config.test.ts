@@ -6,6 +6,9 @@ import {
   applyPathTemplate,
   loadProjectConfig,
   resetProjectConfigForTests,
+  resolveExpectedScenarioForPage,
+  resolveExpectedStatusForPage,
+  resolveTargetPathForPage,
 } from "../hermes-qa-project-config.mjs";
 
 afterEach(() => {
@@ -42,5 +45,36 @@ describe("loadProjectConfig", () => {
         maxFiles: 2,
       },
     });
+  });
+
+  it("uses generic scenario selection and derives an unconfigured page target", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hermes-qa-generic-page-"));
+    const configPath = join(root, "playwright-spec-for-ai-agent.config.mjs");
+    writeFileSync(
+      configPath,
+      `export default { staging: { expectedScenario: "ready" } };\n`,
+    );
+
+    await loadProjectConfig([`--config=${configPath}`, `--root=${root}`]);
+
+    expect(resolveExpectedScenarioForPage("billing/settings")).toBe("READY");
+    expect(resolveExpectedStatusForPage("billing/settings")).toBe("READY");
+    expect(resolveTargetPathForPage("billing/settings")).toBe(
+      "/billing/settings",
+    );
+  });
+
+  it("keeps the subscription-specific selector as a legacy alias", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hermes-qa-legacy-status-"));
+    const configPath = join(root, "hermes-qa.config.mjs");
+    writeFileSync(
+      configPath,
+      `export default { staging: { expectedSubscriptionStatus: "inactive" } };\n`,
+    );
+
+    await loadProjectConfig([`--config=${configPath}`, `--root=${root}`]);
+
+    expect(resolveExpectedScenarioForPage("catalog")).toBe("INACTIVE");
+    expect(resolveTargetPathForPage("catalog")).toBe("/catalog");
   });
 });

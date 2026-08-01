@@ -6,6 +6,7 @@ import {
   adaptExpectationForLive,
   literalExpectedForLive,
   liveRegexFromLiteral,
+  liveTextLocatorForLive,
 } from "../expectation-abstractor.mjs";
 
 describe("literalExpectedForLive", () => {
@@ -29,6 +30,17 @@ describe("literalExpectedForLive", () => {
     expect(literalExpectedForLive("Subscription Info")).toEqual({
       kind: "literal",
       value: "Subscription Info",
+    });
+  });
+
+  it("does not invent product semantics for unresolved templates or labels", () => {
+    expect(literalExpectedForLive("Balance ${remaining}")).toEqual({
+      kind: "literal",
+      value: "Balance ${remaining}",
+    });
+    expect(liveTextLocatorForLive("user is on enterprise plan")).toEqual({
+      kind: "text",
+      value: "user is on enterprise plan",
     });
   });
 
@@ -75,7 +87,7 @@ describe("adaptExpectationForLive", () => {
     });
   });
 
-  it("upgrades digit-only regex when title mentions score", () => {
+  it("does not infer regex meaning from a test title", () => {
     const adapted = adaptExpectationForLive(
       {
         type: "containText",
@@ -86,9 +98,9 @@ describe("adaptExpectationForLive", () => {
       "ACTIVE",
     );
 
-    expect(adapted.expected).toMatchObject({
-      kind: "semantic",
-      constraints: [{ type: "numeric", role: "score" }],
+    expect(adapted.expected).toEqual({
+      kind: "regex",
+      pattern: "[\\d,]+",
     });
   });
 });
@@ -128,7 +140,7 @@ describe("abstractSpec", () => {
 });
 
 describe("abstractExpectation", () => {
-  it("applies second-pass semantic upgrade on regex mocks", () => {
+  it("does not infer product meaning from a title or locator", () => {
     const result = abstractExpectation(
       {
         type: "containText",
@@ -143,9 +155,9 @@ describe("abstractExpectation", () => {
       },
     );
 
-    expect(result.expected).toMatchObject({
-      kind: "semantic",
-      constraints: [{ type: "numeric", role: "count" }],
+    expect(result.expected).toEqual({
+      kind: "regex",
+      pattern: "[\\d,]+",
     });
   });
 });

@@ -186,7 +186,7 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
         if (runnableIds.size < scenarios.length) qaIr = retainScenarios(qaIr, runnableIds);
       }
       executionPlan = plan({ qaIr, providerCapabilities: capabilities });
-      execution = await execute({ qaIr, plan: executionPlan, baseUrl, runId: basename(runDirectory), storageStatePath, authBootstrap, projectRoot });
+      execution = await execute({ qaIr, plan: executionPlan, baseUrl, runId: basename(runDirectory), storageStatePath, authBootstrap, projectRoot, allowedOrigins });
       runtimeOutcome = validateContract("RuntimeOutcome", execution.outcome);
     } else {
       throw new Error("execution provider and mode combination is unsupported");

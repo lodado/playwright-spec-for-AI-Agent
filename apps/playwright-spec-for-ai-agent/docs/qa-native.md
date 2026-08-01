@@ -33,7 +33,7 @@ After re-running `judge`, choose the completed set explicitly with
 `--judgment=judgments/<set-dir>` on both `review` and `report`; a single result
 JSON remains accepted for commands that intentionally target one judgment.
 
-`execute` first performs one read-only applicability observation for approved abstract/adaptive specs. High-confidence conflicting scenarios are recorded as `NOT_APPLICABLE`; ambiguous or failed selection falls back to legacy execution. It then writes an authenticated evidence archive. `judge` runs deterministic checks first and sends only unresolved semantic expectations to Hermes in text-only mode. An entirely inapplicable executed scenario is `SKIP`, not `MANUAL_REVIEW`. `review` uses a fresh text-only invocation to reject judgments that are not grounded in their cited sealed evidence; AI-native reports require every review to be approved. Hermes adaptive runs allow only page-initiated `GET`/`HEAD` requests to origins explicitly listed in the capability lease, close WebSockets, and block mutations. Strict runs allow page-initiated read-only (GET/HEAD) requests within the target's registrable domain — sibling API origins like `api.example.com` work — and block every mutation and foreign-site request. Direct browser navigation remains limited to the configured target origin.
+`execute` first performs one read-only applicability observation for approved abstract/adaptive specs. High-confidence conflicting scenarios are recorded as `NOT_APPLICABLE`; ambiguous or failed selection falls back to legacy execution. It then writes an authenticated evidence archive. `judge` runs deterministic checks first and sends only unresolved semantic expectations to Hermes in text-only mode. An entirely inapplicable executed scenario is `SKIP`, not `MANUAL_REVIEW`. `review` uses a fresh text-only invocation to reject judgments that are not grounded in their cited sealed evidence; AI-native reports require every review to be approved. Browser network access follows the compiled scenario policy: read-only scenarios allow `GET`/`HEAD` only, while click-enabled scenarios allow every HTTP method and WebSocket on exact leased origins. Strict pre-interaction reads retain same-site compatibility; `--allowed-origin` designates additional exact origins for side effects. Direct navigation and all unleased traffic remain blocked.
 
 ## AI-first full-spec abstraction
 
@@ -93,7 +93,7 @@ The spec annotation is the only source of policy truth. Each test carries its ow
 | Annotation                                   | Compiled policy                   | Adaptive meaning                                                                                      |
 | -------------------------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `readonly`                                   | `executable-readonly`             | DOM-only observation; no clicks or typing.                                                            |
-| `safe-interaction`                           | `executable-interaction`          | Safe clicks and non-secret typing allowed.                                                            |
+| `safe-interaction`                           | `executable-interaction`          | Bounded interaction plus HTTP methods/WebSockets on exact leased origins.                             |
 | `safe-interaction-no-confirm`                | `judgment-interaction-no-confirm` | Interaction allowed, but verdicts come from semantic judgment (verifying on live would be dangerous). |
 | `mock-judgment`                              | `judgment-mock-api`               | Playwright mocks are skipped; the judge rules on live-DOM evidence semantically.                      |
 | `subscription-mutation`, `auth-mock`, `skip` | `blocked-*`                       | Statically blocked; skipped under `--allow-partial`, otherwise the file fails closed.                 |
@@ -158,7 +158,7 @@ For an automatic SSO or session-refresh page, add an opt-in bootstrap file inste
 }
 ```
 
-Pass it with `--auth-bootstrap=.private/auth-bootstrap.json`. During bootstrap, only `GET`/`HEAD` requests to the listed origins and the exact non-GET endpoints above are allowed. Once its page finishes loading, page-initiated API traffic is unrestricted. Do not put credentials, cookies, tokens, or query strings in this file.
+Pass it with `--auth-bootstrap=.private/auth-bootstrap.json`. During bootstrap, only `GET`/`HEAD` requests to the listed origins and the exact non-GET endpoints above are allowed. Once its page finishes loading, the active scenario policy and leased origins take over. Do not put credentials, cookies, tokens, or query strings in this file.
 
 ## Create a repository-aware report
 

@@ -260,10 +260,11 @@ completes an exact authored milestone. Exact completion requires a fresh
 authored locator used by the successful browser action and a corresponding
 `satisfiedMilestoneIds` proof in sealed evidence.
 
-Network policy is code-owned. Adaptive mode permits only `GET`/`HEAD` to exact
-leased origins, closes WebSockets, blocks mutations, and drains pending policy
-decisions before sealing success. File uploads use only an author-designated
-`@qa-fixture` inside the project root.
+Network policy is code-owned and scenario-scoped. Read-only policies permit
+only `GET`/`HEAD`; click-enabled policies permit every HTTP method and
+WebSocket only on exact leased origins. Unleased origins remain blocked, and
+pending policy decisions drain before success is sealed. File uploads use only
+an author-designated `@qa-fixture` inside the project root.
 
 ```mermaid
 sequenceDiagram
@@ -397,6 +398,26 @@ those syntax blocks with `@qa-scenario`, `@qa-page`, `@qa-live-policy`,
 - Shared or inherited annotations are resolved deterministically.
 - The parser never contacts Hermes and never grants runtime browser access.
 
+`dashboard-spec-parser.mjs` is a historical filename retained for import
+compatibility. The active parser path requires explicit `@qa-live-policy`; its
+legacy exported subscription/mock inference helpers are not used to grant
+current runtime policy.
+
+`scripts/expectation-abstractor.mjs` is retained for deterministic AST compiler
+compatibility. It may widen numeric and format-shaped fixture values, but it
+must not recognize product labels, tiers, routes, or account states. The default
+Hermes compiler obtains Given/When/Then semantics from independently reviewed
+AI output instead.
+
+### `scripts/hermes-qa-project-config.mjs`
+
+The project-config module discovers config files, resolves per-page spec
+directories and target URLs, selects config-designated `@qa-scenario` files,
+and merges fixture/account defaults. `expectedScenario` is the generic selector
+key; `expectedSubscriptionStatus` remains a read-compatible legacy alias. When
+a page has no explicit target path, the generic default is `/<page>` rather
+than a built-in list of application page names.
+
 ### `packages/adapter-playwright`
 
 The adapter converts parser output into code-owned compilation artifacts.
@@ -474,8 +495,8 @@ observed elements without accepting arbitrary selectors from the model.
 The provider enforces:
 
 - direct navigation and allowed-origin rules;
-- page-initiated network policy, method filtering, WebSocket blocking, and
-  pending-request drain;
+- page-initiated method and WebSocket permissions derived from scenario
+  policy, exact origin leases, and pending-request drain;
 - safe recovery boundaries and protected element checks;
 - exact authored action proof versus autonomous recovery actions;
 - fixture path containment, no symlink escape, and size bounds;
@@ -668,7 +689,7 @@ judgment set exists, the operator must identify the intended directory with
 | AI extraction     | source text, reviewer feedback, model output | text-only prompts, exact output shapes, manifest test-ID coverage, independent review          |
 | Applicability     | DOM text and model selection                 | short runtime IDs, read-only observation, complete response validation, execute-all fallback   |
 | Adaptive proposal | DOM text and action proposal                 | frozen agent input, capability lease, `ACTION_SPECS`, budgets, origin and element guards       |
-| Browser network   | page requests and redirects                  | explicit origins, GET/HEAD policy, mutation/WebSocket blocking, redirect checks                |
+| Browser network   | page requests, sockets, and redirects        | scenario policy, exact leased origins, pending-decision drain, redirect checks                 |
 | Fixture upload    | author paths and chosen element              | manifest designation, realpath containment, no symlink escape, byte limit                      |
 | Evidence storage  | browser artifacts and metadata               | redaction, size/depth limits, hashes, HMAC, exact archive shape, no-follow writes              |
 | Judgment          | evidence text and model response             | deterministic-first evaluation, bounded evidence refs, contract validation, independent review |

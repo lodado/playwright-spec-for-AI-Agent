@@ -24,14 +24,12 @@ export const DEFAULT_PATH_TEMPLATES = {
   outputDir: "src/page/{page}/__QA__",
 };
 
-export const DEFAULT_TARGET_PATHS = {
-  dashboard: "/dashboard",
-  pricing: "/pricing",
-};
+export const DEFAULT_TARGET_PATHS = {};
 
 export const DEFAULT_STAGING_ACCOUNT = {
   authRequired: true,
   expectedPlan: "",
+  expectedScenario: "",
   expectedSubscriptionStatus: "",
   accountNotes: "",
   fixtures: {},
@@ -58,9 +56,7 @@ function deepMerge(base, override) {
 }
 
 export function applyPathTemplate(template, { page, root }) {
-  return template
-    .replaceAll("{page}", page)
-    .replaceAll("{root}", root);
+  return template.replaceAll("{page}", page).replaceAll("{root}", root);
 }
 
 function parsePathOverrides(argv) {
@@ -209,7 +205,7 @@ export async function loadProjectConfig(argv = process.argv.slice(2)) {
 
   if (configPath) {
     const fileConfig = normalizeFileConfig(
-      await importConfigModule(resolve(configPath))
+      await importConfigModule(resolve(configPath)),
     );
     config = deepMerge(config, fileConfig);
     config.configPath = resolve(configPath);
@@ -277,13 +273,22 @@ export function resolveSpecDirForPage(page) {
   return resolvePathFromConfig(config.paths.specDir, page);
 }
 
-/** The subscription state the config designates for a page (page config, then staging default). */
-export function resolveExpectedStatusForPage(page) {
+/** The @qa-scenario value designated for a page (page config, then staging default). */
+export function resolveExpectedScenarioForPage(page) {
   const config = getProjectConfig();
   const pageConfig = getPageConfig(page);
-  const raw = pageConfig.expectedSubscriptionStatus ?? config.staging?.expectedSubscriptionStatus ?? "";
+  const raw =
+    [
+      pageConfig.expectedScenario,
+      pageConfig.expectedSubscriptionStatus,
+      config.staging?.expectedScenario,
+      config.staging?.expectedSubscriptionStatus,
+    ].find((value) => value !== undefined && String(value).trim() !== "") ?? "";
   return raw ? String(raw).trim().toUpperCase() : "";
 }
+
+/** @deprecated Use resolveExpectedScenarioForPage. */
+export const resolveExpectedStatusForPage = resolveExpectedScenarioForPage;
 
 /**
  * Every `*.spec.ts` under the page's spec directory, sorted for a stable run order. Helper modules
@@ -296,28 +301,38 @@ export function resolveSpecFilesForPage(page, { readdir = readdirSync } = {}) {
   try {
     entries = readdir(specDir);
   } catch {
-    throw new Error(`spec directory for page "${page}" does not exist: ${specDir}`);
+    throw new Error(
+      `spec directory for page "${page}" does not exist: ${specDir}`,
+    );
   }
-  const specFiles = entries.filter((name) => name.endsWith(".spec.ts")).sort().map((name) => join(specDir, name));
-  if (specFiles.length === 0) throw new Error(`no *.spec.ts files found for page "${page}" in ${specDir}`);
+  const specFiles = entries
+    .filter((name) => name.endsWith(".spec.ts"))
+    .sort()
+    .map((name) => join(specDir, name));
+  if (specFiles.length === 0)
+    throw new Error(
+      `no *.spec.ts files found for page "${page}" in ${specDir}`,
+    );
   return specFiles;
 }
 
 /**
  * The specs the config designates for `qa-native execute --page=<name>`: from the page's directory,
- * keep those whose `@qa-scenario` matches `expectedSubscriptionStatus` (case-insensitive) or that
+ * keep those whose `@qa-scenario` matches `expectedScenario` (case-insensitive) or that
  * carry `// @qa-always-run: true`, and drop any `// @qa-live-skip: true`. When no status is
  * configured the whole directory is designated (backward compatible). Scenario-level `@qa-live-skip`
  * / blocked policies are still filtered later by the adapter — this is only the file-level cut.
  */
 export function selectSpecFilesForPage(page, { readFile = readFileSync } = {}) {
   const files = resolveSpecFilesForPage(page);
-  const expected = resolveExpectedStatusForPage(page);
+  const expected = resolveExpectedScenarioForPage(page);
   const kept = [];
   const seen = new Set();
   let skippedDesignated = 0;
   for (const file of files) {
-    const { scenario, liveSkip, alwaysRun } = parseAnnotations(readFile(file, "utf8"));
+    const { scenario, liveSkip, alwaysRun } = parseAnnotations(
+      readFile(file, "utf8"),
+    );
     const scenarioStatus = scenario ? scenario.trim().toUpperCase() : null;
     if (scenarioStatus) seen.add(scenarioStatus);
     const designated = !expected || alwaysRun || scenarioStatus === expected;
@@ -327,15 +342,23 @@ export function selectSpecFilesForPage(page, { readFile = readFileSync } = {}) {
     }
     if (designated) kept.push(file);
   }
-  if (kept.length === 0 && skippedDesignated > 0) throw new Error(`page "${page}": all ${skippedDesignated} config-designated spec(s) are excluded by // @qa-live-skip: true`);
-  if (kept.length === 0) throw new Error(`page "${page}": no spec matches expectedSubscriptionStatus "${expected}" (@qa-scenario found: ${[...seen].join(", ") || "none"}; mark cross-state specs with // @qa-always-run: true)`);
+  if (kept.length === 0 && skippedDesignated > 0)
+    throw new Error(
+      `page "${page}": all ${skippedDesignated} config-designated spec(s) are excluded by // @qa-live-skip: true`,
+    );
+  if (kept.length === 0)
+    throw new Error(
+      `page "${page}": no spec matches expectedScenario "${expected}" (@qa-scenario found: ${[...seen].join(", ") || "none"}; mark cross-state specs with // @qa-always-run: true)`,
+    );
   return kept;
 }
 
 /** Base URL designated by the config (batch default, then staging), or null when neither is set. */
 export function resolveConfigBaseUrl() {
   const config = getProjectConfig();
-  const batchBaseUrl = isPlainObject(config.batch) ? config.batch.defaultBaseUrl : undefined;
+  const batchBaseUrl = isPlainObject(config.batch)
+    ? config.batch.defaultBaseUrl
+    : undefined;
   const stagingBaseUrl = config.staging?.baseUrl;
   const baseUrl = batchBaseUrl ?? stagingBaseUrl;
   return baseUrl ? String(baseUrl) : null;
@@ -394,10 +417,16 @@ export function resolveTargetPathForPage(page) {
   const config = getProjectConfig();
   const pageConfig = getPageConfig(page);
   const targetPath = pageConfig.targetPath ?? config.targetPaths[page];
-  if (!targetPath) {
-    return null;
-  }
-  return targetPath;
+  if (targetPath) return targetPath;
+  const segments = String(page).split("/");
+  if (
+    segments.length === 0 ||
+    segments.some((segment) => !/^[A-Za-z0-9_-]+$/.test(segment))
+  )
+    throw new Error(
+      "page must contain only letters, numbers, underscore, hyphen, and slash-separated segments",
+    );
+  return `/${segments.join("/")}`;
 }
 
 export function resolvePageUrlForPage(page) {
@@ -411,7 +440,7 @@ export function resolvePageUrlForPage(page) {
  * @returns {{ targetPath: string | null, pageUrl: string | null }}
  */
 export function resolveJudgeTarget(argv = [], page) {
-  const cliArg = argv.find(arg => arg.startsWith("--target-path="));
+  const cliArg = argv.find((arg) => arg.startsWith("--target-path="));
   if (cliArg) {
     return {
       targetPath: cliArg.slice("--target-path=".length).trim(),
@@ -441,8 +470,7 @@ export function applyStagingUrlDefaults(config, argv = []) {
   const project = getProjectConfig();
   const global = project.staging ?? {};
 
-  const hasCli = prefix =>
-    argv.some(arg => arg.startsWith(prefix));
+  const hasCli = (prefix) => argv.some((arg) => arg.startsWith(prefix));
 
   if (
     !hasCli("--base-url=") &&
@@ -484,8 +512,15 @@ export function applyStagingAccountDefaults(config, page) {
       DEFAULT_STAGING_ACCOUNT.authRequired;
   }
   if (!config.expectedPlan) {
-    config.expectedPlan =
-      pageConfig.expectedPlan ?? global.expectedPlan ?? "";
+    config.expectedPlan = pageConfig.expectedPlan ?? global.expectedPlan ?? "";
+  }
+  if (!config.expectedScenario) {
+    config.expectedScenario =
+      pageConfig.expectedScenario ??
+      pageConfig.expectedSubscriptionStatus ??
+      global.expectedScenario ??
+      global.expectedSubscriptionStatus ??
+      "";
   }
   if (!config.expectedSubscriptionStatus) {
     config.expectedSubscriptionStatus =
@@ -494,14 +529,18 @@ export function applyStagingAccountDefaults(config, page) {
       "";
   }
   if (!config.accountNotes) {
-    config.accountNotes =
-      pageConfig.accountNotes ?? global.accountNotes ?? "";
+    config.accountNotes = pageConfig.accountNotes ?? global.accountNotes ?? "";
   }
 
   if (config.expectedSubscriptionStatus) {
     config.expectedSubscriptionStatus = String(
-      config.expectedSubscriptionStatus
+      config.expectedSubscriptionStatus,
     )
+      .trim()
+      .toUpperCase();
+  }
+  if (config.expectedScenario) {
+    config.expectedScenario = String(config.expectedScenario)
       .trim()
       .toUpperCase();
   }
@@ -532,8 +571,8 @@ Example playwright-spec-for-ai-agent.config.mjs:
       outputDir: "qa-output/{page}",
     },
     pages: {
-      dashboard: { targetPath: "/app/dashboard" },
-      pricing: { targetPath: "/pricing" },
+      "account/settings": { targetPath: "/app/account/settings" },
+      catalog: { targetPath: "/catalog" },
     },
   };
 `);
