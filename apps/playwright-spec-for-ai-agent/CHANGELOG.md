@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.10.1
+
+### Patch Changes
+
+- Decouple compiler schema identity and Hermes transport from orchestration modules.
+
 ## 2.10.0
 
 ### Minor Changes

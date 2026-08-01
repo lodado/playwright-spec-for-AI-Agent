@@ -4,6 +4,7 @@ export const CONTRACT_VIOLATION = "CONTRACT_VIOLATION";
 export const ARTIFACT_VERSION = "artifact/0.1";
 export const QA_IR_VERSION = "qa-ir/0.3";
 const LEGACY_QA_IR_VERSION = "qa-ir/0.2";
+export const PLAYWRIGHT_STATIC_MANIFEST_VERSION = "playwright-static-manifest/0.2";
 export const COMPILE_RESULT_VERSION = "compile-result/0.1";
 export const DIAGNOSTIC_VERSION = "diagnostic/0.1";
 export const PROVIDER_CAPABILITIES_VERSION = "provider-capabilities/0.1";

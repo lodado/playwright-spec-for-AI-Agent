@@ -4,7 +4,8 @@ import { join, relative, resolve, sep } from "node:path";
 
 import { canonicalHash, validateContract } from "../contracts/index.mjs";
 import { readEvidenceArchive } from "../evidence/index.mjs";
-import { createHermesPatchProposer, createHermesRemediationReviewer, judgeWithHermes } from "../provider-hermes/index.mjs";
+import { judgeEvidence } from "../judge/index.mjs";
+import { createHermesPatchProposer, createHermesRemediationReviewer, createHermesSemanticJudge } from "../provider-hermes/index.mjs";
 import { applyPatchProposal, checkExpectationIntegrity, createIndependentRemediationReview, createPatchProposal, decidePublication, rerunLiveScenario, verifyAppliedPatch } from "../remediation/index.mjs";
 import { createFailureFingerprint, createGitHubCliDraftTransport, createGitHubCliIssueTransport, publishGitHubVerifiedDraft } from "../reporter-github/index.mjs";
 import { loadProjectConfig } from "../../scripts/hermes-qa-project-config.mjs";
@@ -173,6 +174,7 @@ async function runRemediation(options, overrides) {
 
 async function defaultLiveRerun({ options, proposal, application, verification, before }) {
   const originalEnvelope = readAuthenticatedRunEnvelope({ runDirectory: options.runDirectory, cwd: options.cwd, integrityKey: options.integrityKey });
+  const semanticJudge = createHermesSemanticJudge();
   return rerunLiveScenario({
     proposal,
     application,
@@ -195,7 +197,7 @@ async function defaultLiveRerun({ options, proposal, application, verification, 
       return { qaIr, evidenceBundle, authenticated: true, completedMilestoneIds, judgeInput: { manifest: archive.manifest, readBlob: archive.readBlob } };
     },
     async judge({ qaIr, evidenceBundle, judgeInput }) {
-      return judgeWithHermes({ qaIr, bundle: evidenceBundle, manifest: judgeInput.manifest, readBlob: judgeInput.readBlob });
+      return judgeEvidence({ qaIr, bundle: evidenceBundle, manifest: judgeInput.manifest, readBlob: judgeInput.readBlob, semanticJudge });
     },
   });
 }

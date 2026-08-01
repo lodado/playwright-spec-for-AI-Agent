@@ -13,7 +13,7 @@ import {
 } from "../../contracts/index.mjs";
 import { createInMemoryEvidenceStore } from "../../evidence/index.mjs";
 import { extractPlaywrightStaticManifest } from "../../adapter-playwright/index.mjs";
-import { buildHermesApplicabilityQuery, buildHermesExecutionQuery, buildHermesFullSpecAbstractionQuery, buildHermesFullSpecReviewQuery, buildHermesJudgeQuery, buildHermesJudgmentReviewQuery, buildHermesPatchQuery, buildHermesRemediationReviewQuery, buildHermesSpecAbstractionQuery, createHermesApplicabilitySelector, createHermesExecutionProposer, createHermesFullSpecAbstractor, createHermesFullSpecReviewer, createHermesJudgmentReviewer, createHermesPatchProposer, createHermesRemediationReviewer, createHermesSpecAbstractor, judgeWithHermes } from "../index.mjs";
+import { buildHermesApplicabilityQuery, buildHermesExecutionQuery, buildHermesFullSpecAbstractionQuery, buildHermesFullSpecReviewQuery, buildHermesJudgeQuery, buildHermesJudgmentReviewQuery, buildHermesPatchQuery, buildHermesRemediationReviewQuery, buildHermesSpecAbstractionQuery, createHermesApplicabilitySelector, createHermesExecutionProposer, createHermesFullSpecAbstractor, createHermesFullSpecReviewer, createHermesJudgmentReviewer, createHermesPatchProposer, createHermesRemediationReviewer, createHermesSemanticJudge, createHermesSpecAbstractor, judgeWithHermes } from "../index.mjs";
 
 const policy = {
   navigation: "ALLOWED",
@@ -395,6 +395,18 @@ describe("Hermes judgment reviewer", () => {
 });
 
 describe("Hermes judge provider", () => {
+  it("exposes semantic judgment as an injectable transport adapter", async () => {
+    const transport = vi.fn(async () => ({ expectationResults: [], uncertainty: [] }));
+    const semanticJudge = createHermesSemanticJudge({ transport, model: "judge-model", modelVersion: "v1" });
+
+    await expect(semanticJudge({ scenario: { id: "scenario" } })).resolves.toMatchObject({
+      schemaVersion: SEMANTIC_JUDGE_DECISION_VERSION,
+      expectationResults: [],
+      judge: { provider: "hermes", model: "judge-model", modelVersion: "v1" },
+    });
+    expect(transport).toHaveBeenCalledOnce();
+  });
+
   it("creates one validated text-only adaptive action proposal", async () => {
     const transport = vi.fn(async () => executionProposal());
     const propose = createHermesExecutionProposer({ transport, secrets: ["SESSION-SECRET"] });

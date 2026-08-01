@@ -1,12 +1,13 @@
 import { rmSync } from "node:fs";
 import { join, relative } from "node:path";
 import { RUNTIME_OUTCOME_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
-import { judgeWithHermes } from "../provider-hermes/index.mjs";
+import { judgeEvidence } from "../judge/index.mjs";
+import { createHermesSemanticJudge } from "../provider-hermes/index.mjs";
 import { loadValidatedExecution } from "./qa-native-result-set.mjs";
 import { CliError, createExclusiveQaDirectory, writePrivateJsonExclusive } from "./qa-native.mjs";
 
 export async function judgeQaNative({ runDirectory, integrityKey, cwd, failOn }, overrides = {}) {
-  const judge = overrides.judge ?? judgeWithHermes;
+  const judge = overrides.judge ?? defaultHermesJudge();
   const reportVerdicts = overrides.reportVerdicts ?? defaultReportVerdicts;
   const { qaIr, archive, bundles } = loadValidatedExecution({ runDirectory, integrityKey, cwd });
   const results = [];
@@ -55,6 +56,11 @@ export async function judgeQaNative({ runDirectory, integrityKey, cwd, failOn },
     if (created) rmSync(judgmentDirectory, { recursive: true, force: true });
     throw error;
   }
+}
+
+function defaultHermesJudge() {
+  const semanticJudge = createHermesSemanticJudge();
+  return (input) => judgeEvidence({ ...input, semanticJudge });
 }
 
 // A run's judgment was previously silent (exit 0, no output) regardless of how many scenarios failed,

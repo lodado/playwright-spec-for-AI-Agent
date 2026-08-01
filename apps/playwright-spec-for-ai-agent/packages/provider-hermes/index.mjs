@@ -7,7 +7,6 @@ import {
   snapshotContract,
 } from "../contracts/index.mjs";
 import { redactSensitiveText } from "../evidence/index.mjs";
-import { judgeEvidence } from "../judge/index.mjs";
 import { normalizePlaywrightSpecFallback } from "../adapter-playwright/index.mjs";
 import { normalizeFullSpecAbstraction, normalizeFullSpecReview } from "../abstract-playwright/index.mjs";
 import { readHermesModelConfig, runHermes } from "../../scripts/hermes-runner.mjs";
@@ -491,6 +490,26 @@ export function createHermesJudgmentReviewer({ transport = runHermes, model, mod
   return review;
 }
 
+export function createHermesSemanticJudge({
+  transport = runHermes,
+  secrets = [],
+  model,
+  modelVersion,
+} = {}) {
+  if (typeof transport !== "function") throw new TypeError("transport must be a function");
+  if (!Array.isArray(secrets)) throw new TypeError("secrets must be an array");
+  const resolvedModel = model ?? readHermesModelConfig().model ?? "hermes";
+  return async (input) => {
+    const raw = await transport(buildHermesJudgeQuery(input), MAX_TURNS, {
+      mode: "text-only",
+      requiredKeys: ["expectationResults"],
+      secrets,
+    });
+    return hermesDecision(raw, { model: resolvedModel, modelVersion });
+  };
+}
+
+// Backward-compatible public facade; command orchestration composes judgeEvidence directly.
 export async function judgeWithHermes({
   qaIr,
   bundle,
@@ -501,21 +520,14 @@ export async function judgeWithHermes({
   model,
   modelVersion,
 } = {}) {
+  const { judgeEvidence } = await import("../judge/index.mjs");
   return judgeEvidence({
     qaIr,
     bundle,
     manifest,
     readBlob,
     secrets,
-    semanticJudge: async (input) => {
-      const resolvedModel = model ?? readHermesModelConfig().model ?? "hermes";
-      const raw = await transport(buildHermesJudgeQuery(input), MAX_TURNS, {
-        mode: "text-only",
-        requiredKeys: ["expectationResults"],
-        secrets,
-      });
-      return hermesDecision(raw, { model: resolvedModel, modelVersion });
-    },
+    semanticJudge: createHermesSemanticJudge({ transport, secrets, model, modelVersion }),
   });
 }
 

@@ -2,14 +2,16 @@ import {
   canonicalHash,
   COMPILE_RESULT_VERSION,
   DIAGNOSTIC_VERSION,
+  PLAYWRIGHT_STATIC_MANIFEST_VERSION,
   QA_IR_VERSION,
   validateContract,
 } from "../contracts/index.mjs";
 import { parsePlaywrightSource } from "../../scripts/dashboard-spec-parser.mjs";
 
+export { PLAYWRIGHT_STATIC_MANIFEST_VERSION };
+
 const ADAPTER_NAME = "adapter-playwright";
 const ADAPTER_VERSION = "0.3.0";
-export const PLAYWRIGHT_STATIC_MANIFEST_VERSION = "playwright-static-manifest/0.2";
 const AI_FALLBACK_CACHE_VERSION = "playwright-spec-ai-cache/0.1";
 const AI_RECOVERABLE_DIAGNOSTICS = new Set(["UNSUPPORTED_MATCHER", "OPAQUE_ASSERTION_TARGET", "DYNAMIC_EXPECTED_VALUE", "DYNAMIC_EXECUTION_VALUE", "OPAQUE_ACTION_TARGET", "OPAQUE_INTERACTION_STEP"]);
 

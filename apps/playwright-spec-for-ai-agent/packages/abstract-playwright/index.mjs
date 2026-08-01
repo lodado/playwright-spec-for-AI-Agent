@@ -1,5 +1,4 @@
-import { COMPILE_RESULT_VERSION, DIAGNOSTIC_VERSION, QA_IR_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
-import { PLAYWRIGHT_STATIC_MANIFEST_VERSION } from "../adapter-playwright/index.mjs";
+import { COMPILE_RESULT_VERSION, DIAGNOSTIC_VERSION, PLAYWRIGHT_STATIC_MANIFEST_VERSION, QA_IR_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
 
 export const ABSTRACT_PLAYWRIGHT_SPEC_VERSION = "abstract-playwright-spec/0.7";
 const ABSTRACT_ADAPTER_VERSION = "0.3.0";

@@ -143,6 +143,11 @@ and every downstream command refuses them.
 applicability is affirmatively not met is `SKIP`, not `PASS`, `FAIL`, or
 `MANUAL_REVIEW`.
 
+The CLI composition root injects `createHermesSemanticJudge()` into
+`judgeEvidence()`. Hermes owns prompt and transport behavior; the judge owns
+verdict construction. The exported `judgeWithHermes()` facade remains only for
+backward compatibility and delegates through the same two functions.
+
 Missing evidence for an internal mock, helper, or setup request is not an
 applicability conflict when the required route/account/product state and the
 user-visible claim are directly established by sealed page evidence. Internal
@@ -170,17 +175,17 @@ authenticated and has no merge or auto-merge path.
 
 | Module | Owns | Must not own |
 | --- | --- | --- |
-| `packages/contracts` | Schemas, versions, action vocabulary | Browser behavior or prompt policy |
+| `packages/contracts` | Schemas, versions (including the static-manifest version), action vocabulary | Browser behavior or prompt policy |
 | `scripts/*parser*`, `packages/adapter-playwright` | Static identity and authority | Semantic guessing |
 | `packages/abstract-playwright` | Manifest + approved semantics composition | Live decisions |
-| `packages/provider-hermes` | Extraction, applicability, action, judgment, review prompts | Enforcement or verdict promotion |
+| `packages/provider-hermes` | Hermes prompt construction and transport adapters, including the injected semantic-judge function | Execution orchestration, enforcement, or verdict promotion |
 | `packages/core` | Plans, leases, milestones, completion rule | Browser I/O |
 | `packages/provider-playwright` | Browser I/O, network policy, evidence capture | Verdicts |
 | `packages/evidence` | Redaction, storage, HMAC, archive I/O | Scenario semantics |
 | `packages/cli/qa-native-adaptive-evidence` | Cross-layer evidence sequencing | A second completion-rule copy |
 | `packages/judge` | Evidence → verdict | Browser access or execution claims as facts |
 | `packages/review` | Independent judgment grounding | Replacement verdicts |
-| `packages/cli/*` | Orchestration and authenticated persistence | Duplicated domain rules |
+| `packages/cli/*` | Composition root, orchestration, and authenticated persistence; CLI judge composes `judgeEvidence` with the Hermes semantic-judge adapter | Duplicated domain rules |
 | reporters/remediation/repository providers | Presentation and bounded repair workflow | New evidence or authority |
 
 ## Compatibility rules
@@ -197,6 +202,9 @@ authenticated and has no merge or auto-merge path.
 7. Partial or failed scenarios preserve every already-sealed bundle.
 8. Downstream commands consume authenticated QA IR, evidence, and run-envelope
    bindings; diagnostic side files never grant authority.
+9. Compiler stages share schema/version identity through `packages/contracts`;
+   abstract compilation must not import the AST adapter merely to compare a
+   manifest version.
 
 ## Change checklist
 
