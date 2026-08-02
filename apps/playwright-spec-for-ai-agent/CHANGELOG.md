@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.1.0
+
+### Minor Changes
+
+- Add scenario-aware page selection and AI applicability filtering while hardening batch execution, evidence capture, and reporting.
+
 ## 3.0.0
 
 ### Major Changes

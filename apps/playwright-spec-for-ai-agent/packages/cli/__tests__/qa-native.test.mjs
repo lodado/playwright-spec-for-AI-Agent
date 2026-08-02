@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createExclusiveQaDirectory,
   decodeIntegrityKey,
+  mapConcurrent,
   readPrivateJson,
   resolvePrivateQaPath,
   runQaNative,
@@ -25,6 +26,20 @@ function temporaryRoot() {
 }
 
 describe("qa-native CLI security foundation", () => {
+  it("bounds independent AI work while preserving input order", async () => {
+    let active = 0;
+    let maximum = 0;
+    const results = await mapConcurrent([1, 2, 3, 4, 5, 6], 4, async value => {
+      maximum = Math.max(maximum, ++active);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      active -= 1;
+      return value * 2;
+    });
+
+    expect(maximum).toBe(4);
+    expect(results).toEqual([2, 4, 6, 8, 10, 12]);
+  });
+
   it("strictly decodes an external base64 integrity key", () => {
     const encoded = Buffer.alloc(32, 0x42).toString("base64");
     expect(decodeIntegrityKey(encoded)).toEqual(Buffer.alloc(32, 0x42));

@@ -4,9 +4,9 @@ import { compileAbstractPlaywrightArtifact } from "../abstract-playwright/index.
 import { EVIDENCE_ARCHIVE_LIMITS, canonicalHash, validateContract } from "../contracts/index.mjs";
 import { createAdaptiveExecutionInput, DEFAULT_ADAPTIVE_BUDGET } from "../runtime/index.mjs";
 import { writeEvidenceArchive } from "../evidence/index.mjs";
-import { createHermesExecutionProposer } from "../provider-hermes/index.mjs";
-import { assertPlaywrightAdaptiveExecution, runAdaptiveSuiteWithPlaywright } from "../runtime/playwright.mjs";
-import { extractStaticAuthority } from "../static-authority/index.mjs";
+import { createHermesApplicabilitySelector, createHermesExecutionProposer } from "../provider-hermes/index.mjs";
+import { assertPlaywrightAdaptiveExecution, observeAdaptiveApplicabilityPage, runAdaptiveSuiteWithPlaywright } from "../runtime/playwright.mjs";
+import { collectStaticAuthority } from "../static-authority/index.mjs";
 import { validateAdaptiveExecutionEvidence } from "../runtime/validate-evidence.mjs";
 import { abstractSpecInputs } from "./qa-native-abstract.mjs";
 import { CliError, createExclusiveQaDirectory, readBoundedSpec, writePrivateJsonExclusive } from "./qa-native.mjs";
@@ -19,6 +19,8 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
   const reportScenario = overrides.reportScenario ?? defaultReportScenario;
   const createAdaptiveInput = overrides.createAdaptiveInput ?? createAdaptiveExecutionInput;
   const createProposer = overrides.createProposer ?? createHermesExecutionProposer;
+  const createApplicabilitySelector = overrides.createApplicabilitySelector ?? createHermesApplicabilitySelector;
+  const observeApplicability = overrides.observeApplicability ?? observeAdaptiveApplicabilityPage;
   const executeAdaptive = overrides.executeAdaptive ?? runAdaptiveSuiteWithPlaywright;
   const validateEvidence = overrides.validateEvidence ?? validateAdaptiveExecutionEvidence;
   const reportInvalidRun = overrides.reportInvalidRun ?? defaultReportInvalidRun;
@@ -34,7 +36,10 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
       const resolvedPath = realpathSync(path);
       return { source: readBoundedSpec(resolvedPath), sourcePath: relative(projectRoot, resolvedPath) };
     });
-    const authorityInputs = sourceInputs.map(input => ({ ...input, manifest: extractStaticAuthority(input) }));
+    const authorityCollection = collectStaticAuthority(sourceInputs);
+    for (const rejected of authorityCollection.rejected) reportDiagnostics([{ severity: "WARNING", code: "STATIC_AUTHORITY_UNAVAILABLE", message: rejected.reason, path: rejected.sourcePath }]);
+    const authorityInputs = authorityCollection.accepted;
+    if (authorityInputs.length === 0) throw new CliError("no specs with static authority remain");
     const runnableInputs = authorityInputs.filter(input => !input.manifest.tests.every(test => test.policy.navigation === "BLOCKED"));
     for (const input of authorityInputs.filter(item => !runnableInputs.includes(item))) {
       reportDiagnostics([{ severity: "INFO", code: "STATIC_POLICY_BLOCKED", message: `Skipped spec because all ${input.manifest.tests.length} test(s) are statically policy-blocked.`, path: input.sourcePath }]);
@@ -59,19 +64,37 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
     if (scenarios.length === 0) throw new CliError("no policy-eligible behavior remains");
 
     const runId = basename(runDirectory);
-    const budget = { ...DEFAULT_ADAPTIVE_BUDGET, ...budgetOverrides };
+    const requestedBudget = { ...DEFAULT_ADAPTIVE_BUDGET, ...budgetOverrides };
+    const actionLimit = Math.floor(EVIDENCE_ARCHIVE_LIMITS.checkpoints / scenarios.length);
+    if (actionLimit < 1) throw new CliError("scenario count exceeds the evidence archive limit");
+    const budget = { ...requestedBudget, actions: Math.min(requestedBudget.actions, actionLimit) };
+    if (budget.actions < requestedBudget.actions) reportDiagnostics([{ severity: "INFO", code: "RUNTIME_ACTION_BUDGET_CAPPED", message: `Capped each scenario to ${budget.actions} action(s) for the evidence archive.`, path: "" }]);
     const agentInputs = scenarios.map(scenario => createAdaptiveInput({ qaIr, scenarioId: scenario.id, baseUrl, runId, budget, ...(allowedOrigins === undefined ? {} : { allowedOrigins }) }));
-    if (agentInputs.reduce((total, input) => total + input.remainingBudget.actions, 0) > EVIDENCE_ARCHIVE_LIMITS.checkpoints) throw new CliError("runtime action budget exceeds the evidence archive limit");
+    const behaviorIds = new Map(scenarios.map((scenario, index) => [`B${index + 1}`, scenario.id]));
+    const pageObservation = await observeApplicability({ input: agentInputs[0], storageStatePath, authBootstrap, projectRoot });
+    const applicability = normalizeApplicabilityDecisions(
+      [...behaviorIds.keys()],
+      await createApplicabilitySelector()({
+        page: pageObservation,
+        behaviors: scenarios.map((scenario, index) => ({ behaviorId: `B${index + 1}`, given: scenario.semantics?.given ?? [] })),
+      }),
+    ).map(decision => ({ ...decision, scenarioId: behaviorIds.get(decision.behaviorId) }));
+    const selectedIds = new Set(applicability.filter(decision => decision.status === "APPLICABLE").map(decision => decision.scenarioId));
+    const selectedAgentInputs = agentInputs.filter(input => selectedIds.has(input.scenarioId));
+    for (const decision of applicability.filter(item => item.status !== "APPLICABLE")) {
+      reportDiagnostics([{ severity: "INFO", code: decision.status === "NOT_APPLICABLE" ? "SCENARIO_NOT_APPLICABLE" : "SCENARIO_APPLICABILITY_AMBIGUOUS", message: `Skipped ${decision.scenarioId}: ${decision.rationale}`, path: "" }]);
+    }
+    if (selectedAgentInputs.length === 0) throw new CliError("no explicitly applicable behavior remains");
 
     executionStarted = true;
-    const execution = await executeAdaptive({ inputs: agentInputs, proposeAction: createProposer(), storageStatePath, authBootstrap, projectRoot });
+    const execution = await executeAdaptive({ inputs: selectedAgentInputs, proposeAction: createProposer(), storageStatePath, authBootstrap, projectRoot });
     assertPlaywrightAdaptiveExecution(execution);
     let agentOutcomes;
     try {
-      agentOutcomes = execution.executions.map((entry, index) => validateContract("ExecutionAgentOutcome", entry.outcome, { input: agentInputs[index] }));
+      agentOutcomes = execution.executions.map((entry, index) => validateContract("ExecutionAgentOutcome", entry.outcome, { input: selectedAgentInputs[index] }));
       if (execution.bundles.length === 0 || execution.manifest === undefined) throw new CliError("runtime produced no sealed evidence");
       execution.executions.forEach((entry, index) => validateEvidence({
-        input: agentInputs[index],
+        input: selectedAgentInputs[index],
         outcome: agentOutcomes[index],
         bundles: execution.bundles.filter(bundle => entry.bundleIds.includes(bundle.bundleId)),
         manifest: execution.manifest,
@@ -98,7 +121,14 @@ export async function executeQaNative({ specPath, specPaths, baseUrl, runDirecto
 
     const nonCompleted = agentOutcomes.filter(outcome => outcome.type !== "COMPLETED");
     for (const outcome of nonCompleted) reportScenario({ scenarioId: outcome.scenarioId, type: outcome.type, reason: outcome.reason });
-    reportSummary({ runDirectory: relative(cwd, runDirectory), executed: agentInputs.length, skipped: compileResult.qaIr.suites.flatMap(suite => suite.scenarios).length - agentInputs.length, nonCompleted: nonCompleted.length });
+    reportSummary({
+      runDirectory: relative(cwd, runDirectory),
+      executed: selectedAgentInputs.length,
+      skipped: compileResult.qaIr.suites.flatMap(suite => suite.scenarios).length - selectedAgentInputs.length,
+      notApplicable: applicability.filter(decision => decision.status === "NOT_APPLICABLE").length,
+      ambiguous: applicability.filter(decision => decision.status === "AMBIGUOUS").length,
+      nonCompleted: nonCompleted.length,
+    });
     return 0;
   } catch (error) {
     if (created) {
@@ -162,11 +192,26 @@ function defaultReportDiagnostics(diagnostics) {
 
 // A successful run was previously silent (exit 0, no output), leaving CI and operators unable to
 // tell what ran. Emit a one-line summary of executed vs. skipped scenarios and the artifact path.
-function defaultReportSummary({ runDirectory, executed, skipped, notApplicable = 0, nonCompleted = 0 }) {
+function defaultReportSummary({ runDirectory, executed, skipped, notApplicable = 0, ambiguous = 0, nonCompleted = 0 }) {
   const nonCompletedNote = nonCompleted > 0 ? `, ${nonCompleted} budget-exhausted` : "";
-  const blocked = Math.max(0, skipped - notApplicable);
-  const skippedNote = [notApplicable > 0 ? `${notApplicable} not-applicable` : "", blocked > 0 ? `${blocked} blocked` : ""].filter(Boolean).join(", ");
+  const blocked = Math.max(0, skipped - notApplicable - ambiguous);
+  const skippedNote = [notApplicable > 0 ? `${notApplicable} not-applicable` : "", ambiguous > 0 ? `${ambiguous} ambiguous` : "", blocked > 0 ? `${blocked} blocked` : ""].filter(Boolean).join(", ");
   process.stdout.write(`qa-native: executed ${executed} scenario(s)${nonCompletedNote}${skippedNote ? `, skipped ${skippedNote}` : ""} → ${runDirectory}\n`);
+}
+
+export function normalizeApplicabilityDecisions(behaviorIds, value) {
+  if (!Array.isArray(behaviorIds) || new Set(behaviorIds).size !== behaviorIds.length || behaviorIds.length === 0) throw new TypeError("applicability behavior IDs are invalid");
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== 1 || !Array.isArray(value.behaviors)) throw new Error("applicability decision is invalid");
+  const expected = new Set(behaviorIds);
+  if (value.behaviors.length !== expected.size) throw new Error("applicability decision coverage is incomplete");
+  const seen = new Set();
+  return value.behaviors.map(decision => {
+    if (!decision || typeof decision !== "object" || Array.isArray(decision) || Object.keys(decision).some(key => !["behaviorId", "status", "confidence", "rationale"].includes(key))) throw new Error("applicability decision is invalid");
+    if (!expected.has(decision.behaviorId) || seen.has(decision.behaviorId)) throw new Error("applicability decision behavior is invalid");
+    if (!["APPLICABLE", "NOT_APPLICABLE", "AMBIGUOUS"].includes(decision.status) || !Number.isFinite(decision.confidence) || decision.confidence < 0 || decision.confidence > 1 || typeof decision.rationale !== "string" || decision.rationale.length === 0 || decision.rationale.length > 2_000) throw new Error("applicability decision is invalid");
+    seen.add(decision.behaviorId);
+    return Object.freeze({ ...decision, status: decision.confidence < 0.8 ? "AMBIGUOUS" : decision.status });
+  });
 }
 
 // Adaptive scenarios that ended ERROR/BLOCKED still sealed evidence; surface each one's outcome and

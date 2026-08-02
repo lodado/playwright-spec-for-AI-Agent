@@ -8,6 +8,7 @@ const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 const DEFAULT_STORAGE_STATE_PATH = [".private", "storage-state.json"];
 const MAX_PRIVATE_JSON_BYTES = 4 * 1024 * 1024;
+export const AI_STAGE_CONCURRENCY = 4;
 const COMMAND_OPTIONS = Object.freeze({
   run: new Set(["spec", "page", "config", "base-url", "run-dir", "storage-state", "auth-bootstrap", "allowed-origin", "budget-actions", "budget-turns", "budget-time-ms", "budget-tokens"]),
   abstract: new Set(["spec", "page", "config"]),
@@ -425,4 +426,17 @@ function lstatIfExists(path) {
 // ponytail: .qa is single-process private storage; use descriptor-relative no-follow I/O before supporting shared writers.
 // CliError messages are printed to the operator verbatim (see runQaNative), so they must never
 // embed evidence bytes or secrets — only controlled, enumerable detail.
+export async function mapConcurrent(values, limit, mapper) {
+  const results = new Array(values.length);
+  let next = 0;
+  async function worker() {
+    while (next < values.length) {
+      const index = next++;
+      results[index] = await mapper(values[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, values.length) }, worker));
+  return results;
+}
+
 export class CliError extends Error {}

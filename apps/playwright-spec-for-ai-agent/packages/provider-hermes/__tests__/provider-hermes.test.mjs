@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ADAPTIVE_ACTIONS, EXECUTION_ACTION_PROPOSAL_VERSION, EXECUTION_AGENT_INPUT_VERSION, PROVIDER_CAPABILITIES_VERSION, QA_IR_VERSION, SEMANTIC_JUDGE_DECISION_VERSION } from "../../contracts/index.mjs";
 import { createInMemoryEvidenceStore } from "../../evidence/index.mjs";
 import { extractStaticAuthority } from "../../static-authority/index.mjs";
-import { buildHermesExecutionQuery, buildHermesFullSpecAbstractionQuery, buildHermesFullSpecReviewQuery, buildHermesJudgeQuery, buildHermesJudgmentReviewQuery, createHermesExecutionProposer, createHermesFullSpecAbstractor, createHermesFullSpecReviewer, createHermesJudgmentReviewer, createHermesSemanticJudge, judgeWithHermes } from "../index.mjs";
+import { buildHermesApplicabilityQuery, buildHermesExecutionQuery, buildHermesFullSpecAbstractionQuery, buildHermesFullSpecReviewQuery, buildHermesJudgeQuery, buildHermesJudgmentReviewQuery, createHermesApplicabilitySelector, createHermesExecutionProposer, createHermesFullSpecAbstractor, createHermesFullSpecReviewer, createHermesJudgmentReviewer, createHermesSemanticJudge, judgeWithHermes } from "../index.mjs";
 
 const policy = {
   navigation: "ALLOWED",
@@ -16,6 +16,17 @@ const policy = {
   confirmation: "DENY",
   secrets: "RUNTIME_INJECTED",
 };
+
+describe("live applicability", () => {
+  it("compares extracted Given against one read-only page observation", async () => {
+    const result = { behaviors: [{ behaviorId: "B1", status: "APPLICABLE", confidence: 0.9, rationale: "matched" }] };
+    const transport = vi.fn(async () => result);
+
+    await expect(createHermesApplicabilitySelector({ transport })({ page: { url: "https://example.test" }, behaviors: [{ behaviorId: "B1", given: ["the items page is open"] }] })).resolves.toEqual(result);
+    expect(buildHermesApplicabilityQuery({ page: {}, behaviors: [] })).toContain("Do not judge Then");
+    expect(transport.mock.calls[0].slice(1)).toEqual([1, { mode: "text-only", requiredKeys: ["behaviors"] }]);
+  });
+});
 
 describe("Playwright full-spec abstraction", () => {
   const source = '// @qa-scenario: RESTORE\n// @qa-live-policy: readonly\ntest("restores a document", async () => { expect(requests).toHaveLength(1); });';

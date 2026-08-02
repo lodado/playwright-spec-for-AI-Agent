@@ -11,8 +11,8 @@ export function reportQaNative({ runDirectory, judgmentPath, integrityKey, cwd }
   const judgments = loadJudgments({ runDirectory, judgmentPath, cwd, qaIr, bundles, requireComplete: true });
   const reviews = loadReviews({ runDirectory, cwd, qaIr, judgments });
   const reviewByJudgment = new Map(reviews.map(review => [review.judgeResultId, review]));
-  const rows = judgments.map(({ result }) => ({
-    scenarioId: result.scenarioId,
+  const rows = judgments.map(({ result, bundle }) => ({
+    scenarioId: bundle.scenarioId,
     verdict: result.verdict,
     confidence: result.confidence,
     review: reviewByJudgment.get(result.resultId)?.status ?? "MISSING",

@@ -20,12 +20,13 @@ describe("project config", () => {
     writeFileSync(configPath, `export default {
       specDir: "specs/{page}",
       baseUrl: "https://default.test",
-      pages: { settings: { baseUrl: "https://settings.test", targetPath: "/app/settings" } },
+      pages: { settings: { baseUrl: "https://settings.test", targetPath: "/app/settings", scenario: "READY" } },
     };\n`);
 
     const config = await loadProjectConfig([`--config=${configPath}`, `--project-root=${root}`]);
 
     expect(config.specDir).toBe("specs/{page}");
+    expect(config.pages.settings.scenario).toBe("READY");
     expect(resolveConfigBaseUrl("settings")).toBe("https://settings.test");
     expect(resolveJudgeTarget([], "settings")).toEqual({ targetPath: "/app/settings", pageUrl: null });
   });

@@ -41,9 +41,10 @@ flowchart LR
   Spec["Playwright source"] --> Authority["StaticAuthority"]
   Spec --> Abstract["abstract-ai"]
   Authority --> Abstract
-  Abstract --> Behavior["BehavioralSpec"]
+Abstract --> Behavior["BehavioralSpec"]
   Authority --> Runtime["runtime"]
-  Behavior --> Runtime
+  Behavior --> Applicability["initial-state applicability"]
+  Applicability --> Runtime
   Runtime --> Evidence["RunEvidence"]
   Evidence --> Judge["judge"]
   Behavior --> Judge
@@ -110,12 +111,19 @@ Approved artifacts are cached by source, authority, model, and prompt identity.
 Runtime combines the previous adaptive core and Playwright gateway behind one
 module. For each behavioral test it:
 
-1. opens the code-owned configured URL;
-2. gives the execution AI only When and Then;
-3. authorizes one proposed action against the test capability;
-4. executes it through Playwright;
-5. records before/action/after evidence;
-6. stops on completion, explicit block, error, or a run-wide budget.
+1. opens the code-owned configured URL once and captures a read-only initial
+   observation;
+2. compares every extracted Given with that observation through a bounded AI
+   call and retains only explicitly applicable tests;
+3. gives the execution AI only When and Then;
+4. authorizes one proposed action against the test capability;
+5. executes it through Playwright;
+6. records before/action/after evidence;
+7. stops on completion, explicit block, error, or a run-wide budget.
+
+Applicability may only remove behavior. It cannot add tests, alter Given/When/
+Then, grant policy, or produce a verdict. `NOT_APPLICABLE` and `AMBIGUOUS`
+tests do not launch an execution browser; an empty selection fails closed.
 
 Runtime does not implement deterministic semantic milestones. The agent may say
 that it is done, but the later judge decides whether Then is satisfied.
@@ -187,9 +195,9 @@ debugging entry points only when they call the same stage functions used by
 `run`. They do not select alternate compilers or providers.
 
 Page mode reads only `specDir`, `baseUrl`, and per-page `specDir`, `baseUrl`,
-`targetPath`, or `pageUrl` from `playwright-spec-for-ai-agent.config.*`. It runs
-every `*.spec.ts` not marked `@qa-live-skip`; config does not select product or
-account states.
+`targetPath`, `pageUrl`, or `scenario` from
+`playwright-spec-for-ai-agent.config.*`. When `scenario` is present, code runs
+matching `@qa-scenario` specs plus `@qa-always-run`; `@qa-live-skip` always wins.
 
 ## Private layout
 
@@ -236,7 +244,7 @@ The v3 implementation deletes rather than deprecates:
 
 - AST expectation abstraction and AI fallback recovery;
 - strict execution plans and provider/mode/compiler matrices;
-- applicability preflight as a separate AI decision;
+- a separately persisted applicability artifact or compatibility mode;
 - semantic milestone completion in code;
 - reviewer issue scoping and multi-revision correction;
 - old run-envelope and artifact compatibility shims;

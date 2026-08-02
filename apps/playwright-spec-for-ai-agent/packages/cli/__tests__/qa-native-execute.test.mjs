@@ -29,6 +29,22 @@ afterEach(() => {
 });
 
 describe("qa-native v3 execute", () => {
+  it("skips a spec without static authority while continuing the page batch", async () => {
+    const { cwd, specPath, runDirectory } = project(runnableSource, "mixed-authority");
+    const unannotatedPath = join(cwd, "unannotated.spec.ts");
+    writeFileSync(unannotatedPath, 'test("unannotated", async () => {});\n');
+    const reportDiagnostics = vi.fn();
+    const abstractInputs = vi.fn(async ({ sourceInputs }) => {
+      expect(sourceInputs.map(input => input.sourcePath)).toEqual(["items.spec.ts"]);
+      throw new Error("stop after authority isolation");
+    });
+
+    await expect(executeQaNative({ specPaths: [unannotatedPath, specPath], baseUrl: "https://example.test", runDirectory, integrityKey, cwd }, { abstractInputs, reportDiagnostics })).rejects.toThrow(/authority isolation/);
+
+    expect(reportDiagnostics).toHaveBeenCalledWith([expect.objectContaining({ code: "STATIC_AUTHORITY_UNAVAILABLE", path: "unannotated.spec.ts" })]);
+    expect(existsSync(runDirectory)).toBe(false);
+  });
+
   it("does not invoke either AI or the browser for a fully blocked spec", async () => {
     const { cwd, specPath, runDirectory } = project(blockedSource, "blocked");
     const abstractInputs = vi.fn();
@@ -58,17 +74,49 @@ describe("qa-native v3 execute", () => {
     expect(existsSync(runDirectory)).toBe(false);
   });
 
-  it("rejects an archive-incompatible action budget before launching the browser", async () => {
+  it("caps an archive-incompatible action budget before launching the browser", async () => {
     const { cwd, specPath, runDirectory } = project(manyScenarioSource, "budget");
     const executeAdaptive = vi.fn();
+    const createAdaptiveInput = vi.fn(({ budget }) => {
+      expect(budget.actions).toBe(204);
+      throw new Error("stop after budget cap");
+    });
 
     await expect(executeQaNative({ specPath, baseUrl: "https://example.test", runDirectory, integrityKey, cwd, budgetOverrides: { actions: 256 } }, {
       abstractInputs: approvedInputs,
+      createAdaptiveInput,
       executeAdaptive,
-    })).rejects.toThrow(/evidence archive limit/);
+    })).rejects.toThrow(/budget cap/);
 
+    expect(createAdaptiveInput).toHaveBeenCalledOnce();
     expect(executeAdaptive).not.toHaveBeenCalled();
     expect(existsSync(runDirectory)).toBe(false);
+  });
+
+  it("executes only behavior explicitly applicable to the initial page", async () => {
+    const { cwd, specPath, runDirectory } = project(manyScenarioSource, "applicability");
+    const observeApplicability = vi.fn(async () => ({ url: "https://example.test/items", aria: "Items", elements: [] }));
+    const executeAdaptive = vi.fn(async ({ inputs }) => {
+      expect(inputs).toHaveLength(1);
+      throw new Error("stop after applicability");
+    });
+
+    await expect(executeQaNative({ specPath, baseUrl: "https://example.test", runDirectory, integrityKey, cwd }, {
+      abstractInputs: approvedInputs,
+      observeApplicability,
+      createApplicabilitySelector: () => async ({ behaviors }) => ({
+        behaviors: behaviors.map((behavior, index) => ({
+          behaviorId: behavior.behaviorId,
+          status: index === 0 ? "APPLICABLE" : index === 1 ? "NOT_APPLICABLE" : "AMBIGUOUS",
+          confidence: 0.95,
+          rationale: "initial state comparison",
+        })),
+      }),
+      executeAdaptive,
+    })).rejects.toThrow(/stop after applicability/);
+
+    expect(observeApplicability).toHaveBeenCalledOnce();
+    expect(executeAdaptive).toHaveBeenCalledOnce();
   });
 });
 

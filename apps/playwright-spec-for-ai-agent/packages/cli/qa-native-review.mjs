@@ -4,7 +4,7 @@ import { validateContract } from "../contracts/index.mjs";
 import { createHermesJudgmentReviewer } from "../provider-hermes/index.mjs";
 import { reviewJudgment } from "../review/index.mjs";
 import { loadCompletedJudgmentSet, loadValidatedExecution } from "./qa-native-result-set.mjs";
-import { writePrivateJsonExclusive } from "./qa-native.mjs";
+import { AI_STAGE_CONCURRENCY, mapConcurrent, writePrivateJsonExclusive } from "./qa-native.mjs";
 
 export async function reviewQaNative({ runDirectory, judgmentPath, integrityKey, cwd }, overrides = {}) {
   const loadExecution = overrides.loadExecution ?? loadValidatedExecution;
@@ -14,12 +14,11 @@ export async function reviewQaNative({ runDirectory, judgmentPath, integrityKey,
   const report = overrides.report ?? defaultReport;
   const { qaIr, archive, bundles } = loadExecution({ runDirectory, integrityKey, cwd });
   const judgments = loadJudgments({ runDirectory, judgmentPath, cwd, qaIr, bundles, requireComplete: true });
-  const reviews = [];
-  for (const { result, bundle } of judgments) {
+  const reviews = await mapConcurrent(judgments, AI_STAGE_CONCURRENCY, async ({ result, bundle }) => {
     const review = await reviewOne({ qaIr, bundle, manifest: archive.manifest, readBlob: archive.readBlob, judgeResult: result, reviewer });
     validateContract("JudgmentReview", review, { qaIr, judgeResult: result, evidenceBundle: bundle });
-    reviews.push(review);
-  }
+    return review;
+  });
 
   writePrivateJsonExclusive(relative(cwd, join(runDirectory, "review.json")), reviews, { cwd });
   const totals = reviews.reduce((counts, review) => ({ ...counts, [review.status]: counts[review.status] + 1 }), { APPROVED: 0, MANUAL_REVIEW: 0 });

@@ -9,7 +9,7 @@ import { createInMemoryEvidenceStore } from "../../evidence/index.mjs";
 import { judgeEvidence } from "../../judge/index.mjs";
 import * as provider from "../playwright.mjs";
 
-const { openPlaywrightBrowserToolGateway, playwrightBrowserToolCapabilities, runAdaptiveWithPlaywright } = provider;
+const { observeAdaptiveApplicabilityPage, openPlaywrightBrowserToolGateway, playwrightBrowserToolCapabilities, runAdaptiveWithPlaywright } = provider;
 
 function executionAgentInput() {
   return {
@@ -269,6 +269,16 @@ async function artifactText(gateway, bundle) {
 }
 
 describe("Playwright browser tool gateway", () => {
+  it("captures one bounded initial observation for applicability", async () => {
+    const fixture = fakeBrowser({ aria: '- heading "Items"' });
+
+    await expect(observeAdaptiveApplicabilityPage({ input: executionAgentInput(), browserType: fixture.browserType })).resolves.toMatchObject({
+      url: "https://example.test/dashboard",
+      aria: '- heading "Items"',
+    });
+    expect(fixture.browser.close).toHaveBeenCalledOnce();
+  });
+
   it("closes the browser when the adaptive proposer fails", async () => {
     const fixture = fakeBrowser();
 
@@ -363,6 +373,16 @@ describe("Playwright browser tool gateway", () => {
     expect(await artifactText(gateway, execution.bundle)).toContain("https://example.test/dashboard");
     expect(fixture.screenshots).toEqual([]);
 
+    await gateway.close();
+  });
+
+  it("omits an overlong element instead of failing the page observation", async () => {
+    const fixture = fakeBrowser({ elementText: "x".repeat(1_025) });
+    const gateway = await openGateway({ browserType: fixture.browserType });
+
+    const execution = await gateway.execute({ proposal: proposal(gateway.agentInput(), "observe_dom"), tokensUsed: 1 });
+
+    expect(execution.observation.elements).toEqual([]);
     await gateway.close();
   });
 

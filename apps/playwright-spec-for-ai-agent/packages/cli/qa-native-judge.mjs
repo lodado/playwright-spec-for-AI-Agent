@@ -3,23 +3,22 @@ import { validateContract } from "../contracts/index.mjs";
 import { judgeEvidence } from "../judge/index.mjs";
 import { createHermesSemanticJudge } from "../provider-hermes/index.mjs";
 import { loadValidatedExecution } from "./qa-native-result-set.mjs";
-import { CliError, writePrivateJsonExclusive } from "./qa-native.mjs";
+import { AI_STAGE_CONCURRENCY, CliError, mapConcurrent, writePrivateJsonExclusive } from "./qa-native.mjs";
 
 export async function judgeQaNative({ runDirectory, integrityKey, cwd, failOn }, overrides = {}) {
   const judge = overrides.judge ?? defaultHermesJudge();
   const reportVerdicts = overrides.reportVerdicts ?? defaultReportVerdicts;
   const { qaIr, archive, bundles } = loadValidatedExecution({ runDirectory, integrityKey, cwd });
-  const results = [];
-  const perScenario = [];
-  for (const bundle of bundles) {
+  const judged = await mapConcurrent(bundles, AI_STAGE_CONCURRENCY, async (bundle) => {
     const result = await judge({ qaIr, bundle, manifest: archive.manifest, readBlob: archive.readBlob });
     // The judge outcome fields are provider-controlled enumerations and redacted messages — safe
     // to surface, and the difference between a model outage and a protocol bug lives here.
     if (result?.type === "ERROR") throw new CliError(`QA judgment failed (scenario=${bundle.scenarioId}${result.code === undefined ? "" : ` code=${result.code}`}${result.message === undefined ? "" : ` message=${result.message}`})`);
     validateContract("JudgeResult", result, { qaIr, evidenceBundle: bundle });
-    results.push(result);
-    perScenario.push({ scenarioId: bundle.scenarioId, verdict: result.verdict, confidence: result.confidence });
-  }
+    return { result, summary: { scenarioId: bundle.scenarioId, verdict: result.verdict, confidence: result.confidence } };
+  });
+  const results = judged.map(item => item.result);
+  const perScenario = judged.map(item => item.summary);
   if (results.length === 0) throw new Error("QA evidence is empty");
 
   writePrivateJsonExclusive(relative(cwd, join(runDirectory, "judgment.json")), results, { cwd });

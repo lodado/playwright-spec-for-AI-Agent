@@ -13,7 +13,7 @@ const CONFIG_FILENAMES = [
 ];
 const DEFAULT_SPEC_DIR = "src/page/{page}/__tests__";
 const TOP_LEVEL_KEYS = new Set(["root", "specDir", "baseUrl", "pages"]);
-const PAGE_KEYS = new Set(["specDir", "baseUrl", "targetPath", "pageUrl"]);
+const PAGE_KEYS = new Set(["specDir", "baseUrl", "targetPath", "pageUrl", "scenario"]);
 
 let activeConfig;
 
@@ -60,8 +60,14 @@ export function resolveSpecFilesForPage(page, { readdir = readdirSync } = {}) {
 
 export function selectSpecFilesForPage(page, { readFile = readFileSync } = {}) {
   const files = resolveSpecFilesForPage(page);
-  const selected = files.filter(file => !parseAnnotations(readFile(file, "utf8")).liveSkip);
-  if (selected.length === 0) throw new Error(`page "${page}": all ${files.length} spec(s) are excluded by // @qa-live-skip: true`);
+  const expectedScenario = currentConfig().pages[page]?.scenario?.toUpperCase();
+  const candidates = files.map(file => ({ file, annotations: parseAnnotations(readFile(file, "utf8")) }));
+  const matching = candidates.filter(({ annotations }) => expectedScenario === undefined || annotations.alwaysRun || annotations.scenario?.trim().toUpperCase() === expectedScenario);
+  const selected = matching.filter(({ annotations }) => !annotations.liveSkip).map(({ file }) => file);
+  if (selected.length === 0) {
+    const reason = matching.length > 0 ? `all ${matching.length} matching spec(s) are excluded by // @qa-live-skip: true` : `no spec matches scenario "${expectedScenario}"`;
+    throw new Error(`page "${page}": ${reason}`);
+  }
   return selected;
 }
 

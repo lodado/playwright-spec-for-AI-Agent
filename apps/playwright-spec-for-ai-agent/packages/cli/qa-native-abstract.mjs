@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { ABSTRACT_PLAYWRIGHT_SPEC_VERSION, abstractPlaywrightSource } from "../abstract-playwright/index.mjs";
-import { extractStaticAuthority } from "../static-authority/index.mjs";
+import { collectStaticAuthority } from "../static-authority/index.mjs";
 import { canonicalHash } from "../contracts/index.mjs";
 import { createHermesFullSpecAbstractor, createHermesFullSpecReviewer } from "../provider-hermes/index.mjs";
 import { CliError, ensurePrivateQaDirectory, readBoundedSpec, readPrivateJson, writePrivateFileExclusive, writePrivateJsonExclusive } from "./qa-native.mjs";
@@ -13,7 +13,7 @@ export async function abstractQaNative({ specPath, specPaths, page, cwd }, overr
   const results = await abstractSpecInputs({ specPath, specPaths, page, cwd }, { ...overrides, progress: overrides.progress ?? defaultProgress });
   const report = overrides.report ?? defaultReport;
   report({ directory: abstractDirectory(page), results });
-  return results.every(result => result.artifact.status === "APPROVED") ? 0 : 1;
+  return results.length > 0 && results.every(result => result.artifact.status === "APPROVED") ? 0 : 1;
 }
 
 export async function abstractSpecInputs({ specPath, specPaths, sourceInputs, page, cwd }, overrides = {}) {
@@ -24,7 +24,9 @@ export async function abstractSpecInputs({ specPath, specPaths, sourceInputs, pa
   ensurePrivateQaDirectory(directory, { cwd });
   ensurePrivateQaDirectory(CACHE_DIRECTORY, { cwd });
   const rawInputs = sourceInputs ?? (specPaths ?? [specPath]).map(path => ({ sourcePath: relative(cwd, path), source: readBoundedSpec(path) }));
-  const inputs = rawInputs.map(input => ({ ...input, manifest: input.manifest ?? extractStaticAuthority(input) }));
+  const authority = collectStaticAuthority(rawInputs);
+  for (const rejected of authority.rejected) (overrides.reportSkipped ?? defaultReportSkipped)(rejected);
+  const inputs = authority.accepted;
   const results = [];
 
   for (const [index, input] of inputs.entries()) {
@@ -144,4 +146,8 @@ function defaultReport({ directory, results }) {
 
 function defaultProgress({ index, total, sourcePath }) {
   process.stdout.write(`qa-native: abstracting ${index + 1}/${total} ${JSON.stringify(sourcePath)}\n`);
+}
+
+function defaultReportSkipped({ sourcePath, reason }) {
+  process.stderr.write(`qa-native: skipped ${JSON.stringify(sourcePath)} — ${reason}\n`);
 }

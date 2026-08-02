@@ -5,6 +5,7 @@ export default {
   pages: {
     dashboard: {
       targetPath: "/dashboard",
+      scenario: "INACTIVE",
     },
     "account/settings": {
       specDir: "tests/settings",

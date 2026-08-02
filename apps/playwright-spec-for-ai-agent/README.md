@@ -21,7 +21,7 @@ independently reviews the judgment. The browser agent never declares PASS or
 FAIL.
 
 v3 is intentionally breaking. It has no AST semantic compiler, strict executor,
-provider/compiler/mode matrix, applicability preflight, v2 artifact reader,
+provider/compiler/mode matrix, separately persisted applicability phase, v2 artifact reader,
 partial recovery, remediation, or publication commands.
 
 ## Requirements
@@ -89,14 +89,15 @@ export default {
   specDir: "src/page/{page}/__tests__",
   baseUrl: "https://staging.example.com",
   pages: {
-    pricing: { targetPath: "/pricing" },
+    pricing: { targetPath: "/pricing", scenario: "INACTIVE" },
   },
 };
 ```
 
 Per-page `specDir`, `baseUrl`, `targetPath`, and `pageUrl` may override the
-defaults. v2 state selection, output, remediation, and publication settings are
-rejected instead of silently ignored.
+defaults. `scenario` selects specs whose code-owned `@qa-scenario` matches,
+plus any `@qa-always-run` spec. Legacy output, remediation, and publication
+settings are rejected instead of silently ignored.
 
 The stage commands use the same functions as `run` and exist only for debugging:
 
@@ -130,6 +131,11 @@ A fresh reviewer either returns corrected final tests or `MANUAL_REVIEW`.
 Approved results are cached by source, authority, model, and prompt hashes. There
 is no extractor/reviewer revision loop. Given is judge context and is never sent
 to the execution agent as an instruction; execution receives only When and Then.
+
+Before execution, runtime captures one bounded read-only URL/ARIA observation.
+AI compares it only with the extracted Given conditions, and only explicit
+`APPLICABLE` results execute. `NOT_APPLICABLE` and `AMBIGUOUS` results cannot
+grant policy or become verdicts and do not launch execution browsers.
 
 ## Runtime safety
 

@@ -6,6 +6,7 @@ QA Native v3 executes one AI-native, evidence-bound pipeline:
 Playwright source
   → static authority
   → reviewed Given/When/Then behavior
+  → initial-state applicability selection
   → policy-bounded Playwright runtime
   → sealed evidence
   → AI judgment
@@ -51,6 +52,11 @@ The extractor and independent reviewer produce exact test-ID coverage with
 Given/When/Then. Their output cannot contain policy, permissions, actions,
 selectors, fixture paths, executable code, or verdicts. An unchanged approved
 artifact is reused from `.qa/abstract/cache/`.
+
+Runtime then captures one bounded read-only URL/ARIA observation. A separate AI
+call compares it only with extracted Given conditions; only explicit
+`APPLICABLE` behaviors execute. `NOT_APPLICABLE` and `AMBIGUOUS` behaviors are
+reported and skipped without becoming authority or verdicts.
 
 ## Browser policy
 

@@ -81,6 +81,15 @@ export function playwrightBrowserToolCapabilities() {
   });
 }
 
+export async function observeAdaptiveApplicabilityPage({ input, browserName = "chromium", browserType, storageStatePath, authBootstrap, projectRoot } = {}) {
+  const gateway = await openPlaywrightBrowserToolGateway({ input, browserName, browserType, storageStatePath, authBootstrap, projectRoot });
+  try {
+    return await gateway.observeInitialPage();
+  } finally {
+    await gateway.close();
+  }
+}
+
 export async function openPlaywrightBrowserToolGateway({
   input,
   browserName = "chromium",
@@ -388,13 +397,24 @@ function invalidateGatewayObservations() {
       handles.clear();
     }
 
-    async function close() {
+  async function close() {
       if (closed) return;
       closed = true;
       await closeGatewayBrowser(browser);
-    }
+  }
 
-    return Object.freeze({ agentInput, capabilities, close, execute, readBlob: store.readBlob });
+  async function observeInitialPage() {
+    if (closed || failed || executing) throw new Error("browser gateway is unavailable");
+    executing = true;
+    try {
+      const captured = await captureGatewayPage(page, currentPage, initialInput.capabilityLease.allowedOrigins, { deadline, clock }, secrets);
+      return Object.freeze({ url: captured.page.url, aria: captured.aria });
+    } finally {
+      executing = false;
+    }
+  }
+
+  return Object.freeze({ agentInput, capabilities, close, execute, observeInitialPage, readBlob: store.readBlob });
   } catch (error) {
     closed = true;
     await closeGatewayBrowser(browser).catch(() => undefined);
@@ -451,14 +471,19 @@ async function observedAuthoredLocator(page, input, proposal, handles, timing) {
   return semanticLocator(page, milestone.target, { allowUnsupported: true });
 }
 
-// Adaptive evidence capture settles before sealing. SSR HTML can lack testids the client only attaches after
-// hydration, so evidence sealed at domcontentloaded misleads the judge. The page counts as
-// settled once it is fully loaded and the DOM stays quiet; the cap (core's observationSettleBudget)
-// keeps the wait bounded when an app mutates forever (carousels, polling). Never throws — under
-// budget pressure or an evaluate/navigation race the capture proceeds with the DOM as-is.
-async function settleDomForObservation(page, remainingMs) {
+// Evidence capture first waits for bounded network idle, then for DOM quiet. A DOM-only wait can
+// mistake the gap between SSR and a delayed data request for a settled page.
+export async function settleDomForObservation(page, remainingMs) {
   const budget = observationSettleBudget(remainingMs);
   if (budget === undefined) return;
+  const expiresAt = Date.now() + budget.capMs;
+  try {
+    await page.waitForLoadState("networkidle", { timeout: budget.capMs });
+  } catch {
+    // Polling pages may never become network-idle; use the remaining settle budget below.
+  }
+  const capMs = Math.max(0, expiresAt - Date.now());
+  if (capMs < budget.quietMs) return;
   try {
     await page.evaluate(({ capMs, quietMs }) => new Promise((resolve) => {
       let timer;
@@ -477,7 +502,7 @@ async function settleDomForObservation(page, remainingMs) {
       document.addEventListener("readystatechange", arm);
       setTimeout(finish, capMs);
       arm();
-    }), budget);
+    }), { capMs, quietMs: budget.quietMs });
   } catch {
     // Budget exhausted or evaluate raced a navigation; capture proceeds with the DOM as-is.
   }
@@ -589,7 +614,8 @@ async function observeGatewayElements({ page, input, currentPage, sequence, secr
         disabled: element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true",
       };
     }, GATEWAY_ELEMENT_TEXT_LIMIT));
-    if (!metadata || typeof metadata.text !== "string" || metadata.text.length > GATEWAY_ELEMENT_TEXT_LIMIT) throw new Error("gateway element metadata is invalid or truncated");
+    if (!metadata || typeof metadata.text !== "string") throw new Error("gateway element metadata is invalid");
+    if (metadata.text.length > GATEWAY_ELEMENT_TEXT_LIMIT) continue;
     const protectedValue = [metadata.accessibleName, metadata.text].some((value) => typeof value === "string" && secrets.some((secret) => secret.length > 0 && value.includes(secret)));
     const safe = !metadata.protected && !protectedValue && !metadata.semanticContainer && !metadata.anchor && !metadata.form && !metadata.editable && !metadata.disabled;
     const elementId = `element-${canonicalHash({ observationId, index }).slice("sha256:".length, "sha256:".length + 16)}`;

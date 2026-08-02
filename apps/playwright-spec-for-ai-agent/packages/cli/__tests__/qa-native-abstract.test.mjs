@@ -23,6 +23,17 @@ function provider(implementation, promptVersion) {
 }
 
 describe("qa-native abstract-ai", () => {
+  it("returns nonzero without invoking AI when no spec has static authority", async () => {
+    const { cwd, specPath } = fixture();
+    writeFileSync(specPath, 'test("unannotated", async () => {});\n');
+    const extract = provider(vi.fn(), "extract/1");
+    const reportSkipped = vi.fn();
+
+    expect(await abstractQaNative({ cwd, specPath }, { extract, review: provider(vi.fn(), "review/1"), report: vi.fn(), reportSkipped })).toBe(1);
+    expect(extract).not.toHaveBeenCalled();
+    expect(reportSkipped).toHaveBeenCalledWith(expect.objectContaining({ sourcePath: "dashboard.spec.ts" }));
+  });
+
   it("reports per-spec progress for execute callers too", async () => {
     const { cwd, specPath } = fixture();
     const progress = vi.fn();

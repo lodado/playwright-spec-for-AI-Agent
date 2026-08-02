@@ -25,7 +25,7 @@ function pageProject() {
   writeFileSync(join(specDir, "dashboard-always.spec.ts"), spec("ACTIVE", { alwaysRun: true }));
   writeFileSync(join(specDir, "dashboard-skip.spec.ts"), spec("INACTIVE", { liveSkip: true }));
   writeFileSync(join(specDir, "dashboard.helpers.ts"), "export const helper = 1;\n");
-  writeFileSync(join(cwd, "playwright-spec-for-ai-agent.config.mjs"), `export default { baseUrl: "https://agent-dev.test", pages: { dashboard: { targetPath: "/ko/dashboard" } } };\n`);
+  writeFileSync(join(cwd, "playwright-spec-for-ai-agent.config.mjs"), `export default { baseUrl: "https://agent-dev.test", pages: { dashboard: { targetPath: "/ko/dashboard", scenario: "INACTIVE" } } };\n`);
   return cwd;
 }
 
@@ -42,11 +42,11 @@ async function pageSpecPaths(cwd, extraArgs = []) {
 }
 
 describe("qa-native execute --page selection", () => {
-  it("runs every non-skipped page spec", async () => {
+  it("runs matching scenario specs plus always-run specs", async () => {
     const { exitCode, request } = await pageSpecPaths(pageProject());
     expect(exitCode).toBe(0);
     const names = request.specPaths.map((path) => path.split("/").at(-1)).sort();
-    expect(names).toEqual(["dashboard-active.spec.ts", "dashboard-always.spec.ts", "dashboard-inactive.spec.ts"]);
+    expect(names).toEqual(["dashboard-always.spec.ts", "dashboard-inactive.spec.ts"]);
     expect(request.pageTargetPath).toBe("/ko/dashboard");
   });
 
@@ -65,7 +65,7 @@ describe("qa-native execute --page selection", () => {
       stderr,
     });
     expect(exitCode).toBe(1);
-    expect(stderr.mock.calls[0][0]).toContain("all 1 spec(s) are excluded by // @qa-live-skip: true");
+    expect(stderr.mock.calls[0][0]).toContain("all 1 matching spec(s) are excluded by // @qa-live-skip: true");
   });
 
   it("resolves the configured base URL and lets --base-url override it", async () => {

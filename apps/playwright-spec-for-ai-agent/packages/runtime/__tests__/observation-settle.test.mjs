@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { OBSERVATION_SETTLE_POLICY, observationSettleBudget } from "../index.mjs";
+import { settleDomForObservation } from "../playwright.mjs";
 
 describe("observationSettleBudget", () => {
   it("caps at the policy maximum when the remaining budget is ample", () => {
@@ -23,5 +24,19 @@ describe("observationSettleBudget", () => {
 
   it("freezes the policy constant", () => {
     expect(Object.isFrozen(OBSERVATION_SETTLE_POLICY)).toBe(true);
+  });
+});
+
+describe("settleDomForObservation", () => {
+  it("waits for network idle before checking DOM quiet", async () => {
+    const page = {
+      waitForLoadState: vi.fn(async () => undefined),
+      evaluate: vi.fn(async () => undefined),
+    };
+
+    await settleDomForObservation(page, 10_000);
+
+    expect(page.waitForLoadState).toHaveBeenCalledWith("networkidle", { timeout: 5_000 });
+    expect(page.waitForLoadState.mock.invocationCallOrder[0]).toBeLessThan(page.evaluate.mock.invocationCallOrder[0]);
   });
 });

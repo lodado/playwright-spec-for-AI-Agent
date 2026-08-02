@@ -14,7 +14,11 @@ export function extractStaticAuthority({ source, sourcePath } = {}) {
   if (typeof source !== "string") throw new TypeError("source must be a string");
   if (typeof sourcePath !== "string" || sourcePath.length === 0) throw new TypeError("sourcePath must be a non-empty string");
   const parsed = parsePlaywrightSource(sourcePath, source);
-  if (!parsed.scenario || parsed.scenario.tests.length !== parsed.blocks.length) throw new TypeError("static authority requires an annotated Playwright scenario");
+  if (!parsed.scenario || parsed.scenario.tests.length !== parsed.blocks.length) {
+    const error = new TypeError("static authority requires an annotated Playwright scenario");
+    error.code = "STATIC_AUTHORITY_UNAVAILABLE";
+    throw error;
+  }
   const scenario = parsed.scenario;
   return {
     schemaVersion: PLAYWRIGHT_STATIC_MANIFEST_VERSION,
@@ -38,6 +42,20 @@ export function extractStaticAuthority({ source, sourcePath } = {}) {
       ...(test.fixtures ? { fixtures: structuredClone(test.fixtures) } : {}),
     })),
   };
+}
+
+export function collectStaticAuthority(sourceInputs) {
+  const accepted = [];
+  const rejected = [];
+  for (const input of sourceInputs) {
+    try {
+      accepted.push({ ...input, manifest: input.manifest ?? extractStaticAuthority(input) });
+    } catch (error) {
+      if (error?.code !== "STATIC_AUTHORITY_UNAVAILABLE") throw error;
+      rejected.push({ sourcePath: input.sourcePath, reason: error.message });
+    }
+  }
+  return { accepted, rejected };
 }
 
 function allowedPolicy(overrides) {
