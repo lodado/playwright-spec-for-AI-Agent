@@ -1,9 +1,8 @@
 import { COMPILE_RESULT_VERSION, DIAGNOSTIC_VERSION, PLAYWRIGHT_STATIC_MANIFEST_VERSION, QA_IR_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
 
-export const ABSTRACT_PLAYWRIGHT_SPEC_VERSION = "abstract-playwright-spec/0.7";
+export const ABSTRACT_PLAYWRIGHT_SPEC_VERSION = "behavioral-spec/3.0";
 const ABSTRACT_ADAPTER_VERSION = "0.3.0";
 const CLASSIFICATIONS = new Set(["LIVE_EXECUTABLE", "LIVE_JUDGMENT_ONLY", "MOCK_ONLY", "AMBIGUOUS"]);
-const MAX_REVISIONS = 3;
 
 export function countPlaywrightTestDeclarations(source) {
   if (typeof source !== "string") throw new TypeError("source must be a string");
@@ -31,18 +30,15 @@ export function normalizeFullSpecAbstraction(value, { source, manifest } = {}) {
   return { status: "ABSTRACTED", tests: staticManifest.tests.map(test => testsById.get(test.testId)) };
 }
 
-export function normalizeFullSpecReview(value) {
+export function normalizeFullSpecReview(value, { source, manifest } = {}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("full spec review must be an object");
-  if (Object.keys(value).some(key => !["status", "issues"].includes(key))) throw new TypeError("full spec review contains unsupported fields");
+  if (Object.keys(value).some(key => !["status", "tests", "reason"].includes(key))) throw new TypeError("full spec review contains unsupported fields");
   if (value.status === "APPROVED") {
-    if (value.issues !== undefined) throw new TypeError("approved full spec review cannot contain issues");
-    return { status: "APPROVED" };
+    if (value.reason !== undefined) throw new TypeError("approved full spec review cannot contain a reason");
+    return { status: "APPROVED", tests: normalizeFullSpecAbstraction({ status: "ABSTRACTED", tests: value.tests }, { source, manifest }).tests };
   }
-  if (value.status !== "REVISE" || !Array.isArray(value.issues) || value.issues.length === 0 || value.issues.length > 20) throw new TypeError("full spec review is invalid");
-  return {
-    status: "REVISE",
-    issues: value.issues.map(issue => boundedText(issue, 2_000, "full spec review issue")),
-  };
+  if (value.status !== "MANUAL_REVIEW" || value.tests !== undefined) throw new TypeError("full spec review is invalid");
+  return { status: "MANUAL_REVIEW", reason: boundedText(value.reason, 2_000, "full spec review reason") };
 }
 
 export async function abstractPlaywrightSource({ source, sourcePath, manifest, extract, review } = {}) {
@@ -51,45 +47,28 @@ export async function abstractPlaywrightSource({ source, sourcePath, manifest, e
   if (typeof extract !== "function" || typeof review !== "function") throw new TypeError("extract and review must be functions");
   const staticManifest = normalizeStaticManifest(manifest, { source, sourcePath });
   const sourceRecord = { path: sourcePath, contentHash: canonicalHash(source), manifestHash: canonicalHash(staticManifest), testCount: staticManifest.tests.length };
-  const attempts = [];
   let candidate;
   try {
     candidate = normalizeFullSpecAbstraction(await extract({ sourcePath, source, manifest: staticManifest }), { source, manifest: staticManifest });
   } catch (error) {
     if (!(error instanceof TypeError) && !(error instanceof SyntaxError)) throw error;
-    return manualArtifact(sourceRecord, attempts, validationFailure("Extractor", error));
+    return manualArtifact(sourceRecord, validationFailure("Extractor", error));
   }
-
-  for (let attempt = 0; attempt <= MAX_REVISIONS; attempt += 1) {
-    if (candidate.status === "MANUAL_REVIEW") return manualArtifact(sourceRecord, attempts, candidate.reason);
-    let decision;
-    try {
-      decision = normalizeFullSpecReview(await review({ sourcePath, source, manifest: staticManifest, candidate }));
-    } catch (error) {
-      if (!(error instanceof TypeError) && !(error instanceof SyntaxError)) throw error;
-      return manualArtifact(sourceRecord, attempts, validationFailure("Independent reviewer", error));
-    }
-    attempts.push({ candidateHash: canonicalHash(candidate), reviewStatus: decision.status, ...(decision.issues ? { issues: decision.issues } : {}) });
-    if (decision.status === "APPROVED") {
-      return {
-        schemaVersion: ABSTRACT_PLAYWRIGHT_SPEC_VERSION,
-        status: "APPROVED",
-        source: sourceRecord,
-        tests: candidate.tests,
-        attempts,
-      };
-    }
-    if (attempt < MAX_REVISIONS) {
-      try {
-        candidate = normalizeFullSpecAbstraction(await extract({ sourcePath, source, manifest: staticManifest, previousCandidate: candidate, reviewerIssues: decision.issues }), { source, manifest: staticManifest });
-      } catch (error) {
-        if (!(error instanceof TypeError) && !(error instanceof SyntaxError)) throw error;
-        return manualArtifact(sourceRecord, attempts, validationFailure("Revised extractor", error));
-      }
-    }
+  if (candidate.status === "MANUAL_REVIEW") return manualArtifact(sourceRecord, candidate.reason);
+  try {
+    const decision = normalizeFullSpecReview(await review({ sourcePath, source, manifest: staticManifest, candidate }), { source, manifest: staticManifest });
+    if (decision.status === "MANUAL_REVIEW") return manualArtifact(sourceRecord, decision.reason);
+    return {
+      schemaVersion: ABSTRACT_PLAYWRIGHT_SPEC_VERSION,
+      status: "APPROVED",
+      source: sourceRecord,
+      tests: decision.tests,
+      review: { candidateHash: canonicalHash(candidate), approvedHash: canonicalHash(decision.tests) },
+    };
+  } catch (error) {
+    if (!(error instanceof TypeError) && !(error instanceof SyntaxError)) throw error;
+    return manualArtifact(sourceRecord, validationFailure("Independent reviewer", error));
   }
-
-  return manualArtifact(sourceRecord, attempts, `Independent review did not approve the extracted spec after ${MAX_REVISIONS} revisions`);
 }
 
 export function compileAbstractPlaywrightArtifact({ artifact, manifest, source, sourcePath, revision } = {}) {
@@ -116,7 +95,7 @@ export function compileAbstractPlaywrightArtifact({ artifact, manifest, source, 
         sourcePath,
       ));
     }
-    const semantics = { applicability: test.given, when: test.when, claims: test.then, classification: test.classification };
+    const semantics = { given: test.given, when: test.when, then: test.then, classification: test.classification };
     const expectations = test.then.map((claim, claimIndex) => ({
       id: stableId("abstract-expectation", id, claimIndex, claim),
       kind: "SEMANTIC_CLAIM",
@@ -164,19 +143,16 @@ function normalizeAbstractedTest(value, index) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`abstracted test ${index} must be an object`);
   const keys = Object.keys(value);
   const gwt = ["given", "when", "then"];
-  const legacy = ["applicability", "when", "claims"];
-  const usesGwt = gwt.every(key => keys.includes(key)) && legacy.every(key => key === "when" || !keys.includes(key));
-  const usesLegacy = legacy.every(key => keys.includes(key)) && gwt.every(key => key === "when" || !keys.includes(key));
-  const allowed = usesGwt ? ["testId", ...gwt, "classification"] : usesLegacy ? ["testId", ...legacy, "classification"] : [];
+  const allowed = gwt.every(key => keys.includes(key)) ? ["testId", ...gwt, "classification"] : [];
   if (allowed.length === 0) throw new TypeError("abstracted test must contain exactly Given, When, Then semantics");
   if (keys.some(key => !allowed.includes(key))) throw new TypeError("abstracted test contains unsupported fields");
   const testId = boundedText(value.testId, 256, "abstracted testId");
   if (!CLASSIFICATIONS.has(value.classification)) throw new TypeError("abstracted test classification is invalid");
   return {
     testId,
-    given: boundedTextArray(value.given ?? value.applicability, 10, "abstracted test Given"),
+    given: boundedTextArray(value.given, 10, "abstracted test Given"),
     when: boundedTextArray(value.when, 20, "abstracted test when"),
-    then: boundedTextArray(value.then ?? value.claims, 20, "abstracted test Then", { nonEmpty: true }),
+    then: boundedTextArray(value.then, 20, "abstracted test Then", { nonEmpty: true }),
     classification: value.classification,
   };
 }
@@ -193,13 +169,12 @@ function boundedText(value, maxLength, label) {
   return normalized;
 }
 
-function manualArtifact(source, attempts, reason) {
+function manualArtifact(source, reason) {
   return {
     schemaVersion: ABSTRACT_PLAYWRIGHT_SPEC_VERSION,
     status: "MANUAL_REVIEW",
     source,
     tests: [],
-    attempts,
     reason,
   };
 }

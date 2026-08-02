@@ -1,232 +1,141 @@
-# AGENTS.md — canonical development guide
+# AGENTS.md — QA Native v3 development guide
 
-Read `apps/playwright-spec-for-ai-agent/ARCHITECTURE.md` before changing the QA
-Native pipeline. This file owns working rules and change matrices; the
-architecture document owns stage boundaries and compatibility behavior.
+This is the canonical development guide for
+`apps/playwright-spec-for-ai-agent`. Read that application's
+`ARCHITECTURE.md` before editing the pipeline. `CLAUDE.md` adds release rules;
+this file wins on implementation and validation behavior.
 
-## §0 Document-first development
+## Product direction
 
-1. Before editing pipeline code, read `apps/playwright-spec-for-ai-agent/ARCHITECTURE.md`
-   end to end and identify the owning stage, trust boundary, and compatibility rules.
-2. Search this file's §2 matrix and every caller/consumer named for that stage before editing.
-   Never change one side of a cross-layer contract in isolation.
-3. If an intentional change disagrees with the documented architecture, update
-   `ARCHITECTURE.md` first, then implement the smallest code diff that satisfies it. If the
-   disagreement is accidental, fix the code instead; never rewrite documentation to hide a
-   regression.
-4. Keep README, operator docs, examples, and CHANGELOG consistent with the architecture in the
-   same change.
-5. Before completion, walk the compatibility rules and run their tests. New AI/adaptive behavior
-   must not remove strict, AST, partial-run, old-artifact, blocked-policy, or sealed-evidence
-   behavior unless an explicit migration is documented and tested.
-
-This file is the canonical guide for working on `apps/playwright-spec-for-ai-agent`.
-When CLAUDE.md and this file differ, this file wins. Release/changeset rules stay in CLAUDE.md.
-
-The adaptive execution protocol is spread across six-plus modules. Changing one of them in
-isolation compiles fine and fails at runtime — that is exactly how the 2.3.0 regression shipped
-(the semantic milestone model landed in core/judge/remediation but not in the evidence validator,
-which then rejected the runtime's own output and the failure path deleted the evidence).
-§2 is the map of what must move together.
-
-## §1 Architecture map
+QA Native v3 is intentionally breaking and AI-native:
 
 ```text
-spec (.spec.ts)
-  → scripts/playwright-ast-parser.mjs          TS AST → syntax blocks
-  → scripts/dashboard-spec-parser.mjs          @qa-scenario / @qa-live-policy annotations → scenario + policy
-  → packages/adapter-playwright/index.mjs      immutable static manifest: identity, policy, fixtures,
-                                               safe authored targets, diagnostics
-  → packages/provider-hermes/index.mjs         full-spec Given/When/Then extraction + independent review
-  → packages/abstract-playwright/index.mjs     static manifest + approved semantics → QA IR
-       ↔ private cache                         .qa/abstract/cache/<content-key>.json
-  → packages/cli/qa-native-execute.mjs         one read-only live applicability preflight;
-                                               NOT_APPLICABLE is recorded, ambiguous still executes
-  → packages/core/index.mjs                    strict: createExecutionPlan
-                                               adaptive: createAdaptiveExecutionInput,
-                                               createAdaptiveActionAuthorizer, advanceAdaptiveMilestone,
-                                               milestoneCompletionRule, DEFAULT_ADAPTIVE_BUDGET
-  → packages/provider-playwright/index.mjs     strict executor + adaptive browser-tool gateway
-       ↑ proposals from                        (action switch, audit sealing, origin/network policy)
-  packages/provider-hermes/index.mjs           Hermes proposer/judge prompts, EXECUTION_PROMPT_VERSION
-  → packages/evidence/index.mjs                sealing, HMAC, redaction, archive read/write
-  → packages/cli/qa-native-adaptive-evidence.mjs   evidence integrity validator (execute + judge)
-  → packages/judge/index.mjs                   sealed evidence → verdict (semantic branch)
-  → packages/review/index.mjs                  judgment + sealed evidence → independent approval/revision
-  → packages/remediation/index.mjs             diagnosis, repair recommendation, patch proposals
-  → packages/repository-provider/index.mjs     repo snapshot, locateCode
-  → packages/reporter-markdown/index.mjs / packages/reporter-github/index.mjs   render / publish
-
-CLI shell: packages/cli/qa-native.mjs (paths, keys, options) + bin entry, with per-command
-handlers packages/cli/qa-native-execute.mjs, packages/cli/qa-native-judge.mjs,
-packages/cli/qa-native-report.mjs, packages/cli/qa-native-remediate.mjs,
-packages/cli/qa-native-publish-issue.mjs, packages/cli/qa-native-propose-patch.mjs.
+spec → static-authority → abstract-ai → runtime → evidence → judge → review → report
 ```
 
-Per-module responsibility, consumers, and change constraints:
+Do not preserve or recreate v2 compatibility. The default pipeline has no AST
+semantic compiler, strict executor, compiler/provider matrix, applicability AI,
+deterministic semantic judge, old artifact reader, remediation, or publication.
 
-| Module                                                                       | Responsibility                                                                                                                                                                                                                    | Imported by                                                                          | Change constraints                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/contracts/index.mjs`                                               | Every schema; `validateContract` / `snapshotContract` / `canonicalHash`; schema version constants; **`ACTION_SPECS` — the single action vocabulary**; **`auditArtifactShape` — the single audit artifact shape**                  | practically everything                                                               | Field changes = schemaVersion bump + old-artifact read compatibility + HMAC surface review. Run the "contracts field" matrix row. Action or artifact-shape changes go in `ACTION_SPECS` / `auditArtifactShape` here — consumers derive, never re-copy.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `packages/core/index.mjs`                                                    | Execution planning; adaptive input/authorizer/milestone transitions; **`milestoneCompletionRule` — the single definition of milestone completion**; **`observationSettleBudget` — the single observation-settle policy**; budgets | `packages/cli/qa-native-execute.mjs`, `packages/provider-playwright/index.mjs`       | Completion semantics or budget shape changes trigger their matrix rows. Action vocabulary now lives in contracts `ACTION_SPECS` (derive, never fork). The completion rule is a necessary-condition contract for the validator — never fork it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `packages/evidence/index.mjs`                                                | In-memory store, archive read/write, `verifyStoredEvidence`, `redactSensitiveText`                                                                                                                                                | judge, both providers, remediation, reporters, repository-provider, all CLI commands | Sealing-format changes must keep old runs re-readable and respect the `.invalid` preservation path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `packages/adapter-playwright/index.mjs`                                      | Spec compilation → QA IR; diagnostics (`testIndex`); blocked/semantic extensions                                                                                                                                                  | `packages/cli/qa-native-execute.mjs`                                                 | Policy or diagnostics changes must round-trip with `scripts/dashboard-spec-parser.mjs`. Compilation failures stay fail-closed per scenario.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `packages/abstract-playwright/index.mjs`                                     | Compose immutable static authority with independently reviewed Given/When/Then AI semantics                                                                                                                                       | abstract/execute CLI                                                                 | AI output may describe Given initial conditions, When flow, and Then claims; it must never add policy, fixtures, selectors, actions, or verdicts. Compilation maps those fields onto the existing QA IR semantics for old-run compatibility. Cache inputs include source, manifest, model, prompt, and reviewer identity.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `packages/provider-playwright/index.mjs`                                     | Strict executor and the adaptive browser-tool gateway (action switch, audit sealing, lease enforcement)                                                                                                                           | `packages/cli/qa-native-execute.mjs`                                                 | Adding/removing an action = edit `ACTION_SPECS` in contracts; the gateway derives its guard from `ADAPTIVE_ACTIONS` and its seal from `auditArtifactShape`. The startup navigation rewrites the first page URL — coupled to the validator's first-audit baseline. `report_blocked`'s extra VISIBLE_TEXT artifact is declared once in `ACTION_SPECS.extraArtifacts`, so seal and check agree by construction. File upload runs in both strict (`UPLOAD` interact node) and adaptive (`upload_observed_element` action, gated on an upload milestone's author-designated `@qa-fixture`); both resolve the file through `resolveFixtureFile`, which pins it inside the project root (no symlink escape, size cap) before `setInputFiles`. The agent picks the element, never the file. Default execution mode is adaptive. |
-| `packages/provider-hermes/index.mjs`                                         | Hermes extraction, applicability, proposer, semantic-judge, and reviewer transports/prompts                                                                                                                                       | abstract/execute/judge/review/remediation CLI                                        | Bump the matching prompt version for every prompt change. Prompts advise; static manifests and runtime authorizers enforce. Provider transport must not own verdict orchestration; CLI composes it with `judgeEvidence`. Applicability failure must preserve execute-all coverage.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `packages/judge/index.mjs`                                                   | Sealed evidence → provisional verdict; semantic scenario branch                                                                                                                                                                   | `packages/provider-hermes/index.mjs`, `packages/cli/qa-native-judge.mjs`             | Never promote an agent claim to a verdict. `.invalid` runs are unreadable by construction (path guard).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `packages/review/index.mjs`                                                  | Independent judgment/evidence grounding review                                                                                                                                                                                    | `packages/cli/qa-native-review.mjs`                                                  | Reviewer may reject a judgment but never grant policy or replace the verdict.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `packages/cli/qa-native-adaptive-evidence.mjs`                               | Adaptive evidence integrity validator (used by execute and judge)                                                                                                                                                                 | `packages/cli/qa-native-execute.mjs`, `packages/cli/qa-native-judge.mjs`             | Completion logic lives in core's `milestoneCompletionRule`; this file must not grow its own copy. This was the epicenter of the 2.3.0 regression.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `packages/cli/qa-native.mjs`                                                 | `resolvePrivateQaPath` (including `.invalid` quarantine), exclusive create/read/write, CLI options/usage                                                                                                                          | every CLI handler + bin                                                              | Never loosen path rules. Option changes = "CLI options" matrix row.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `packages/remediation/index.mjs`                                             | `diagnoseFailure` / `recommendRepair` / patch proposals / fingerprints                                                                                                                                                            | reporters, CLI report/remediate/propose-patch                                        | New failure origins must reach reporter rendering and the docs tables.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `packages/repository-provider/index.mjs`                                     | Repository snapshot, `locateCode`                                                                                                                                                                                                 | `packages/cli/qa-native-report.mjs`                                                  | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `packages/reporter-markdown/index.mjs`, `packages/reporter-github/index.mjs` | Render reports / publish GitHub issues                                                                                                                                                                                            | CLI report / publish-issue                                                           | Published output must never contain secrets or claims-as-verdicts.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `scripts/playwright-ast-parser.mjs`, `scripts/dashboard-spec-parser.mjs`     | AST parsing; annotation/policy extraction                                                                                                                                                                                         | `packages/adapter-playwright/index.mjs`                                              | New `@qa-live-policy` values = "policy value" matrix row.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `scripts/hermes-runner.mjs`, `scripts/hermes-qa-project-config.mjs`          | Hermes CLI invocation and project config                                                                                                                                                                                          | provider-hermes, CLI propose-patch                                                   | External CLI contract (`--query` / `--max_turns`) — keep in sync with the runbook.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+## Document-first development
 
-## §2 Synchronization matrix
+1. Read `apps/playwright-spec-for-ai-agent/ARCHITECTURE.md` end to end before a
+   pipeline edit.
+2. Identify the owning stage and trust boundary before changing code.
+3. If behavior intentionally changes the architecture, update the architecture
+   first. Never rewrite documentation to hide a regression.
+4. Keep README and package metadata aligned with the same production path.
 
-Each row: what you change → everything you must check or change with it → what happened when a
-row was skipped.
+## Stage boundaries
 
-**Adaptive action vocabulary** (single source — `ACTION_SPECS` in `packages/contracts/index.mjs`)
-Add or change an action only in `ACTION_SPECS`; every consumer derives from it and needs no edit:
-core lease building / safe-recovery / milestone semantics (via `requiresPolicy` / `recovery` /
-`provesSemantic`), `ELEMENT_BOUND_ACTIONS`, the gateway guard (`ADAPTIVE_ACTIONS`), the proposal
-parameter validator (`params`), `auditArtifactShape` (`extraArtifacts`), and the hermes prompt
-version (hashes `ACTION_SPECS`). The per-action _value_ rules (URL shape, non-zero scroll, etc.)
-still live in `validateAdaptiveActionParameters` — their single authority. Two guards keep the
-derivations honest: the equivalence tests in `packages/contracts/__tests__/adaptive-contracts.test.mjs`
-lock the lease/recovery/element order, and a prose-sync test in
-`packages/provider-hermes/__tests__/provider-hermes.test.mjs` fails if a new action ships absent from
-the prompt. Only the hand-written prompt prose still needs a manual edit for a new action.
-Skipped historically: 2.3.0 — the validator kept its own copy and adaptive rejected its own runs;
-that copy no longer exists.
+| Stage | Owns | Must not own |
+| --- | --- | --- |
+| `contracts` | five persisted artifact shapes, IDs, hashes, limits | browser or AI behavior |
+| `static-authority` | test identity, source range, annotations, policy, fixture names | semantic expectations |
+| `abstract-ai` | reviewed Given/When/Then and cache | policy, actions, selectors, verdicts |
+| `ai-provider` | prompts and transport normalization | orchestration or authority |
+| `runtime` | budgets, capability authorization, Playwright I/O | PASS/FAIL decisions |
+| `evidence` | context-aware redaction, sealing, archive | product semantics |
+| `judge` | sealed evidence → provisional verdict | browser access or repair |
+| `review` | independent grounding approval | replacement verdicts |
+| `report` | pure local rendering | AI calls or repository mutation |
+| `cli` | the single composition root | duplicated domain rules |
 
-**Milestone model / completion semantics**
-→ ① `createAdaptiveExecutionInput` ② `advanceAdaptiveMilestone` ③ `milestoneCompletionRule`
-(single source — change it here, both runtime and validator follow) ④ judge semantic branch
-⑤ prompt milestone rules ⑥ the policy-matrix fixture suite.
-Artifact shape is no longer part of this row: the seal side (`captureGatewayArtifacts`) and the check
-side (`packages/cli/qa-native-adaptive-evidence.mjs`) both derive from `auditArtifactShape` in
-`packages/contracts/index.mjs`, so "five snapshots plus report_blocked's VISIBLE_TEXT" has one
-definition.
-Skipped: 2.3.0 — three concrete gaps: startup-navigation URL rewrite vs first-audit equality;
-sealed empty `satisfiedMilestoneIds` vs observe-only completion; `report_blocked`'s extra artifact
-vs the artifact count (this last one is now structurally prevented by the shared shape).
+Dependencies point toward earlier stages. `cli` alone composes the complete
+pipeline.
 
-**`@qa-live-policy` values**
-→ ① `scripts/dashboard-spec-parser.mjs` mapping ② `packages/adapter-playwright/index.mjs`
-`POLICY_BY_LIVE_RUN` + semantic/blocked branches ③ README/docs policy tables ④ example specs
-⑤ consumer-repo migration note.
-Skipped: a value known only to the parser silently degrades to `blocked-unknown`.
+## Trust rules
 
-**Diagnostics codes**
-→ ① emitting layer (parser diagnostics carry offsets → block mapping) ② adapter file-level vs
-test-level resolution (`testIndex`) ③ `--allow-partial` behavior.
-Skipped: 2.1.0 — missing `testIndex` neutralized `--allow-partial`.
+1. Policy authority comes only from `@qa-live-policy` and project config.
+2. The execution AI receives When and Then, never Given as an instruction.
+3. Model output cannot add origins, fixtures, selectors, files, actions, or
+   verdict authority.
+4. Runtime outcomes are claims until judge cites sealed evidence.
+5. Network methods and WebSockets are authorized per scenario policy and exact
+   leased origin.
+6. Fixture paths remain project-contained, no-follow, bounded files selected by
+   authored fixture name.
+7. Redaction is context-specific: URL, headers, structured JSON, and free text
+   use separate parsers. Do not create a universal sensitive-key predicate.
+8. Evidence failures are preserved as `<run>.invalid`; downstream commands
+   refuse invalid paths.
 
-**CLI options**
-→ ① `COMMAND_OPTIONS` + the `parseArgs` option schema in `packages/cli/qa-native.mjs`
-(both must list a new flag) ② usage/help text ③ README ④ `docs/qa-native-one-shot-runbook.md`.
-Skipped: `--help` drifts from reality; a flag added to `COMMAND_OPTIONS` but not the `parseArgs`
-schema fails as "invalid command arguments".
-`execute` takes exactly one spec source: `--spec=<file>` (needs `--base-url`) or `--page=<name>`.
-Page mode (`scripts/hermes-qa-project-config.mjs` `selectSpecFilesForPage`, imported lazily) runs the
-config-designated specs: `@qa-scenario == expectedScenario` (case-insensitive;
-`expectedSubscriptionStatus` is a legacy alias) ∪ `@qa-always-run` − `@qa-live-skip`, with
-base URL from `batch.defaultBaseUrl` and navigation rewritten
-to the per-page `targetPath` (`applyPageTarget` in `qa-native-execute.mjs`). No configured status =
-whole directory. `@qa-always-run` / `@qa-live-skip` are parsed by the shared `parseAnnotations` — do
-not fork that regex.
+## Working rules
 
-**Budget shape**
-→ ① `DEFAULT_ADAPTIVE_BUDGET` ② `--budget-*` flags ③ authorizer exhaustion checks ④ prompt
-`remainingBudget` description ⑤ docs.
-Skipped: a missing check is an infinite budget.
+1. Trace the affected stage end to end and search for an existing helper before
+   adding code.
+2. Fix the shared root cause, not one caller.
+3. Preserve unrelated worktree changes.
+4. Prefer deletion. No compatibility shim, speculative abstraction, or
+   one-implementation interface.
+5. Match surrounding naming and comment density.
+6. Every non-trivial branch ships with the smallest test that fails if broken.
+7. Consumer routes, origins, selectors, strings, product states, and counts are
+   evidence only. Never copy them into production defaults or prompts.
 
-**Hermes prompts**
-→ ① bump `EXECUTION_PROMPT_VERSION` ② if the change encodes a rule, verify the runtime authorizer
-actually enforces it (prompts advise, runtime enforces).
-Skipped: results become incomparable across runs.
+## CLI
 
-**Contracts fields**
-→ ① schemaVersion bump ② `validateContract` ③ old-artifact read compatibility (judge re-runs old
-runs) ④ HMAC surface changes.
-Skipped: previously sealed runs fail re-judgment. The validator keeps a legacy shim for 4-key
-audits (no `satisfiedMilestoneIds`) for exactly this reason.
-
-**Evidence deletion / failure paths**
-→ ① failure paths preserve, never delete (`preserveInvalidRun` → `<run-dir>.invalid`) ② the
-`.invalid` path guard in `resolvePrivateQaPath` ③ judge/report refusal of `.invalid`.
-Skipped: 2.2.0-era `rmSync` destroyed the only evidence of validation failures.
-
-**Browser network policy** (route interception, origin allowances, mutation/WebSocket handling)
-→ ① the scenario's compiled click policy is the single authority for network side effects
-② read-only scenarios allow only HTTP GET/HEAD; click-enabled scenarios allow every HTTP method
-and WebSocket only on exact leased origins ③ unleased origins remain blocked ④ pending route
-decisions drain before success is sealed ⑤ strict pre-interaction same-site GET/HEAD compatibility
-and docs network-policy sentences stay in sync.
-Skipped: v2.4 — same-origin-only reads aborted the consumer app's own auth/plans/credit calls;
-later global mutation/WebSocket blocking prevented valid policy-authorized workflows.
-
-**Timing / clock / wait-budget changes** (element observation waits, gateway deadlines,
-`withTimeout`, node timeout policy)
-→ ① repeated no-DEBUG runs against the consumer repo are the only valid verdict — `DEBUG=pw:api`
-and even the lightweight `QA_NATIVE_TRACE_TIMING=1` probe change scheduling enough to mask races
-(measured: trace-on 3/3 pass while no-DEBUG failed) ② every element-level wait must stay bounded
-below the node timeout and end as an observed fact, never as a run-killing timeout ③ the
-policy-matrix fixture suite ④ the observation-settle wait (strict OBSERVE and adaptive snapshot
-capture both wait for a quiet DOM before sealing) has one policy: `observationSettleBudget` in
-`packages/core/index.mjs`. Add or change a settle wait only through it — it clamps below the
-remaining budget and returns undefined (a no-op capture) under pressure, so a settle can never
-become a run-killing timeout.
-Skipped: v2.4-pre — `waitFor(visible)` and `locator.evaluate` used the full node timeout; hidden
-NOT_VISIBLE targets and detached elements killed the consumer strict one-shot (0/4 → 5/5 after
-bounding).
-
-**Deferred**: replacing the first-audit baseline exception with an explicit RUNTIME_NAVIGATION
-audit sealed by the gateway (root-cause fix for startup navigation). Requires an audit schema
-bump — run the "contracts fields" row when picked up.
-
-## §3 Invariants
-
-1. The execution agent never declares verdicts or milestone completion; `report_blocked` carries a
-   claim, judged later against sealed evidence — prompt-injection defense.
-2. Evidence is never deleted; failed-run evidence is the most valuable evidence. Failure paths
-   quarantine to `<run-dir>.invalid`.
-3. The only source of policy truth is the spec annotation (`@qa-live-policy`).
-4. Diagnostics are never swallowed: stderr always carries the failure category (a CliError message,
-   or an internal error's `.code` / class name), details (raw message + stack) behind
-   `QA_NATIVE_DEBUG`. The category is secret-safe; the raw message may embed evidence bytes, so it
-   stays gated.
-5. Compilation failures fail closed per scenario; `--allow-partial` skips, never guesses.
-6. `milestoneCompletionRule` acceptance is a necessary condition of runtime acceptance — the
-   validator may be more lenient than the live runtime (it lacks element handles), never stricter.
-7. New adaptive/AI stages are additive: strict mode, `--compiler=ast`, old authenticated artifacts,
-   blocked-policy handling, and `--allow-partial` keep their existing behavior unless a migration
-   is explicitly designed and tested.
-
-## §4 PR checklist (adaptive / compilation path changes)
-
-- [ ] Every applicable §2 matrix row walked.
-- [ ] `ARCHITECTURE.md` was read before implementation and updated first for any intentional stage,
-      ownership, trust-boundary, or compatibility change.
-- [ ] README, operator docs, examples, and CHANGELOG describe the same current behavior.
-- [ ] `packages/cli/__tests__/qa-native-adaptive-matrix.test.mjs` passes (all-complete /
-      report_blocked / budget-exhausted against `packages/cli/__tests__/fixtures/policy-matrix.spec.ts`).
-- [ ] Strict mode, `--compiler=ast`, old-artifact reads, and selector-failure execute-all fallback
-      still pass their compatibility tests.
-- [ ] For minor+ releases: one manual pass of `docs/qa-native-one-shot-runbook.md` (strict and
-      adaptive tracks) against real staging.
-- [ ] Changeset added and applied (see CLAUDE.md).
-
-## §5 Verification
+The production command is:
 
 ```bash
-cd apps/playwright-spec-for-ai-agent && pnpm test   # vitest run — the full gate
+qa-native run (--page=<name> | --spec=<file>) \
+  --run-dir=.qa/runs/<id> \
+  [--base-url=<url>] \
+  [--storage-state=<file>] \
+  [--allowed-origin=<origin>]
 ```
 
-There is no lint/typecheck script (the source is `.mjs`). Run the gate and report its actual
-output before claiming work is done. The file references in this document are checked by
-`packages/__tests__/agents-md-refs.test.mjs`.
+Individual stage commands may exist only as debugging entry points over the
+same functions. Do not add alternate compilers, providers, or execution modes.
+
+## Verification
+
+Run from `apps/playwright-spec-for-ai-agent`:
+
+```bash
+pnpm test
+```
+
+There is no separate lint/typecheck script because source is `.mjs`. Before
+completion also run:
+
+```bash
+git diff --check
+```
+
+Report actual output. Never claim green without running the command.
+
+## Required tests
+
+- one consumer-neutral spec → report vertical slice;
+- blocked policy launches neither browser nor execution AI;
+- read-only versus interaction network authority;
+- reviewed behavior has exact authority test-ID coverage;
+- reviewer correction cannot add authority fields;
+- URL/header/structured/text redaction boundaries;
+- judgment references only sealed evidence;
+- production overfitting scan.
+
+Tests remain colocated under each module's `__tests__/` directory.
+
+## Consumer page sweeps
+
+1. Never edit consumer tracked code during a QA sweep.
+2. Separate missing specs, policy skips, auth/environment failures, application
+   failures, and QA Native failures.
+3. Promote only consumer-neutral engine defects with a neutral regression test.
+4. Do not make a page pass using a product-specific branch.
+
+## Release
+
+This is a Changesets-managed pnpm monorepo. A published-package change requires
+a changeset and applied version bump. v3 is breaking, so the final package
+version must use a major changeset.
+
+Commit format:
+
+```text
+<type>(<scope>): <imperative lowercase subject>
+```
+
+Allowed types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`.

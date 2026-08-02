@@ -1,230 +1,119 @@
-# QA Native
+# QA Native v3 operator guide
 
-QA Native is the evidence-driven runtime shipped with `playwright-spec-for-ai-agent`. It compiles annotated Playwright intent, runs a bounded browser session, seals the evidence, judges it later without a browser, and can prepare reviewable remediation artifacts.
+QA Native v3 executes one AI-native, evidence-bound pipeline:
 
-> QA Native currently supports macOS and Linux. Windows is not supported because private run artifacts rely on POSIX file and directory modes.
-
-## Prerequisites
-
-```bash
-npm install -D playwright-spec-for-ai-agent @playwright/test
-npx playwright install chromium
+```text
+Playwright source
+  → static authority
+  → reviewed Given/When/Then behavior
+  → policy-bounded Playwright runtime
+  → sealed evidence
+  → AI judgment
+  → independent grounding review
+  → Markdown report
 ```
 
-Generate and store a stable integrity key for authenticated run artifacts:
+## One-shot command
 
 ```bash
 export QA_NATIVE_INTEGRITY_KEY="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64'))")"
-```
 
-## Execute, judge, and review
-
-```bash
-npx qa-native execute \
-  --spec=tests/e2e/dashboard.spec.ts \
+npx qa-native run \
+  --spec=tests/e2e/account.spec.ts \
   --base-url=https://staging.example.com \
-  --run-dir=.qa/runs/dashboard-1
-
-npx qa-native judge --run-dir=.qa/runs/dashboard-1
-npx qa-native review --run-dir=.qa/runs/dashboard-1
+  --run-dir=.qa/runs/account-1
 ```
 
-After re-running `judge`, choose the completed set explicitly with
-`--judgment=judgments/<set-dir>` on both `review` and `report`; a single result
-JSON remains accepted for commands that intentionally target one judgment.
+Use `--page=<configured-name>` instead of `--spec` to select the specs, base URL,
+and target path from project config. A run directory is exclusive and must be a
+new path below `.qa/`.
 
-`execute` first performs one read-only applicability observation for approved abstract/adaptive specs. High-confidence conflicting scenarios are recorded as `NOT_APPLICABLE`; ambiguous or failed selection falls back to legacy execution. It then writes an authenticated evidence archive. `judge` runs deterministic checks first and sends only unresolved semantic expectations to Hermes in text-only mode. An entirely inapplicable executed scenario is `SKIP`, not `MANUAL_REVIEW`. `review` uses a fresh text-only invocation to reject judgments that are not grounded in their cited sealed evidence; AI-native reports require every review to be approved. Browser network access follows the compiled scenario policy: read-only scenarios allow `GET`/`HEAD` only, while click-enabled scenarios allow every HTTP method and WebSocket on exact leased origins. Strict pre-interaction reads retain same-site compatibility; `--allowed-origin` designates additional exact origins for side effects. Direct navigation and all unleased traffic remain blocked.
+## Stage debugging
 
-## AI-first full-spec abstraction
+`abstract`, `execute`, `judge`, `review`, and `report` are the same stages used
+by `run`; they do not expose alternate implementations.
 
 ```bash
-npx qa-native abstract-ai --page=dashboard
-npx qa-native execute --page=dashboard --run-dir=.qa/runs/dashboard-1
+npx qa-native abstract --page=account
+npx qa-native execute --page=account --run-dir=.qa/runs/account-1
+npx qa-native judge --run-dir=.qa/runs/account-1
+npx qa-native review --run-dir=.qa/runs/account-1
+npx qa-native report --run-dir=.qa/runs/account-1
 ```
 
-`abstract-ai` resolves the same config-selected specs as `execute`, asks one
-text-only model to extract every test as explicit Given (initial observable
-conditions), When (authored flow), and Then (observable claims), plus its live
-classification, then asks a fresh model invocation to review
-the candidate against the complete source and immutable manifest. It permits up to three reviewed revisions.
-Results are cached as owner-only JSON in `.qa/abstract/cache/` with Markdown
-views in `.qa/abstract/<page>/`;
-unchanged source and provider prompt/model versions make no model calls.
+## Authority and behavior
 
-Each extraction and independent-review batch contains at most eight tests. A
-timeout, invalid response envelope, or validation failure reduces only that
-failed batch until it succeeds or a single-test batch fails; successful batches
-are not repeated. A retryable single-test failure gets one final retry before
-the spec fails closed.
+The AST-backed static stage extracts only annotated identity, source range,
+policy, and fixture declarations. Missing authority fails closed. It does not
+interpret assertions or actions.
 
-Approved Given descriptions are compiled as applicability conditions and evaluated against one bounded live-page
-ARIA observation before per-scenario execution. The selector cannot grant
-policy or actions and receives no titles, claims, destination URLs, dialogs,
-toasts, or other post-action state. Only conditions that must already hold
-before the authored flow and can be established by read-only observation may
-form a conflict. Future mock responses and fixture identities stay in When or
-Then. Hidden API setup also stays out of Given when the rendered Then claim
-directly establishes the relevant product state. Given never presupposes the
-subject evaluated by Then, so a missing target remains judgeable. Only a complete
-`NOT_APPLICABLE` decision with confidence at
-least `0.8` skips execution; low-confidence, malformed, missing, or failed
-selection remains `AMBIGUOUS` and executes for backward-compatible coverage.
+The extractor and independent reviewer produce exact test-ID coverage with
+Given/When/Then. Their output cannot contain policy, permissions, actions,
+selectors, fixture paths, executable code, or verdicts. An unchanged approved
+artifact is reused from `.qa/abstract/cache/`.
 
-Hermes/adaptive execution defaults to `--compiler=abstract` for both `--page`
-and `--spec`. Use `--compiler=ast` only as the compatibility fallback. AI output never supplies policy,
-capabilities, selectors, actions, or verdicts. Only the code-owned static manifest's
-nearest test or enclosing-suite `@qa-live-policy` grants live authority; missing or
-unknown authority is blocked. `MOCK_ONLY` and `AMBIGUOUS` tests never become live PASS/FAIL scenarios.
+## Browser policy
 
-## Adaptive execution
+| Scenario capability | HTTP | WebSocket |
+| --- | --- | --- |
+| observe only | GET/HEAD on exact leased origins | blocked |
+| interaction | every method on exact leased origins | allowed on exact leased origins |
+| blocked | browser is not launched | blocked |
+
+The execution agent sees When and Then, proposes one bounded action at a time,
+and receives only opaque observed-element identities. It cannot name arbitrary
+selectors. Uploads resolve only code-owned `@qa-fixture` entries inside the
+project without following a symlink escape.
+
+Default per-scenario budgets are 32 actions, 32 turns, 300000 ms, and 100000
+tokens. Override them with `--budget-actions`, `--budget-turns`,
+`--budget-time-ms`, and `--budget-tokens`.
+
+## Evidence and quarantine
+
+Evidence is redacted, bounded, hashed, and HMAC authenticated. Its signed
+manifest binds `authority.json` and `behavior.json`, preventing artifact swaps.
+Pending browser route decisions are drained before sealing.
+
+After the browser starts, validation or sealing failure preserves the directory
+as `<run>.invalid`. No QA Native command reads an `.invalid` run. Before browser
+launch, failure removes the empty reservation when possible.
+
+## Authentication
+
+A Playwright storage state must stay inside the project and be owner-only:
 
 ```bash
-npx qa-native execute \
-  --spec=tests/e2e/dashboard.spec.ts \
+chmod 600 .private/storage-state.json
+npx qa-native run --spec=tests/e2e/account.spec.ts \
   --base-url=https://staging.example.com \
-  --run-dir=.qa/runs/dashboard-1 \
-  --provider=hermes --mode=adaptive
+  --storage-state=.private/storage-state.json \
+  --run-dir=.qa/runs/account-1
 ```
 
-### `@qa-live-policy` values
+An optional private `--auth-bootstrap` JSON may authorize an initial login URL,
+read origins, and exact mutation endpoints. After bootstrap, the active scenario
+policy completely replaces that temporary authority.
 
-The spec annotation is the only source of policy truth. Each test carries its own value:
+## Results
 
-| Annotation                                   | Compiled policy                   | Adaptive meaning                                                                                      |
-| -------------------------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `readonly`                                   | `executable-readonly`             | DOM-only observation; no clicks or typing.                                                            |
-| `safe-interaction`                           | `executable-interaction`          | Bounded interaction plus HTTP methods/WebSockets on exact leased origins.                             |
-| `safe-interaction-no-confirm`                | `judgment-interaction-no-confirm` | Interaction allowed, but verdicts come from semantic judgment (verifying on live would be dangerous). |
-| `mock-judgment`                              | `judgment-mock-api`               | Playwright mocks are skipped; the judge rules on live-DOM evidence semantically.                      |
-| `subscription-mutation`, `auth-mock`, `skip` | `blocked-*`                       | Statically blocked; skipped under `--allow-partial`, otherwise the file fails closed.                 |
+`judge` always uses sealed evidence and an AI semantic decision. Code validates
+contract coverage and every evidence citation; it does not substitute a
+deterministic semantic verdict. `review` is a separate model call that checks the
+judgment against the same bounded evidence projection. It returns `APPROVED` or
+`MANUAL_REVIEW` and cannot change the verdict.
 
-Scenarios whose policy starts with `judgment-` are recorded in
-`extensions.semanticJudgmentScenarioIds` and complete through an observe-only evidence milestone
-instead of per-expectation checks.
-
-### Budgets
-
-Each scenario gets an independent budget. Defaults: 32 actions, 32 turns, 300000 ms, 100000
-tokens. Override per run with `--budget-actions`, `--budget-turns`, `--budget-time-ms`,
-`--budget-tokens` (positive integers). A scenario that exhausts its budget seals the evidence it
-gathered and ends as `ERROR` with a `BUDGET_EXHAUSTED: …` reason; the run itself still exits 0 and
-reports the scenario on stderr.
-
-The execution prompt forbids unchanged observation loops: an affirmed
-applicability conflict or a still-absent authored target after one safe recovery
-must become an evidence-backed `report_blocked` claim instead of consuming the
-remaining budget.
-
-### `report_blocked` is a claim, not a verdict
-
-The execution agent may end a milestone with `report_blocked` plus a reason. That reason is only
-the agent's claim: the gateway seals the full visible page alongside it, and the judge rules on
-that sealed evidence later. Nothing the agent writes can become a verdict directly.
-
-### Quarantined runs (`<run-dir>.invalid`)
-
-If the sealed evidence fails integrity validation after an adaptive run, the run directory is not
-deleted — it is renamed to `<run-dir>.invalid` with the evidence archive inside, and
-`qa-native: invalid run evidence preserved at …` is printed to stderr. Every qa-native
-command refuses to read `.invalid` paths, so a rejected run can never become a verdict or a
-report. Inspect it manually, then delete it when you are done debugging.
-
-## Authenticated pages
-
-Prefer a Playwright `storageState` file created outside QA Native. It is passed only to the browser context and is never copied into the run directory, evidence archive, or run envelope.
-The file must remain inside the workspace and be owner-only (`chmod 600 .private/enterprise-session.json`).
-
-```bash
-npx qa-native execute \
-  --spec=tests/e2e/dashboard.spec.ts \
-  --base-url=https://staging.example.com \
-  --storage-state=.private/enterprise-session.json \
-  --run-dir=.qa/runs/dashboard-1
-```
-
-For an automatic SSO or session-refresh page, add an opt-in bootstrap file instead of weakening normal runtime policy:
-
-```json
-{
-  "url": "https://staging.example.com/login",
-  "allowedOrigins": ["https://login.example-idp.com"],
-  "allowedEndpoints": [
-    {
-      "origin": "https://staging.example.com",
-      "path": "/api/auth/session",
-      "methods": ["POST"]
-    }
-  ]
-}
-```
-
-Pass it with `--auth-bootstrap=.private/auth-bootstrap.json`. During bootstrap, only `GET`/`HEAD` requests to the listed origins and the exact non-GET endpoints above are allowed. Once its page finishes loading, the active scenario policy and leased origins take over. Do not put credentials, cookies, tokens, or query strings in this file.
-
-## Create a repository-aware report
-
-```bash
-npx qa-native report \
-  --run-dir=.qa/runs/dashboard-1 \
-  --repository-root=. \
-  --revision=HEAD
-```
-
-The report pins `HEAD` to an exact commit before locating likely files and line ranges.
-
-## Propose and verify a patch
-
-```bash
-npx qa-native propose-patch \
-  --run-dir=.qa/runs/dashboard-1 \
-  --repository-root=. \
-  --revision=HEAD
-
-npx qa-native verify-patch \
-  --run-dir=.qa/runs/dashboard-1 \
-  --repository-root=. \
-  --revision=HEAD
-```
-
-Proposal generation never edits the caller's workspace. Verification applies the saved proposal only in a private worktree and runs trusted `format`, `lint`, `typecheck`, `unit`, and `playwright` commands configured under `remediation.verification.checks`.
-
-Missing, failed, timed-out, output-limited, patch-mutating, or network-dependent checks never become an implicit pass.
-
-## Publish an Issue or Draft PR
-
-Create and store a stable publication key:
-
-```bash
-export QA_NATIVE_PUBLICATION_KEY="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64'))")"
-```
-
-Run or resume the complete remediation state machine:
-
-```bash
-npx qa-native remediate \
-  --run-dir=.qa/runs/dashboard-1 \
-  --repository-root=. \
-  --repository=owner/repository \
-  --publish=auto
-
-npx qa-native publish \
-  --run-dir=.qa/runs/dashboard-1 \
-  --repository-root=. \
-  --repository=owner/repository \
-  --publish=auto
-```
-
-Only an eligible patch that passes deterministic verification, improves the authenticated scenario, preserves expectation strength, and receives independent review can become a Draft PR. Unsafe or inconclusive cases fall back to an evidence-backed Issue or manual review. QA Native has no merge or auto-merge path.
-
-## Artifact layout
+The final layout is:
 
 ```text
-.qa/runs/<run-id>/
-├── execution/
+.qa/runs/<id>/
+├── authority.json
+├── behavior.json
 ├── evidence/
-├── judgments/
-├── reviews/
-├── reports/
-└── remediation/<proposal-id>/
+├── judgment.json
+├── review.json
+└── report.md
 ```
 
-Keep `.qa/` private. It may contain screenshots, traces, paths, and staging evidence even though secrets and unsafe publication payloads are filtered.
+Keep `.qa/` private even though redaction is enforced; screenshots and traces may
+still contain sensitive business context.

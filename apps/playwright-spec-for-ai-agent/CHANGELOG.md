@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.0.0
+
+### Major Changes
+
+- Replace the v2 compiler and execution matrix with one evidence-bound AI-native pipeline.
+- Persist only authority, behavior, evidence, judgment, review, and report artifacts.
+- Replace legacy state/remediation config with the v3 page source, URL, and target schema.
+
+## 2.10.4
+
+### Patch Changes
+
+- Harden adaptive page sweeps across abstraction review, action normalization, startup URLs, and evidence persistence.
+
 ## 2.10.3
 
 ### Patch Changes

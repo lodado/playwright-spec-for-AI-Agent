@@ -188,7 +188,17 @@ describe("adaptive execution contracts", () => {
 
     const credentialUrl = executionAgentInput();
     credentialUrl.currentPage.url = "https://example.test/dashboard?access_token=secret";
-    expect(() => validateContract("ExecutionAgentInput", credentialUrl)).toThrow(/query/);
+    expect(() => validateContract("ExecutionAgentInput", credentialUrl)).toThrow(/sensitive query/);
+
+    for (const key of ["auth", "authentication", "credential", "signature", "sig", "sid", "PHPSESSID", "_csrf", "client_assertion", "jwt", "code", "state", "oauth_code", "oauth[state]", "saml_response", "saml[assertion]", "login_ticket", "otp", "nonce"]) {
+      const sensitiveUrl = executionAgentInput();
+      sensitiveUrl.currentPage.url = `https://example.test/dashboard?${key}=secret`;
+      expect(() => validateContract("ExecutionAgentInput", sensitiveUrl)).toThrow(/sensitive query/);
+    }
+
+    const benignUrl = executionAgentInput();
+    benignUrl.currentPage.url = "https://example.test/dashboard?status=complete";
+    expect(validateContract("ExecutionAgentInput", benignUrl)).toBe(benignUrl);
   });
 
   it("requires runtime-owned budgets to decrease monotonically", () => {

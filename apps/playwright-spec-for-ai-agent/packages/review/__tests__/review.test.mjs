@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { compilePlaywrightSpec } from "../../adapter-playwright/index.mjs";
+import { compilePlaywrightSpec } from "../../__tests__/fixtures/compile-playwright-spec.mjs";
 import { JUDGE_RESULT_VERSION, PROVIDER_CAPABILITIES_VERSION, canonicalHash, validateContract } from "../../contracts/index.mjs";
 import { createInMemoryEvidenceStore } from "../../evidence/index.mjs";
 import { reviewJudgment } from "../index.mjs";
@@ -9,7 +9,7 @@ describe("independent judgment review", () => {
   it("binds an independent approval to the judgment and sealed evidence", async () => {
     const qaIr = compilePlaywrightSpec({ source: source(), sourcePath: "dashboard.spec.ts" }).qaIr;
     const scenario = qaIr.suites[0].scenarios[0];
-    scenario.semantics = { applicability: ["the dashboard route is loaded"], when: ["the dashboard is observed"], claims: ["Welcome Dashboard is visible"], classification: "LIVE_EXECUTABLE" };
+    scenario.semantics = { given: ["the dashboard route is loaded"], when: ["the dashboard is observed"], then: ["Welcome Dashboard is visible"], classification: "LIVE_EXECUTABLE" };
     scenario.steps.unshift({ id: "navigate-dashboard", kind: "NAVIGATE", milestoneClass: "REQUIRED_SEMANTIC_MILESTONE", target: { type: "PATH", value: "/dashboard" } });
     const expectation = scenario.expectations[0];
     const store = createInMemoryEvidenceStore({ providerCapabilities: { schemaVersion: PROVIDER_CAPABILITIES_VERSION, providerId: "fixture", actions: [], evidence: ["VISIBLE_TEXT"] } });
@@ -40,10 +40,10 @@ describe("independent judgment review", () => {
   });
 
   it("preserves material review issues instead of promoting the judge verdict", async () => {
-    const reviewer = async () => ({ status: "REVISE", issues: ["The cited evidence does not prove the negative claim."] });
+    const reviewer = async () => ({ status: "MANUAL_REVIEW", issues: ["The cited evidence does not prove the negative claim."] });
     reviewer.identity = { provider: "fixture", model: "reviewer" };
     reviewer.promptVersion = "review/1";
-    await expect(reviewFixture(reviewer)).resolves.toMatchObject({ status: "REVISE", issues: ["The cited evidence does not prove the negative claim."] });
+    await expect(reviewFixture(reviewer)).resolves.toMatchObject({ status: "MANUAL_REVIEW", issues: ["The cited evidence does not prove the negative claim."] });
   });
 });
 

@@ -1,11 +1,10 @@
 import { JUDGMENT_REVIEW_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
-import { buildSemanticJudgeInput, evaluateDeterministically } from "../judge/index.mjs";
+import { buildSemanticJudgeInput } from "../judge/index.mjs";
 
 export async function reviewJudgment({ qaIr, bundle, manifest, readBlob, judgeResult, reviewer } = {}) {
   if (typeof reviewer !== "function") throw new TypeError("reviewer must be a function");
   validateContract("JudgeResult", judgeResult, { qaIr, evidenceBundle: bundle });
-  const evaluation = evaluateDeterministically({ qaIr, bundle, manifest, readBlob });
-  const semanticInput = buildSemanticJudgeInput({ qaIr, bundle, manifest, readBlob, evaluation });
+  const semanticInput = buildSemanticJudgeInput({ qaIr, bundle, manifest, readBlob });
   const scenario = qaIr.suites.flatMap((suite) => suite.scenarios).find((item) => item.id === bundle.scenarioId);
   const input = {
     qaIrId: qaIr.id,
@@ -39,8 +38,8 @@ export function normalizeJudgmentReviewDecision(value) {
     if (value.issues !== undefined) throw new TypeError("approved judgment review cannot contain issues");
     return { status: "APPROVED" };
   }
-  if (!["REVISE", "MANUAL_REVIEW"].includes(value.status) || !Array.isArray(value.issues) || value.issues.length === 0 || value.issues.length > 20) throw new TypeError("judgment review decision is invalid");
-  return { status: value.status, issues: value.issues.map((issue) => boundedText(issue)) };
+  if (value.status !== "MANUAL_REVIEW" || !Array.isArray(value.issues) || value.issues.length === 0 || value.issues.length > 20) throw new TypeError("judgment review decision is invalid");
+  return { status: "MANUAL_REVIEW", issues: value.issues.map((issue) => boundedText(issue)) };
 }
 
 function reviewerRecord(reviewer) {

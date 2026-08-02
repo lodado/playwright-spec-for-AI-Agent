@@ -11,8 +11,10 @@ import {
 import { dirname, join, resolve } from "node:path";
 import {
   EVIDENCE_BUNDLE_VERSION,
+  EVIDENCE_ARCHIVE_LIMITS,
   EVIDENCE_MANIFEST_VERSION,
   canonicalHash,
+  isSensitiveQueryKey,
   validateContract,
 } from "../contracts/index.mjs";
 
@@ -24,11 +26,12 @@ const REDACTION_RULES = Object.freeze([
   "supplied-value/0.1",
 ]);
 
-const CREDENTIAL_PATTERN =
-  /["']?\b(access[_-]?token|refresh[_-]?token|id[_-]?token|[a-z0-9_-]*token|session(?:[_-]?id)?|api[_-]?key|client[_-]?secret|password|passwd|secret)\b["']?(\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,}&]+)/gi;
+const CREDENTIAL_CANDIDATE_PATTERN =
+  /(?=(?<![a-z0-9_])(?<!\/\/)(["']?[_a-z][a-z0-9_\-[\]]*["']?)(\s*(?:=(?!=)|:(?!\/\/))\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,}&"']+))/gi;
 const AUTHORIZATION_PATTERN = /(["']?\b(?:proxy[-_\s]?)?authorization\b["']?\s*(?::|=|,\s*))(?:(?:"[^"\r\n]*"|'[^'\r\n]*')|[^\r\n,\]}]+)/gi;
 const COOKIE_PATTERN = /(["']?\b(?:set[-_\s]?)?cookie\b["']?\s*(?::|=|,\s*))(?:(?:"[^"\r\n]*"|'[^'\r\n]*')|[^\r\n,\]}]+)/gi;
 const URL_USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s\/@]*@/gi;
+const EMBEDDED_HTTP_URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+/gi;
 const HIGH_CONFIDENCE_TOKEN_PATTERN = /\b(?:gh[pousr]_[a-z0-9]{20,}|npm_[a-z0-9]{20,}|sk-(?:proj-)?[a-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9a-z_-]{35}|xox[baprs]-[a-z0-9-]{10,}|eyJ[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,})\b/gi;
 const HIGH_ENTROPY_QUOTED_PATTERN = /(["'])([a-z0-9+\/_-]{40,}={0,2})\1/gi;
 const BINARY_ARTIFACT_TYPES = new Set(["SCREENSHOT", "TRACE"]);
@@ -36,8 +39,8 @@ const MAX_ARCHIVE_METADATA_BYTES = 4 * 1024 * 1024;
 const MAX_ARCHIVE_TOTAL_METADATA_BYTES = 16 * 1024 * 1024;
 const MAX_ARCHIVE_BLOB_BYTES = 64 * 1024 * 1024;
 const MAX_ARCHIVE_TOTAL_BLOB_BYTES = 256 * 1024 * 1024;
-const MAX_ARCHIVE_CHECKPOINTS = 128;
-const MAX_ARCHIVE_ARTIFACTS = 1024;
+const MAX_ARCHIVE_CHECKPOINTS = EVIDENCE_ARCHIVE_LIMITS.checkpoints;
+const MAX_ARCHIVE_ARTIFACTS = EVIDENCE_ARCHIVE_LIMITS.artifacts;
 const MAX_ARCHIVE_JSON_DEPTH = 64;
 
 export function createInMemoryEvidenceStore({
@@ -230,6 +233,40 @@ export function createInMemoryEvidenceStore({
 export function redactSensitiveText(value, secrets = []) {
   if (typeof value !== "string") throw new TypeError("redacted value must be a string");
   return redactString(value, [...secrets].filter(Boolean).map(String)).value;
+}
+
+export const redactText = redactSensitiveText;
+
+export function redactUrl(value) {
+  if (typeof value !== "string") throw new TypeError("URL redaction requires a string");
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return value;
+  }
+  if (!["http:", "https:"].includes(url.protocol)) return value;
+  let changed = false;
+  if (url.username || url.password) {
+    url.username = "[REDACTED]";
+    url.password = "";
+    changed = true;
+  }
+  for (const key of [...url.searchParams.keys()]) {
+    if (!isSensitiveQueryKey(key)) continue;
+    url.searchParams.set(key, "[REDACTED]");
+    changed = true;
+  }
+  return changed ? url.href : value;
+}
+
+export function redactHeaders(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("header redaction requires an object");
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, /^(?:proxy-)?authorization$|^(?:set-)?cookie$/i.test(key) ? "[REDACTED]" : child]));
+}
+
+export function redactStructured(value, secrets = []) {
+  return redact(value, [...secrets].filter(Boolean).map(String)).value;
 }
 
 export function verifyStoredEvidence({ bundle, manifest, readBlob }) {
@@ -546,7 +583,7 @@ function artifactRefs(value) {
 function redact(value, secrets) {
   if (typeof value === "string") return redactString(value, secrets);
   if (Array.isArray(value)) {
-    if (typeof value[0] === "string" && isSensitiveKey(value[0]) && value.length > 1) {
+    if (typeof value[0] === "string" && isSensitiveStructuredKey(value[0]) && value.length > 1) {
       const tail = value.slice(2).map((item) => redact(item, secrets));
       return {
         value: [value[0], "[REDACTED]", ...tail.map((item) => item.value)],
@@ -559,7 +596,7 @@ function redact(value, secrets) {
   if (value && typeof value === "object") {
     const entries = Object.entries(value).map(([key, child]) => [
       key,
-      isSensitiveKey(key) ? redactCredentialValue(child) : redact(child, secrets),
+      isSensitiveStructuredKey(key) ? redactCredentialValue(child) : redact(child, secrets),
     ]);
     return {
       value: Object.fromEntries(entries.map(([key, child]) => [key, child.value])),
@@ -567,13 +604,6 @@ function redact(value, secrets) {
     };
   }
   return { value, replacements: 0 };
-}
-
-function isSensitiveKey(key) {
-  const normalized = key.replace(/[-_\s]/g, "").toLowerCase();
-  return ["authorization", "cookie", "token", "password", "passwd", "secret", "apikey", "session", "sessionid"].some((suffix) =>
-      normalized.endsWith(suffix),
-  );
 }
 
 function validateProducer(producer) {
@@ -598,13 +628,19 @@ function redactString(value, secrets) {
   let replacements = 0;
   let marker = ",\0QA_NATIVE_REDACTED\0";
   while (value.includes(marker)) marker += "\0";
+  let urlReplacements = 0;
+  value = value.replace(EMBEDDED_HTTP_URL_PATTERN, match => {
+    const redacted = redactUrl(match);
+    if (redacted !== match) urlReplacements += 1;
+    return redacted;
+  });
+  replacements += urlReplacements;
   const protectedValue = protectSuppliedSecrets(value, secrets, marker);
   replacements += protectedValue.replacements;
   let redacted = protectedValue.value;
-  redacted = redacted.replace(CREDENTIAL_PATTERN, (_, key, separator) => {
-    replacements += 1;
-    return `${key}${separator}${marker}`;
-  });
+  const credentials = redactCredentialPairs(redacted, marker);
+  redacted = credentials.value;
+  replacements += credentials.replacements;
   redacted = redacted.replace(AUTHORIZATION_PATTERN, (_, prefix) => {
     replacements += 1;
     return `${prefix}${marker}`;
@@ -626,6 +662,42 @@ function redactString(value, secrets) {
     return `${quote}${marker}${quote}`;
   });
   return { value: redacted.split(marker).join("[REDACTED]"), replacements };
+}
+
+function redactCredentialPairs(value, marker) {
+  const pattern = new RegExp(CREDENTIAL_CANDIDATE_PATTERN.source, CREDENTIAL_CANDIDATE_PATTERN.flags);
+  let cursor = 0;
+  let output = "";
+  let replacements = 0;
+  for (let match; (match = pattern.exec(value)) !== null;) {
+    const [key, separator, credential] = match.slice(1);
+    const normalizedKey = key.replace(/^['"]|['"]$/g, "");
+    const sensitive = isSensitiveStructuredKey(normalizedKey) || (isUrlQueryPosition(value, match.index) && isSensitiveQueryKey(normalizedKey));
+    if (!sensitive || ["authorization", "cookie"].includes(normalizedKey.toLowerCase())) {
+      pattern.lastIndex = match.index + 1;
+      continue;
+    }
+    if (match.index < cursor) {
+      pattern.lastIndex = cursor;
+      continue;
+    }
+    output += `${value.slice(cursor, match.index)}${key}${separator}${marker}`;
+    cursor = match.index + key.length + separator.length + credential.length;
+    replacements += 1;
+    pattern.lastIndex = cursor;
+  }
+  return { value: `${output}${value.slice(cursor)}`, replacements };
+}
+
+function isUrlQueryPosition(value, index) {
+  const lineStart = value.lastIndexOf("\n", index - 1) + 1;
+  return /https?:\/\/[^\s"'<>]*\?[^#\s"'<>]*$/i.test(value.slice(lineStart, index));
+}
+
+function isSensitiveStructuredKey(key) {
+  const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  return ["authentication", "authorization", "cookie", "credential", "jwt", "token", "password", "passwd", "secret", "signature", "apikey", "session", "sessionid", "sessid", "assertion", "auth"].some(suffix => normalized.endsWith(suffix)) ||
+    ["sig", "sid", "csrf", "otp", "nonce", "oauthcode", "oauthstate", "samlresponse", "samlassertion", "loginticket"].includes(normalized);
 }
 
 function protectSuppliedSecrets(value, secrets, marker) {

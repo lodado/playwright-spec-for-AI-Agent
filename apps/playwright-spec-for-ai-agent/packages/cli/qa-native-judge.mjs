@@ -1,10 +1,9 @@
-import { rmSync } from "node:fs";
 import { join, relative } from "node:path";
-import { RUNTIME_OUTCOME_VERSION, canonicalHash, validateContract } from "../contracts/index.mjs";
+import { validateContract } from "../contracts/index.mjs";
 import { judgeEvidence } from "../judge/index.mjs";
 import { createHermesSemanticJudge } from "../provider-hermes/index.mjs";
 import { loadValidatedExecution } from "./qa-native-result-set.mjs";
-import { CliError, createExclusiveQaDirectory, writePrivateJsonExclusive } from "./qa-native.mjs";
+import { CliError, writePrivateJsonExclusive } from "./qa-native.mjs";
 
 export async function judgeQaNative({ runDirectory, integrityKey, cwd, failOn }, overrides = {}) {
   const judge = overrides.judge ?? defaultHermesJudge();
@@ -23,39 +22,18 @@ export async function judgeQaNative({ runDirectory, integrityKey, cwd, failOn },
   }
   if (results.length === 0) throw new Error("QA evidence is empty");
 
-  const judgmentHash = shortHash(results.map((result) => result.resultId));
-  const judgmentDirectory = join(runDirectory, "judgments", `judge-${judgmentHash}`);
-  let created = false;
-  try {
-    createExclusiveQaDirectory(relative(cwd, judgmentDirectory), { cwd });
-    created = true;
-    for (const result of results) {
-      writePrivateJsonExclusive(
-        relative(cwd, join(judgmentDirectory, `judge-result-${shortHash(result.evidenceBundleId)}.json`)),
-        result,
-        { cwd },
-      );
-    }
-    writePrivateJsonExclusive(relative(cwd, join(judgmentDirectory, "run.json")), {
-      schemaVersion: RUNTIME_OUTCOME_VERSION,
-      stage: "judge",
-      type: "COMPLETED",
-    }, { cwd });
-    const counted = perScenario.reduce((counts, { verdict }) => ({
-      pass: counts.pass + (verdict === "PASS" ? 1 : 0),
-      fail: counts.fail + (verdict === "FAIL" ? 1 : 0),
-      skip: counts.skip + (verdict === "SKIP" ? 1 : 0),
-      manualReview: counts.manualReview + (verdict === "MANUAL_REVIEW" ? 1 : 0),
-    }), { pass: 0, fail: 0, skip: 0, manualReview: 0 });
-    const totals = counted.skip > 0 ? counted : { pass: counted.pass, fail: counted.fail, manualReview: counted.manualReview };
-    reportVerdicts({ perScenario, totals });
-    if (failOn === "fail" && totals.fail > 0) return 1;
-    if (failOn === "manual-review" && (totals.fail > 0 || totals.manualReview > 0)) return 1;
-    return 0;
-  } catch (error) {
-    if (created) rmSync(judgmentDirectory, { recursive: true, force: true });
-    throw error;
-  }
+  writePrivateJsonExclusive(relative(cwd, join(runDirectory, "judgment.json")), results, { cwd });
+  const counted = perScenario.reduce((counts, { verdict }) => ({
+    pass: counts.pass + (verdict === "PASS" ? 1 : 0),
+    fail: counts.fail + (verdict === "FAIL" ? 1 : 0),
+    skip: counts.skip + (verdict === "SKIP" ? 1 : 0),
+    manualReview: counts.manualReview + (verdict === "MANUAL_REVIEW" ? 1 : 0),
+  }), { pass: 0, fail: 0, skip: 0, manualReview: 0 });
+  const totals = counted.skip > 0 ? counted : { pass: counted.pass, fail: counted.fail, manualReview: counted.manualReview };
+  reportVerdicts({ perScenario, totals });
+  if (failOn === "fail" && totals.fail > 0) return 1;
+  if (failOn === "manual-review" && (totals.fail > 0 || totals.manualReview > 0)) return 1;
+  return 0;
 }
 
 function defaultHermesJudge() {
@@ -72,8 +50,4 @@ function defaultReportVerdicts({ perScenario, totals }) {
   }
   const skipNote = (totals.skip ?? 0) > 0 ? `, ${totals.skip} skip` : "";
   process.stdout.write(`verdicts: ${totals.pass} pass, ${totals.fail} fail${skipNote}, ${totals.manualReview} manual-review\n`);
-}
-
-function shortHash(value) {
-  return canonicalHash(value).slice("sha256:".length, "sha256:".length + 16);
 }

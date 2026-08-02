@@ -11,7 +11,10 @@ import {
 import {
   createInMemoryEvidenceStore,
   readEvidenceArchive,
+  redactHeaders,
   redactSensitiveText,
+  redactStructured,
+  redactUrl,
   verifyStoredEvidence,
   writeEvidenceArchive,
 } from "../index.mjs";
@@ -265,7 +268,7 @@ describe("evidence store", () => {
     const manifest = target.appendCheckpoint(evidenceBundle);
     const oversized = {
       ...manifest,
-      checkpoints: Array.from({ length: 129 }, (_, index) => ({
+      checkpoints: Array.from({ length: 1025 }, (_, index) => ({
         ...manifest.checkpoints[0],
         checkpointId: `checkpoint-${index}`,
       })),
@@ -567,6 +570,9 @@ describe("evidence store", () => {
         "Cookie: session=raw-cookie",
         "Cookie = SID=equals-cookie",
         "GET https://example.test/?access_token=url-token&safe=true",
+        "GET https://example.test/?PHPSESSID=php-session&_csrf=csrf-secret",
+        "user_session_id=compound-session",
+        "client_assertion=assertion-secret",
         'client_secret="hello world"',
         "'client_secret' = 'quoted-key-secret'",
       ].join("\n"),
@@ -586,6 +592,11 @@ describe("evidence store", () => {
         kind: "JSON",
         value: {
           sessionId: "derived-session",
+          sid: "structured-sid",
+          _csrf: "structured-csrf",
+          state: "open",
+          code: "E123",
+          statePair: ["state", "open"],
           links: [
             "https://token-secret@example.test/",
             "ssh://git-secret@example.test/repo",
@@ -604,11 +615,17 @@ describe("evidence store", () => {
       "ghp_1234567890abcdefghijklmnop",
       "equals-cookie",
       "url-token",
+      "php-session",
+      "csrf-secret",
+      "compound-session",
+      "assertion-secret",
       "hello world",
       "quoted-key-secret",
       "environment-token",
       "userinfo-secret",
       "derived-session",
+      "structured-sid",
+      "structured-csrf",
       "token-secret",
       "git-secret",
       "password-secret",
@@ -617,12 +634,20 @@ describe("evidence store", () => {
     ]) {
       expect(persisted).not.toContain(secret);
     }
+    expect(evidenceBundle.facts[0].value).toMatchObject({ state: "open", code: "E123", statePair: ["state", "open"] });
   });
 
   it("does not exempt contract-like prefixes from opaque token redaction", () => {
     const opaqueValue = `scenario-${"A".repeat(64)}`;
 
     expect(redactSensitiveText(JSON.stringify({ opaqueValue }))).toBe(JSON.stringify({ opaqueValue: "[REDACTED]" }));
+  });
+
+  it("keeps URL, header, structured, and nested text redaction boundaries separate", () => {
+    expect(redactUrl("https://example.test/callback?code=oauth-code&oauth[state]=oauth-state&ticket=login-ticket&view=open")).not.toMatch(/oauth-code|oauth-state|login-ticket/);
+    expect(redactHeaders({ Authorization: "Bearer secret", state: "open" })).toEqual({ Authorization: "[REDACTED]", state: "open" });
+    expect(redactStructured({ state: "open", code: "E123", user_session_id: "session-secret" })).toEqual({ state: "open", code: "E123", user_session_id: "[REDACTED]" });
+    expect(redactSensitiveText('{"message":"user_session_id=nested-secret","url":"https://example.test/callback?code=oauth-secret&state=csrf-secret"}')).not.toMatch(/nested-secret|oauth-secret|csrf-secret/);
   });
 
   it("rejects opaque binary evidence and preserves stored text bytes behind copy-on-read", () => {

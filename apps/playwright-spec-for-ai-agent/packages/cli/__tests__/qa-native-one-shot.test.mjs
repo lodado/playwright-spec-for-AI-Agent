@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { EXECUTION_ACTION_PROPOSAL_VERSION } from "../../contracts/index.mjs";
 import { readEvidenceArchive } from "../../evidence/index.mjs";
 import { judgeWithHermes } from "../../provider-hermes/index.mjs";
-import { runAdaptiveSuiteWithPlaywright } from "../../provider-playwright/index.mjs";
+import { runAdaptiveSuiteWithPlaywright } from "../../runtime/playwright.mjs";
 import { executeQaNative } from "../qa-native-execute.mjs";
 import { judgeQaNative } from "../qa-native-judge.mjs";
 import { reportQaNative } from "../qa-native-report.mjs";
@@ -70,14 +70,14 @@ describe("qa-native one-shot execute -> judge -> review -> report", () => {
     } });
 
     try {
-      const executeStatus = await runQaNative(["execute", "--spec=dashboard.spec.ts", `--base-url=${baseUrl}`, "--run-dir=.qa/runs/one-shot", "--provider=hermes", "--mode=adaptive"], {
+      const executeStatus = await runQaNative(["execute", "--spec=dashboard.spec.ts", `--base-url=${baseUrl}`, "--run-dir=.qa/runs/one-shot"], {
         cwd,
         env,
         handlers: { execute: (options) => executeQaNative(options, {
           createProposer,
           executeAdaptive: (adaptive) => runAdaptiveSuiteWithPlaywright({ ...adaptive, browserType: chromium }),
-          extractFull: async ({ manifest }) => ({ status: "ABSTRACTED", tests: manifest.tests.map((test) => ({ testId: test.testId, applicability: ["the dashboard is available"], when: ["the page is observed"], claims: ["Dashboard content is visible"], classification: "LIVE_EXECUTABLE" })) }),
-          reviewFull: async () => ({ status: "APPROVED" }),
+          extractFull: async ({ manifest }) => ({ status: "ABSTRACTED", tests: manifest.tests.map((test) => ({ testId: test.testId, given: ["the dashboard is available"], when: ["the page is observed"], then: ["Dashboard content is visible"], classification: "LIVE_EXECUTABLE" })) }),
+          reviewFull: async ({ candidate }) => ({ status: "APPROVED", tests: candidate.tests }),
         }) },
         stdout: vi.fn(),
         stderr: vi.fn(),
@@ -93,11 +93,7 @@ describe("qa-native one-shot execute -> judge -> review -> report", () => {
       });
       expect(judgeStatus).toBe(0);
 
-      const judgmentRoot = join(cwd, ".qa", "runs", "one-shot", "judgments");
-      const judgmentSet = readdirSync(judgmentRoot)[0];
-      const selectedJudgment = readdirSync(join(judgmentRoot, judgmentSet)).find((file) => file.startsWith("judge-result-"));
-
-      const reviewStatus = await runQaNative(["review", "--run-dir=.qa/runs/one-shot", `--judgment=judgments/${judgmentSet}/${selectedJudgment}`], {
+      const reviewStatus = await runQaNative(["review", "--run-dir=.qa/runs/one-shot"], {
         cwd,
         env,
         handlers: { review: (options) => reviewQaNative(options, { reviewer: async () => ({ status: "APPROVED" }) }) },
@@ -106,7 +102,7 @@ describe("qa-native one-shot execute -> judge -> review -> report", () => {
       });
       expect(reviewStatus).toBe(0);
 
-      const reportStatus = await runQaNative(["report", "--run-dir=.qa/runs/one-shot", "--repository-root=."], {
+      const reportStatus = await runQaNative(["report", "--run-dir=.qa/runs/one-shot"], {
         cwd,
         env,
         handlers: { report: reportQaNative },
@@ -122,16 +118,8 @@ describe("qa-native one-shot execute -> judge -> review -> report", () => {
     const replay = readEvidenceArchive({ directory: join(runDirectory, "evidence"), integrityKey });
     expect(new Set(replay.bundles.map((bundle) => bundle.scenarioId)).size).toBe(3);
 
-    const judgmentRoot = join(runDirectory, "judgments");
-    const judgmentDirectory = join(judgmentRoot, readdirSync(judgmentRoot)[0]);
-    expect(readdirSync(judgmentDirectory).filter((file) => file.startsWith("judge-result-"))).toHaveLength(3);
-
-    const reviewRoot = join(runDirectory, "reviews");
-    const reviewDirectory = join(reviewRoot, readdirSync(reviewRoot)[0]);
-    expect(readdirSync(reviewDirectory).filter((file) => file.startsWith("review-result-"))).toHaveLength(3);
-
-    const reportRoot = join(runDirectory, "reports");
-    const reportDirectory = join(reportRoot, readdirSync(reportRoot)[0]);
-    expect(readdirSync(reportDirectory).some((file) => file.endsWith(".md"))).toBe(true);
+    expect(JSON.parse(readFileSync(join(runDirectory, "judgment.json"), "utf8"))).toHaveLength(3);
+    expect(JSON.parse(readFileSync(join(runDirectory, "review.json"), "utf8"))).toHaveLength(3);
+    expect(readdirSync(runDirectory).sort()).toEqual(["authority.json", "behavior.json", "evidence", "judgment.json", "report.md", "review.json"]);
   }, 30_000);
 });
