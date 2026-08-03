@@ -28,6 +28,7 @@ import {
 } from "./persona-policy.mjs";
 import { writeBehavioralHtmlReport } from "./reporter-html.mjs";
 import {
+  atomicWrite,
   createFileSessionStore,
   runStudy,
   toSessionRecord,
@@ -539,10 +540,7 @@ function buildReport({ study, evaluatedSessions, validity, findings, variant }) 
 }
 
 async function atomicJson(path, value) {
-  await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  await rename(temporary, path);
+  await atomicWrite(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 async function verifyManifestFiles(runRoot, manifest) {

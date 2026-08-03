@@ -6,6 +6,7 @@ import {
   INTERACTION_EVENT_VERSION,
   INTERACTION_RESULT_CODES,
   MODEL_ATTEMPT_VERSION,
+  OBSERVATION_VERSION,
   SESSION_VERSION,
   canonicalHash,
   redactStudySecrets,
@@ -17,7 +18,7 @@ import {
 } from "./contracts.mjs";
 
 export const RUNTIME_SESSION_SCHEMA_VERSION = "runtime-session/0.1";
-export const OBSERVATION_SCHEMA_VERSION = "observation/0.1";
+export const OBSERVATION_SCHEMA_VERSION = OBSERVATION_VERSION;
 export const INTERACTION_EVENT_SCHEMA_VERSION = INTERACTION_EVENT_VERSION;
 export const EVIDENCE_MANIFEST_SCHEMA_VERSION = EVIDENCE_MANIFEST_VERSION;
 
@@ -731,10 +732,10 @@ async function appendJsonLine(path, value) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  await atomicWriteRaw(path, `${current}${JSON.stringify(value)}\n`);
+  await atomicWrite(path, `${current}${JSON.stringify(value)}\n`);
 }
 
-async function atomicWriteRaw(path, text) {
+export async function atomicWrite(path, text) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(tmp, text, { encoding: "utf8", mode: 0o600 });
