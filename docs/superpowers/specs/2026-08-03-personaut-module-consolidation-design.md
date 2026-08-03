@@ -29,8 +29,12 @@ playwright-spec-for-ai-agent 방식(앱 내부 파일, 조립 1개, 경계는 �
 5. `reporter-github`, `provider-fixture`는 어디서도 import 안 됨 (죽은 코드,
    삭제는 보류).
 6. `persona-policy`만 유일하게 TypeScript(tsc 빌드 필요), 나머지 전부 .mjs.
-7. 스키마 버전 상수가 2곳 소유: contracts(3-13행)와
-   runtime-core(19-22행 재정의).
+7. 스키마 버전 상수 중복은 1건: runtime-core:20
+   `OBSERVATION_SCHEMA_VERSION = "observation/0.1"`이 contracts
+   `OBSERVATION_VERSION`과 같은 값을 재정의(import 아님).
+   `RUNTIME_SESSION_SCHEMA_VERSION = "runtime-session/0.1"`은 contracts
+   `SESSION_VERSION = "session/0.1"`과 **다른 계약**이므로 통합 금지.
+   INTERACTION_EVENT/EVIDENCE_MANIFEST는 이미 contracts에서 import한 별칭.
 8. 앱 간 실중복 (공유 후보 검증 결과):
    - canonical hash: personaut contracts:43-72 vs qa-native contracts:141-150.
      qa-native 소비처 11곳.
@@ -86,14 +90,15 @@ packages/                     # 워크스페이스 잔류 = 공유 3개 + design
   hermes 호출은 hermes-action-policy만. 소형 import-방향 테스트로 강제.
 - design-convergence 가족(6개)은 별개 제품 — 이번 범위에서 안 엮음.
 
-### 빌드 소멸 (personaut)
+### 빌드 축소 (personaut) — 직발행 불가 확정
 
-- esbuild 번들, tsc, dist/, prepack build 제거.
-- `files: ["bin","src"]`, `exports: "./src/index.mjs"` 직발행.
-- 워크스페이스 의존(qa-kit, spec-extract, hermes-transport)이 남으므로 발행
-  전 번들 필요 여부 재검토: 직발행이 안 되면 esbuild 한 줄만 유지(단, dist
-  대신 소스맵 포함). PR-2에서 `npm pack --dry-run`으로 결정.
-- 효과: 돌리는 코드 = 저장소 코드. 스택트레이스가 원본 라인.
+- 평탄화 후에도 private 워크스페이스 의존(hermes-transport, spec-extract,
+  qa-kit)이 남음 → npm에 없는 deps라 src 직발행 시 설치 깨짐. **esbuild
+  prepack 번들 유지.**
+- 제거: tsc(persona-policy .mjs 전환으로), `pnpm --filter` 선행 빌드.
+- 유지: prepack esbuild 한 줄 + `--sourcemap` 추가 (스택트레이스 원본 라인).
+- 테스트·개발은 src 직접 실행(node --test는 빌드 불필요). CLI 스모크만
+  `pnpm build` 선행.
 
 ### 에러 provenance 통일 (personaut)
 
@@ -120,9 +125,10 @@ packages/                     # 워크스페이스 잔류 = 공유 3개 + design
 
 1. 루트 패키지 7개 → `apps/personaut/src/*.mjs` 이동. persona-policy
    TS→mjs+JSDoc. 테스트 `test/` 합류.
-2. 스키마 버전 상수 contracts 단일 소유(runtime 재정의 삭제).
+2. `OBSERVATION_SCHEMA_VERSION` 재정의를 contracts import 별칭으로 교체
+   (다른 버전 상수는 값 그대로 유지 — 해시 회귀 방지).
 3. atomic 쓰기 personaut 내부 단일화(runtime.mjs 한 벌).
-4. 빌드 소멸(위 절), import-방향 테스트 추가.
+4. 빌드 축소(위 절), import-방향 테스트 추가.
 5. 루트에서 이동된 빈 패키지 디렉토리 정리. reporter-github/provider-fixture
    삭제는 보류(별도 결정).
 6. 게이트: node --test 그린(이주 전후 케이스 수 동일), CLI run 스모크 1회,
