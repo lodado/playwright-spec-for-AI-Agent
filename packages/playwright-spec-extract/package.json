@@ -1,0 +1,16 @@
+{
+  "name": "playwright-spec-extract",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared Playwright source -> IR extraction (parser, AST, expectation abstractor).",
+  "exports": {
+    ".": "./spec-parser.mjs",
+    "./spec-parser": "./spec-parser.mjs",
+    "./ast-parser": "./ast-parser.mjs",
+    "./expectation-abstractor": "./expectation-abstractor.mjs"
+  },
+  "peerDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

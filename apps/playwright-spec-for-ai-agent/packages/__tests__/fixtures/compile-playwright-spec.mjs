@@ -6,7 +6,7 @@ import {
   QA_IR_VERSION,
   validateContract,
 } from "../../contracts/index.mjs";
-import { parsePlaywrightSource } from "../../../scripts/playwright-spec-parser.mjs";
+import { parsePlaywrightSource } from "playwright-spec-extract/spec-parser";
 
 export { PLAYWRIGHT_STATIC_MANIFEST_VERSION };
 

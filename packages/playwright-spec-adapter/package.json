@@ -6,7 +6,6 @@
   "exports": {
     ".": "./src/index.mjs",
     "./compiler": "./src/compiler.mjs",
-    "./legacy": "./src/legacy/parser.mjs",
     "./expectation": "./src/expectation/abstractor.mjs",
     "./policy": "./src/policy/live-filter.mjs"
   },
@@ -20,7 +19,8 @@
     "vitest": "^3.2.7"
   },
   "dependencies": {
-    "@persona-runtime/contracts": "workspace:*"
+    "@persona-runtime/contracts": "workspace:*",
+    "playwright-spec-extract": "workspace:*"
   },
   "engines": {
     "node": ">=20"

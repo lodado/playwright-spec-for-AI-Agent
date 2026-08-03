@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { parsePlaywrightAst } from "./playwright-ast-parser.mjs";
+import { parsePlaywrightAst } from "./ast-parser.mjs";
 
 /**
  * Extract QA annotations from spec file source.

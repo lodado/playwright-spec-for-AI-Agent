@@ -17,7 +17,7 @@ import {
   parsePlaywrightSource,
   resolveTestFixtures,
   resolveTestLivePolicy,
-} from "../playwright-spec-parser.mjs";
+} from "playwright-spec-extract/spec-parser";
 
 describe("AST Playwright parsing", () => {
   it("parses callback variants and ignores braces inside strings and templates", () => {

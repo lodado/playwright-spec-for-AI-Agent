@@ -60,6 +60,9 @@
     "packages/review/index.mjs",
     "packages/provider-hermes/index.mjs"
   ],
+  "bundledDependencies": [
+    "playwright-spec-extract"
+  ],
   "scripts": {
     "prepack": "esbuild scripts/hermes-runner.mjs --bundle --platform=node --format=esm --outfile=scripts/hermes-runner.mjs --allow-overwrite",
     "test": "vitest run",
@@ -74,6 +77,7 @@
     }
   },
   "dependencies": {
+    "playwright-spec-extract": "workspace:*",
     "typescript": "^5.9.3"
   },
   "devDependencies": {

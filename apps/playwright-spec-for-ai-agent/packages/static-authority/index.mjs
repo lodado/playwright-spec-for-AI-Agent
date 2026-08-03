@@ -1,5 +1,5 @@
 import { PLAYWRIGHT_STATIC_MANIFEST_VERSION, canonicalHash } from "../contracts/index.mjs";
-import { parsePlaywrightSource } from "../../scripts/playwright-spec-parser.mjs";
+import { parsePlaywrightSource } from "playwright-spec-extract/spec-parser";
 
 const POLICY_BY_LIVE_RUN = Object.freeze({
   "executable-readonly": allowedPolicy({ click: "NONE", type: "NONE" }),

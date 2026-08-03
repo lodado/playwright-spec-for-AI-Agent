@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { parseAnnotations } from "./playwright-spec-parser.mjs";
+import { parseAnnotations } from "playwright-spec-extract/spec-parser";
 
 const CONFIG_FILENAMES = [
   "playwright-spec-for-ai-agent.config.mjs",

@@ -3,7 +3,7 @@ import {
   stableId,
   validateStudySpec,
 } from "@persona-runtime/contracts";
-import { parseSpecDirectory } from "./legacy/parser.mjs";
+import { parseSpecDirectory } from "playwright-spec-extract/spec-parser";
 
 const DEFAULT_PERSONAS = [
   "impatient_new_user",

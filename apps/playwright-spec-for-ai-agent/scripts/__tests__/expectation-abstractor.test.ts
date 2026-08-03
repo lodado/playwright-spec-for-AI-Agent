@@ -7,7 +7,7 @@ import {
   literalExpectedForLive,
   liveRegexFromLiteral,
   liveTextLocatorForLive,
-} from "../expectation-abstractor.mjs";
+} from "playwright-spec-extract/expectation-abstractor";
 
 describe("literalExpectedForLive", () => {
   it("converts comma-formatted mock numbers to digit wildcards", () => {

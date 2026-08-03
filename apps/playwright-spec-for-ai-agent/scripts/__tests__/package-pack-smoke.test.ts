@@ -22,13 +22,10 @@ describe("published package", () => {
         "README.md",
         "bin/qa-native.mjs",
         "packages/cli/qa-native.mjs",
-        "scripts/playwright-spec-parser.mjs",
-        "scripts/playwright-ast-parser.mjs",
+        "node_modules/playwright-spec-extract/spec-parser.mjs",
+        "node_modules/playwright-spec-extract/ast-parser.mjs",
         "playwright-spec-for-ai-agent.config.example.mjs",
       ]),
-    );
-    expect(paths.some((path: string) => path.startsWith("node_modules/"))).toBe(
-      false,
     );
   }, 15_000);
 });
