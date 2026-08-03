@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.0.0
+
+### Major Changes
+
+- Repair the cross-app spec parser import and consolidate Playwright source
+  extraction into the shared playwright-spec-extract workspace package.
+
+### Patch Changes
+
+- Updated dependencies
+  - playwright-spec-extract@0.1.1
+
 ## 3.1.0
 
 ### Minor Changes

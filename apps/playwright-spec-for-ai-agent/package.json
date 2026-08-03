@@ -1,6 +1,6 @@
 {
   "name": "playwright-spec-for-ai-agent",
-  "version": "3.1.0",
+  "version": "4.0.0",
   "description": "AI-native Playwright QA pipeline that extracts code-owned policy, interprets Given/When/Then behavior, executes authorized browser actions, and reviews evidence-bound judgments.",
   "type": "module",
   "license": "MIT",

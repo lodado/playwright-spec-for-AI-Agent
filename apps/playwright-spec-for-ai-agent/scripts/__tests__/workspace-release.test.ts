@@ -29,7 +29,7 @@ describe("workspace release configuration", () => {
       access: "public",
       baseBranch: "main",
       ignore: [],
-      privatePackages: { version: false, tag: false },
+      privatePackages: { version: true, tag: false },
     });
     expect(rootPackage.scripts).toMatchObject({
       release: "pnpm build && changeset publish",

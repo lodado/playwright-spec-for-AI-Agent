@@ -1,5 +1,12 @@
 # @lodado/personaut
 
+## 0.5.1
+
+### Patch Changes
+
+- Repair the cross-app spec parser import and consolidate Playwright source
+  extraction into the shared playwright-spec-extract workspace package.
+
 ## 0.5.0
 
 ### Minor Changes
