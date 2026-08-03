@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createFindings, extractFrictionPoints } from "../src/index.mjs";
+import { createFindings, extractFrictionPoints } from "../src/evaluator.mjs";
 
 const manifest = Object.freeze({ entries: [{ id: "ev-1" }, { id: "ev-2" }] });
 

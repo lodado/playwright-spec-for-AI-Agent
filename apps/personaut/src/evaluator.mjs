@@ -16,7 +16,7 @@ import {
   validateSimulationValidityReport,
   validateVariantComparisonReport,
   stableId,
-} from "@persona-runtime/contracts";
+} from "./contracts.mjs";
 
 export const EVALUATOR_ERROR_CODES = Object.freeze({
   EVIDENCE_NOT_SEALED: "EVIDENCE_NOT_SEALED",

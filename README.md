@@ -31,18 +31,16 @@ Need existing Playwright specs to drive AI QA?   → Playwright Spec for AI Agen
 
 ## Workspace packages
 
-These packages are private implementation modules. Personaut bundles the modules it needs into its published package.
+Personaut keeps its contracts, runtime, browser driver, evaluator, reporter, and
+Playwright StudySpec compiler in `apps/personaut/src`. The remaining workspace
+packages are shared implementation modules.
 
 | Workspace                          | Responsibility                                                              | Documentation                                                                      |
 | ---------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `@persona-runtime/contracts`       | StudySpec, evidence, evaluation, finding, and validation contracts.         | [`packages/contracts`](./packages/contracts/README.md)                             |
-| `@persona-runtime/runtime-core`    | Session state machine, orchestration, budgets, and filesystem storage.      | [`packages/runtime-core`](./packages/runtime-core/README.md)                       |
-| `playwright-driver`                | Isolated Playwright sessions, safe actions, and browser evidence capture.   | [`packages/playwright-driver`](./packages/playwright-driver/README.md)             |
 | `@persona-runtime/persona-policy`  | Seeded persona presets, attention filtering, and abandonment behavior.      | [`packages/persona-policy`](./packages/persona-policy/README.md)                   |
-| `@persona-runtime/evaluator`       | Browserless outcome evaluation, findings, validity, and variant comparison. | [`packages/evaluator`](./packages/evaluator/README.md)                             |
-| `@persona-runtime/reporter-html`   | Static behavioral HTML report rendering.                                    | [`packages/reporter-html`](./packages/reporter-html/README.md)                     |
 | `@persona-runtime/reporter-github` | GitHub Check and pull-request comment formatting primitives.                | [`packages/reporter-github`](./packages/reporter-github/README.md)                 |
-| `playwright-spec-adapter`          | Playwright spec parsing and StudySpec compilation.                          | [`packages/playwright-spec-adapter`](./packages/playwright-spec-adapter/README.md) |
+| `@persona-runtime/hermes-transport`| Shared Hermes process transport.                                             | [`packages/hermes-transport`](./packages/hermes-transport/README.md)               |
+| `playwright-spec-extract`          | Shared Playwright source-to-IR extraction.                                   | [`packages/playwright-spec-extract`](./packages/playwright-spec-extract)           |
 
 ## Examples
 

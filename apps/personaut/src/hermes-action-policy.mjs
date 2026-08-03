@@ -1,6 +1,6 @@
-import { canonicalHash } from "@persona-runtime/contracts";
+import { canonicalHash } from "./contracts.mjs";
 import { PRESETS, deriveSessionSeed, sampleBehaviorPolicy } from "@persona-runtime/persona-policy";
-import { RUNTIME_ERROR_CODES, RuntimeCoreError } from "@persona-runtime/runtime-core";
+import { RUNTIME_ERROR_CODES, RuntimeCoreError } from "./runtime.mjs";
 import { readHermesModelConfig, redactSensitiveText, runHermes } from "@persona-runtime/hermes-transport";
 
 export const HERMES_ACTION_PROMPT_VERSION = "personaut-hermes-action/0.1";

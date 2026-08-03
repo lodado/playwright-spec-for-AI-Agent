@@ -7,7 +7,7 @@ import {
   redactStudySecrets,
   validateFunctionalEvaluation,
   validateStudySpec,
-} from "@persona-runtime/contracts";
+} from "./contracts.mjs";
 import {
   compareVariants,
   createBehavioralFingerprint,
@@ -15,7 +15,7 @@ import {
   evaluateFunctionalSession,
   evaluateSimulationValidity,
   extractFrictionPoints,
-} from "@persona-runtime/evaluator";
+} from "./evaluator.mjs";
 import {
   PRESETS,
   createPersonaState,
@@ -26,17 +26,17 @@ import {
   reducePersonaState,
   sampleBehaviorPolicy,
 } from "@persona-runtime/persona-policy";
-import { writeBehavioralHtmlReport } from "@persona-runtime/reporter-html";
+import { writeBehavioralHtmlReport } from "./reporter-html.mjs";
 import {
   createFileSessionStore,
   runStudy,
   toSessionRecord,
-} from "@persona-runtime/runtime-core";
-import { createPlaywrightDriver } from "playwright-driver";
+} from "./runtime.mjs";
+import { createPlaywrightDriver } from "./driver.mjs";
 import {
   compilePlaywrightIRToStudyResult,
   parsePlaywrightSpecs,
-} from "playwright-spec-adapter";
+} from "./spec-adapter.mjs";
 import { assertHermesStudySupported, createHermesActionPolicy } from "./hermes-action-policy.mjs";
 
 export { createHermesActionPolicy } from "./hermes-action-policy.mjs";

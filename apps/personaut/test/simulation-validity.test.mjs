@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createBehavioralFingerprint, evaluateSimulationValidity } from "../src/index.mjs";
+import { createBehavioralFingerprint, evaluateSimulationValidity } from "../src/evaluator.mjs";
 
 test("creates behavioral fingerprints from session events", () => {
   const fingerprint = createBehavioralFingerprint({

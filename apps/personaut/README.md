@@ -261,7 +261,7 @@ pnpm exec personaut import-playwright \
 pnpm exec personaut validate study.yaml
 ```
 
-Review imported manual-review or blocked policies before running. Annotation details live in the [Playwright Spec Adapter reference](https://github.com/lodado/playwright-spec-for-AI-Agent/blob/main/packages/playwright-spec-adapter/README.md#playwright-annotations).
+Review imported manual-review or blocked policies before running. Annotation details live in the [QA Native documentation](https://github.com/lodado/playwright-spec-for-AI-Agent/tree/main/apps/playwright-spec-for-ai-agent).
 
 ### Compare two variants
 

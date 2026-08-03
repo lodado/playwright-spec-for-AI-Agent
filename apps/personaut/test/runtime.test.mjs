@@ -13,7 +13,7 @@ import {
   runSession,
   runStudy,
   toSessionRecord,
-} from "../src/index.mjs";
+} from "../src/runtime.mjs";
 
 const study = Object.freeze({
   schemaVersion: "study-spec/0.1",

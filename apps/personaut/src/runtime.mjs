@@ -14,7 +14,7 @@ import {
   validateInteractionEvent,
   validateModelAttempt,
   validateSessionRecord,
-} from "@persona-runtime/contracts";
+} from "./contracts.mjs";
 
 export const RUNTIME_SESSION_SCHEMA_VERSION = "runtime-session/0.1";
 export const OBSERVATION_SCHEMA_VERSION = "observation/0.1";

@@ -49,33 +49,21 @@ importers:
         specifier: ^2.8.1
         version: 2.9.0
     devDependencies:
-      '@persona-runtime/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
-      '@persona-runtime/evaluator':
-        specifier: workspace:*
-        version: link:../../packages/evaluator
       '@persona-runtime/hermes-transport':
         specifier: workspace:*
         version: link:../../packages/hermes-transport
       '@persona-runtime/persona-policy':
         specifier: workspace:*
         version: link:../../packages/persona-policy
-      '@persona-runtime/reporter-html':
-        specifier: workspace:*
-        version: link:../../packages/reporter-html
-      '@persona-runtime/runtime-core':
-        specifier: workspace:*
-        version: link:../../packages/runtime-core
       esbuild:
         specifier: ^0.28.1
         version: 0.28.1
-      playwright-driver:
+      playwright-spec-extract:
         specifier: workspace:*
-        version: link:../../packages/playwright-driver
-      playwright-spec-adapter:
-        specifier: workspace:*
-        version: link:../../packages/playwright-spec-adapter
+        version: link:../../packages/playwright-spec-extract
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@24.13.3)(jiti@1.21.7)(yaml@2.9.0)
 
   apps/playwright-spec-for-ai-agent:
     dependencies:
@@ -141,8 +129,6 @@ importers:
       vitest:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@24.13.3)(jiti@1.21.7)(yaml@2.9.0)
-
-  packages/contracts: {}
 
   packages/design-convergence-browser:
     dependencies:
@@ -261,12 +247,6 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@24.13.3)(jiti@1.21.7)(yaml@2.9.0)
 
-  packages/evaluator:
-    dependencies:
-      '@persona-runtime/contracts':
-        specifier: workspace:*
-        version: link:../contracts
-
   packages/hermes-transport: {}
 
   packages/persona-policy:
@@ -281,28 +261,6 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@24.13.3)(jiti@1.21.7)(yaml@2.9.0)
 
-  packages/playwright-driver:
-    devDependencies:
-      '@playwright/test':
-        specifier: ^1.60.0
-        version: 1.60.0
-      vitest:
-        specifier: ^3.2.7
-        version: 3.2.7(@types/node@24.13.3)(jiti@1.21.7)(yaml@2.9.0)
-
-  packages/playwright-spec-adapter:
-    dependencies:
-      '@persona-runtime/contracts':
-        specifier: workspace:*
-        version: link:../contracts
-      playwright-spec-extract:
-        specifier: workspace:*
-        version: link:../playwright-spec-extract
-    devDependencies:
-      vitest:
-        specifier: ^3.2.7
-        version: 3.2.7(@types/node@24.13.3)(jiti@1.21.7)(yaml@2.9.0)
-
   packages/playwright-spec-extract:
     dependencies:
       typescript:
@@ -310,14 +268,6 @@ importers:
         version: 5.9.3
 
   packages/reporter-github: {}
-
-  packages/reporter-html: {}
-
-  packages/runtime-core:
-    dependencies:
-      '@persona-runtime/contracts':
-        specifier: workspace:*
-        version: link:../contracts
 
 packages:
 

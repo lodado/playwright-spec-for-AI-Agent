@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { extractFrictionPoints } from "../src/index.mjs";
+import { extractFrictionPoints } from "../src/evaluator.mjs";
 
 const scenarios = [
   ["control", true],

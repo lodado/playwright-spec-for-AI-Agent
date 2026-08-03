@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { canonicalHash } from "@persona-runtime/contracts";
+import { canonicalHash } from "../src/contracts.mjs";
 
 import {
   EVALUATOR_ERROR_CODES,
   EvaluatorError,
   evaluateFunctionalSession,
-} from "../src/index.mjs";
+} from "../src/evaluator.mjs";
 
 const baseTask = Object.freeze({
   id: "task-1",
@@ -193,6 +193,6 @@ test("evaluation rejects observation or event evidence tampering even after rese
 });
 
 test("browserless evaluator package does not import browser automation", async () => {
-  const source = await readFile(new URL("../src/index.mjs", import.meta.url), "utf8");
+  const source = await readFile(new URL("../src/evaluator.mjs", import.meta.url), "utf8");
   assert.equal(/playwright|puppeteer|browser/i.test(source), false);
 });

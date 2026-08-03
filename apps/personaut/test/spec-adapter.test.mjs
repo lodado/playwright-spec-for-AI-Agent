@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { compilePlaywrightIRToStudyResult } from "../src/compiler.mjs";
+import assert from "node:assert/strict";
+import test from "node:test";
+import { compilePlaywrightIRToStudyResult } from "../src/spec-adapter.mjs";
 
-describe("Playwright StudySpec compiler", () => {
-  it("maps expectations and safety without weakening blocked policies", () => {
+test("Playwright StudySpec compiler maps expectations and safety without weakening blocked policies", () => {
     const { studySpec, warnings } = compilePlaywrightIRToStudyResult({
       schemaVersion: "qa-ir/0.1",
       sourceDirectory: "tests",
@@ -18,9 +18,8 @@ describe("Playwright StudySpec compiler", () => {
       }],
     }, { baseUrl: "https://example.test" });
 
-    expect(studySpec.tasks[0].successOracles[0]).toMatchObject({ type: "visible_text", operation: "contains", value: "$10" });
-    expect(studySpec.tasks[1].safetyPolicy.allowClick).toBe(false);
-    expect(studySpec.tasks[1].abandonmentAllowed).toBe(false);
-    expect(warnings.map(item => item.code)).toEqual(["MOCK_ONLY_EXPECTATION", "BLOCKED_MUTATION"]);
-  });
+  assert.deepEqual(studySpec.tasks[0].successOracles[0], { id: studySpec.tasks[0].successOracles[0].id, type: "visible_text", operation: "contains", value: "$10" });
+  assert.equal(studySpec.tasks[1].safetyPolicy.allowClick, false);
+  assert.equal(studySpec.tasks[1].abandonmentAllowed, false);
+  assert.deepEqual(warnings.map(item => item.code), ["MOCK_ONLY_EXPECTATION", "BLOCKED_MUTATION"]);
 });

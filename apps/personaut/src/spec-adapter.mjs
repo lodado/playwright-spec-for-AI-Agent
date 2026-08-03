@@ -2,8 +2,12 @@ import {
   STUDY_SPEC_VERSION,
   stableId,
   validateStudySpec,
-} from "@persona-runtime/contracts";
+} from "./contracts.mjs";
 import { parseSpecDirectory } from "playwright-spec-extract/spec-parser";
+
+export * from "playwright-spec-extract/spec-parser";
+export * from "playwright-spec-extract/expectation-abstractor";
+export * from "./spec-adapter-live-filter.mjs";
 
 const DEFAULT_PERSONAS = [
   "impatient_new_user",

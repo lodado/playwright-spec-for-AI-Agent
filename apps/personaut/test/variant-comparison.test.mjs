@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { compareVariants, evaluateReleaseGate } from "../src/index.mjs";
+import { compareVariants, evaluateReleaseGate } from "../src/evaluator.mjs";
 
 test("compares paired variant metrics as relative release evidence", () => {
   const baselineSessions = ["b1", "b2", "b3", "b4", "b5"].map((id, index) => session(id, `p${index + 1}`, "success"));

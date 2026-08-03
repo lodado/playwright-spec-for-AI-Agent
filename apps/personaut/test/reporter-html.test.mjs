@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { renderBehavioralHtmlReport } from "../src/index.mjs";
+import { renderBehavioralHtmlReport } from "../src/reporter-html.mjs";
 
 const report = Object.freeze({
   summary: { title: "Upload <Study>", status: "complete", humanValidation: "required" },

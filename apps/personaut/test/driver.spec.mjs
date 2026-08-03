@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path, { relative } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createServer } from "node:http";
-import { createPlaywrightDriver } from "../src/index.mjs";
+import { createPlaywrightDriver } from "../src/driver.mjs";
 
 let browserAvailable = false;
 const cleanup = [];

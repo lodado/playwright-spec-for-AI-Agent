@@ -16,7 +16,7 @@ import {
   validateInteractionEvent,
   validateModelAttempt,
   validateStudySpec,
-} from "../index.mjs";
+} from "../src/contracts.mjs";
 
 function studySpec() {
   return {
