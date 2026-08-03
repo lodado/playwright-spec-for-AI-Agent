@@ -8,7 +8,7 @@ import {
   reducePersonaState,
   sampleBehaviorPolicy,
   sampleDistribution,
-} from "../src/index.js";
+} from "../src/persona-policy.mjs";
 
 describe("persona policy", () => {
   it("reproduces sampled policy from the derived session seed", () => {

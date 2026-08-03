@@ -37,7 +37,7 @@ packages are shared implementation modules.
 
 | Workspace                          | Responsibility                                                              | Documentation                                                                      |
 | ---------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `@persona-runtime/persona-policy`  | Seeded persona presets, attention filtering, and abandonment behavior.      | [`packages/persona-policy`](./packages/persona-policy/README.md)                   |
+| Personaut persona policy           | Seeded persona presets, attention filtering, and abandonment behavior.      | [`apps/personaut/src/persona-policy.mjs`](./apps/personaut/src/persona-policy.mjs) |
 | `@persona-runtime/reporter-github` | GitHub Check and pull-request comment formatting primitives.                | [`packages/reporter-github`](./packages/reporter-github/README.md)                 |
 | `@persona-runtime/hermes-transport`| Shared Hermes process transport.                                             | [`packages/hermes-transport`](./packages/hermes-transport/README.md)               |
 | `playwright-spec-extract`          | Shared Playwright source-to-IR extraction.                                   | [`packages/playwright-spec-extract`](./packages/playwright-spec-extract)           |

@@ -52,9 +52,6 @@ importers:
       '@persona-runtime/hermes-transport':
         specifier: workspace:*
         version: link:../../packages/hermes-transport
-      '@persona-runtime/persona-policy':
-        specifier: workspace:*
-        version: link:../../packages/persona-policy
       esbuild:
         specifier: ^0.28.1
         version: 0.28.1
@@ -248,18 +245,6 @@ importers:
         version: 3.2.7(@types/node@24.13.3)(jiti@1.21.7)(yaml@2.9.0)
 
   packages/hermes-transport: {}
-
-  packages/persona-policy:
-    devDependencies:
-      '@types/node':
-        specifier: ^24.13.3
-        version: 24.13.3
-      typescript:
-        specifier: ^5.9.2
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.7
-        version: 3.2.7(@types/node@24.13.3)(jiti@1.21.7)(yaml@2.9.0)
 
   packages/playwright-spec-extract:
     dependencies:

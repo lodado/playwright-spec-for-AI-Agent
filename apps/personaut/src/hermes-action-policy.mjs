@@ -1,5 +1,5 @@
 import { canonicalHash } from "./contracts.mjs";
-import { PRESETS, deriveSessionSeed, sampleBehaviorPolicy } from "@persona-runtime/persona-policy";
+import { PRESETS, deriveSessionSeed, sampleBehaviorPolicy } from "./persona-policy.mjs";
 import { RUNTIME_ERROR_CODES, RuntimeCoreError } from "./runtime.mjs";
 import { readHermesModelConfig, redactSensitiveText, runHermes } from "@persona-runtime/hermes-transport";
 

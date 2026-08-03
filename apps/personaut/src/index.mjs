@@ -25,7 +25,7 @@ import {
   filterPerceivedElements,
   reducePersonaState,
   sampleBehaviorPolicy,
-} from "@persona-runtime/persona-policy";
+} from "./persona-policy.mjs";
 import { writeBehavioralHtmlReport } from "./reporter-html.mjs";
 import {
   createFileSessionStore,

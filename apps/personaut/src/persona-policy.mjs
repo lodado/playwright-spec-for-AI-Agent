@@ -1,68 +1,11 @@
 import { createHash } from "node:crypto";
 
-export type Distribution =
-  | { type: "fixed"; value: number }
-  | { type: "categorical"; values: Array<{ value: number | string; probability: number }> }
-  | { type: "beta"; alpha: number; beta: number }
-  | { type: "normal"; mean: number; stddev: number; min?: number; max?: number }
-  | { type: "empirical"; samples: number[] };
-
-export interface BehaviorPolicyDefinition {
-  retryPropensity: Distribution;
-  backtrackPropensity: Distribution;
-  abandonmentPropensity: Distribution;
-  signupResistance: Distribution;
-  priceSensitivity: Distribution;
-  explorationDepth: Distribution;
-  readingDepth: Distribution;
-  errorRecoveryAttempts: Distribution;
-  noActionPropensity: Distribution;
-}
-
-export interface AttentionPolicyDefinition {
-  viewportOnly: boolean;
-  maxCandidateElements: number;
-  primaryCtaWeight: number;
-  headingWeight: number;
-  textGoalMatchWeight: number;
-  visualSaliencyWeight: number;
-  priorExpectationWeight: number;
-  inspectBelowFoldProbability: Distribution;
-  inspectSecondaryNavigationProbability: Distribution;
-}
-
-export interface SampledBehaviorPolicy {
-  seed: number;
-  values: Record<keyof BehaviorPolicyDefinition, number | string>;
-}
-
-export interface PersonaRuntimeState {
-  perceivedProgress: number;
-  frustration: number;
-  trust: number;
-  perceivedValue: number;
-  confidence: number;
-  noProgressCount: number;
-  recoveryAttempts: number;
-  backtrackCount: number;
-  knownFacts: string[];
-  uncertainties: string[];
-}
-
-type ObservedElement = {
-  id: string;
-  visible: boolean;
-  enabled?: boolean;
-  inViewport?: boolean;
-  occluded?: boolean;
-  viewportPosition?: { inViewport?: boolean; occluded?: boolean };
-  secondaryNavigation?: boolean;
-  primaryCta?: boolean;
-  heading?: boolean;
-  goalMatch?: number;
-  salience?: number;
-};
-
+/** @typedef {{ type: "fixed", value: number } | { type: "categorical", values: Array<{ value: number | string, probability: number }> } | { type: "beta", alpha: number, beta: number } | { type: "normal", mean: number, stddev: number, min?: number, max?: number } | { type: "empirical", samples: number[] }} Distribution */
+/** @typedef {{ retryPropensity: Distribution, backtrackPropensity: Distribution, abandonmentPropensity: Distribution, signupResistance: Distribution, priceSensitivity: Distribution, explorationDepth: Distribution, readingDepth: Distribution, errorRecoveryAttempts: Distribution, noActionPropensity: Distribution }} BehaviorPolicyDefinition */
+/** @typedef {{ viewportOnly: boolean, maxCandidateElements: number, primaryCtaWeight: number, headingWeight: number, textGoalMatchWeight: number, visualSaliencyWeight: number, priorExpectationWeight: number, inspectBelowFoldProbability: Distribution, inspectSecondaryNavigationProbability: Distribution }} AttentionPolicyDefinition */
+/** @typedef {{ seed: number, values: Record<string, number | string> }} SampledBehaviorPolicy */
+/** @typedef {{ perceivedProgress: number, frustration: number, trust: number, perceivedValue: number, confidence: number, noProgressCount: number, recoveryAttempts: number, backtrackCount: number, knownFacts: string[], uncertainties: string[] }} PersonaRuntimeState */
+/** @typedef {{ id: string, visible: boolean, enabled?: boolean, inViewport?: boolean, occluded?: boolean, viewportPosition?: { inViewport?: boolean, occluded?: boolean }, secondaryNavigation?: boolean, primaryCta?: boolean, heading?: boolean, goalMatch?: number, salience?: number }} ObservedElement */
 export const PRESETS = Object.freeze({
   impatient_new_user: preset(0.15, 0.15, 0.8, 0.8, 0.7, 0.2, 0.2, 1, 0.35),
   careful_business_buyer: preset(0.45, 0.35, 0.25, 0.45, 0.5, 0.65, 0.9, 2, 0.15),
@@ -72,17 +15,17 @@ export const PRESETS = Object.freeze({
 });
 
 function preset(
-  retry: number,
-  backtrack: number,
-  abandon: number,
-  signup: number,
-  price: number,
-  explore: number,
-  read: number,
-  recovery: number,
-  noAction: number,
-): BehaviorPolicyDefinition {
-  const fixed = (value: number): Distribution => ({ type: "fixed", value });
+  retry,
+  backtrack,
+  abandon,
+  signup,
+  price,
+  explore,
+  read,
+  recovery,
+  noAction,
+) {
+  const fixed = value => ({ type: "fixed", value });
   return {
     retryPropensity: fixed(retry),
     backtrackPropensity: fixed(backtrack),
@@ -97,19 +40,19 @@ function preset(
 }
 
 export function deriveSessionSeed(
-  studySeed: number,
-  taskId: string,
-  personaId: string,
+  studySeed,
+  taskId,
+  personaId,
   variant = "default",
   repetitionIndex = 0,
-): number {
+) {
   return createHash("sha256")
     .update(`${studySeed}\0${taskId}\0${personaId}\0${variant}\0${repetitionIndex}`)
     .digest()
     .readUInt32BE(0);
 }
 
-export function createRandom(seed: number): () => number {
+export function createRandom(seed) {
   let value = seed >>> 0;
   return () => {
     value += 0x6d2b79f5;
@@ -120,7 +63,7 @@ export function createRandom(seed: number): () => number {
   };
 }
 
-export function sampleDistribution(distribution: Distribution, random: () => number): number | string {
+export function sampleDistribution(distribution, random) {
   switch (distribution.type) {
     case "fixed":
       return distribution.value;
@@ -136,7 +79,7 @@ export function sampleDistribution(distribution: Distribution, random: () => num
         cumulative += item.probability;
         if (choice <= cumulative) return item.value;
       }
-      return distribution.values.at(-1)!.value;
+      return distribution.values.at(-1).value;
     }
     case "normal": {
       if (distribution.stddev < 0) throw new Error("normal stddev must be non-negative");
@@ -154,11 +97,11 @@ export function sampleDistribution(distribution: Distribution, random: () => num
     }
     case "empirical":
       if (distribution.samples.length === 0) throw new Error("empirical distribution requires samples");
-      return distribution.samples[Math.floor(random() * distribution.samples.length)]!;
+      return distribution.samples[Math.floor(random() * distribution.samples.length)];
   }
 }
 
-function sampleGamma(shape: number, random: () => number): number {
+function sampleGamma(shape, random) {
   if (shape < 1) return sampleGamma(shape + 1, random) * random() ** (1 / shape);
   const d = shape - 1 / 3;
   const c = 1 / Math.sqrt(9 * d);
@@ -171,17 +114,17 @@ function sampleGamma(shape: number, random: () => number): number {
   }
 }
 
-export function sampleBehaviorPolicy(definition: BehaviorPolicyDefinition, seed: number): SampledBehaviorPolicy {
+export function sampleBehaviorPolicy(definition, seed) {
   const random = createRandom(seed);
   return {
     seed,
     values: Object.fromEntries(
       Object.entries(definition).map(([key, distribution]) => [key, sampleDistribution(distribution, random)]),
-    ) as SampledBehaviorPolicy["values"],
+    ),
   };
 }
 
-export function createPersonaState(): PersonaRuntimeState {
+export function createPersonaState() {
   return {
     perceivedProgress: 0,
     frustration: 0,
@@ -197,10 +140,10 @@ export function createPersonaState(): PersonaRuntimeState {
 }
 
 export function reducePersonaState(
-  state: PersonaRuntimeState,
-  signals: { progressChanged?: boolean; failedInteraction?: boolean; backtrack?: boolean; recovered?: boolean; runtimeFailure?: boolean },
-): PersonaRuntimeState {
-  const clamp = (value: number) => Math.max(0, Math.min(1, value));
+  state,
+  signals,
+) {
+  const clamp = (value) => Math.max(0, Math.min(1, value));
   return {
     ...state,
     perceivedProgress: clamp(state.perceivedProgress + (signals.progressChanged ? 0.2 : 0)),
@@ -214,10 +157,10 @@ export function reducePersonaState(
 }
 
 export function filterPerceivedElements(
-  elements: readonly ObservedElement[],
-  attention: AttentionPolicyDefinition,
-  seed: number,
-): ObservedElement[] {
+  elements,
+  attention,
+  seed,
+) {
   const random = createRandom(seed);
   const inspectBelowFold = Number(sampleDistribution(attention.inspectBelowFoldProbability, random)) >= random();
   const inspectSecondary = Number(sampleDistribution(attention.inspectSecondaryNavigationProbability, random)) >= random();
@@ -238,17 +181,7 @@ export function filterPerceivedElements(
     .map(({ element }) => ({ ...element }));
 }
 
-export function evaluateAbandonment(input: {
-  state: PersonaRuntimeState;
-  sampledPolicy: SampledBehaviorPolicy;
-  actionCount: number;
-  maxActions: number;
-  elapsedMs: number;
-  maxDurationMs: number;
-  abandonmentAllowed: boolean;
-  safetyBlocked?: boolean;
-  randomValue?: number;
-}): { shouldAbandon: boolean; reasonCode?: string; deterministicSignals: string[]; sampledProbability?: number } {
+export function evaluateAbandonment(input) {
   if (input.actionCount >= input.maxActions) return abandon("action_budget", ["action_budget_exhausted"]);
   if (input.elapsedMs >= input.maxDurationMs) return abandon("time_budget", ["time_budget_exhausted"]);
   if (input.safetyBlocked) return abandon("trust_failure", ["safety_blocked"]);
@@ -261,6 +194,6 @@ export function evaluateAbandonment(input: {
   return { shouldAbandon: false, deterministicSignals: [], sampledProbability: probability };
 }
 
-function abandon(reasonCode: string, deterministicSignals: string[]) {
+function abandon(reasonCode, deterministicSignals) {
   return { shouldAbandon: true, reasonCode, deterministicSignals };
 }

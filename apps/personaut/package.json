@@ -35,9 +35,9 @@
   ],
   "scripts": {
     "start": "node bin/personaut.mjs",
-    "build": "pnpm --filter @persona-runtime/persona-policy build && esbuild src/index.mjs --bundle --platform=node --format=esm --outfile=dist/index.mjs --external:@playwright/test --external:typescript --external:yaml",
+    "build": "esbuild src/index.mjs --bundle --sourcemap --platform=node --format=esm --outfile=dist/index.mjs --external:@playwright/test --external:typescript --external:yaml",
     "typecheck": "node --check src/*.mjs && node --check bin/personaut.mjs",
-    "test": "node --test test/*.test.mjs && vitest run test/driver.spec.mjs",
+    "test": "node --test test/*.test.mjs && vitest run test/driver.spec.mjs test/persona-policy.spec.mjs",
     "prepack": "pnpm build",
     "prepublishOnly": "pnpm test"
   },
@@ -58,7 +58,6 @@
   },
   "devDependencies": {
     "@persona-runtime/hermes-transport": "workspace:*",
-    "@persona-runtime/persona-policy": "workspace:*",
     "esbuild": "^0.28.1",
     "playwright-spec-extract": "workspace:*",
     "vitest": "^3.2.7"
