@@ -1,5 +1,12 @@
 # @lodado/personaut
 
+## 0.5.2
+
+### Patch Changes
+
+- Flatten internal runtime modules into the Personaut app, convert persona policy
+  to plain ESM, and simplify the bundled build.
+
 ## 0.5.1
 
 ### Patch Changes
