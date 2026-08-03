@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { parseDashboardSpecFile } from "../src/legacy/parser.mjs";
-import { literalExpectedForLive } from "../src/expectation/abstractor.mjs";
+import {
+  literalExpectedForLive,
+  parseDashboardSpecFile,
+} from "playwright-spec-extract/spec-parser";
 import { collectLiveSkippedEntries } from "../src/policy/live-filter.mjs";
 
-describe("playwright-spec-adapter legacy exports", () => {
+describe("playwright-spec-adapter shared extraction", () => {
   it("preserves parser, abstraction, and live filter behavior", () => {
     const spec = parseDashboardSpecFile(
       "pricing.spec.ts",

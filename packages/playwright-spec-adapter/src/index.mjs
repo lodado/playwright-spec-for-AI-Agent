@@ -1,4 +1,4 @@
 export * from "playwright-spec-extract/spec-parser";
-export * from "./expectation/abstractor.mjs";
+export * from "playwright-spec-extract/expectation-abstractor";
 export * from "./policy/live-filter.mjs";
 export * from "./compiler.mjs";

@@ -2,7 +2,7 @@
  * Rule-based abstraction of Playwright expectations for non-deterministic live QA.
  */
 
-export const ABSTRACTION_RULES_VERSION = "1.1.0";
+export const ABSTRACTION_RULES_VERSION = "1.2.0";
 
 const SCORE_KO_PATTERN = /^[\d,]+(?:\.\d+)?\s*점$/;
 const PERCENT_PATTERN = /^[\d,]+(?:\.\d+)?\s*%$/;
