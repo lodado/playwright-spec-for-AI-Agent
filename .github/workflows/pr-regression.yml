@@ -20,7 +20,7 @@ jobs:
           node-version: "20"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter playwright-driver exec playwright install --with-deps chromium
+      - run: pnpm --filter playwright-spec-for-ai-agent exec playwright install --with-deps chromium
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test

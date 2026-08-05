@@ -75,6 +75,9 @@ describe("qa-native one-shot execute -> judge -> review -> report", () => {
         env,
         handlers: { execute: (options) => executeQaNative(options, {
           createProposer,
+          createApplicabilitySelector: () => async ({ behaviors }) => ({
+            behaviors: behaviors.map(({ behaviorId }) => ({ behaviorId, status: "APPLICABLE", confidence: 1, rationale: "test fixture" })),
+          }),
           executeAdaptive: (adaptive) => runAdaptiveSuiteWithPlaywright({ ...adaptive, browserType: chromium }),
           extractFull: async ({ manifest }) => ({ status: "ABSTRACTED", tests: manifest.tests.map((test) => ({ testId: test.testId, given: ["the dashboard is available"], when: ["the page is observed"], then: ["Dashboard content is visible"], classification: "LIVE_EXECUTABLE" })) }),
           reviewFull: async ({ candidate }) => ({ status: "APPROVED", tests: candidate.tests }),
