@@ -1,5 +1,11 @@
 # Changelog
 
+## 5.0.0
+
+### Major Changes
+
+- Release the QA Native v3 pipeline and share canonical hashing through the bundled QA kit.
+
 ## 4.0.0
 
 ### Major Changes

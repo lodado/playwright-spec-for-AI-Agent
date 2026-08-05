@@ -1,6 +1,6 @@
 {
   "name": "playwright-spec-for-ai-agent",
-  "version": "4.0.0",
+  "version": "5.0.0",
   "description": "AI-native Playwright QA pipeline that extracts code-owned policy, interprets Given/When/Then behavior, executes authorized browser actions, and reviews evidence-bound judgments.",
   "type": "module",
   "license": "MIT",
@@ -61,7 +61,8 @@
     "packages/provider-hermes/index.mjs"
   ],
   "bundledDependencies": [
-    "playwright-spec-extract"
+    "playwright-spec-extract",
+    "qa-kit"
   ],
   "scripts": {
     "prepack": "esbuild scripts/hermes-runner.mjs --bundle --platform=node --format=esm --outfile=scripts/hermes-runner.mjs --allow-overwrite",
@@ -78,6 +79,7 @@
   },
   "dependencies": {
     "playwright-spec-extract": "workspace:*",
+    "qa-kit": "workspace:*",
     "typescript": "^5.9.3"
   },
   "devDependencies": {

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { canonicalHash as sharedCanonicalHash, canonicalJson as sharedCanonicalJson } from "qa-kit/canonical";
 
 export const CONTRACT_VIOLATION = "CONTRACT_VIOLATION";
 export const ARTIFACT_VERSION = "artifact/0.1";
@@ -139,11 +139,11 @@ export class ContractViolationError extends Error {
 }
 
 export function canonicalJson(value) {
-  return JSON.stringify(canonicalize(value));
+  return sharedCanonicalJson(value, { omitKeys: payloadHashNoise });
 }
 
 export function canonicalHash(value) {
-  return `sha256:${createHash("sha256").update(canonicalJson(value)).digest("hex")}`;
+  return sharedCanonicalHash(value, { omitKeys: payloadHashNoise });
 }
 
 export function payloadContentHash(payload) {
@@ -185,17 +185,6 @@ export function snapshotContract(contract, value, context = {}) {
   const snapshot = JSON.parse(serialized);
   validateContract(contract, snapshot, context);
   return deepFreeze(snapshot);
-}
-
-function canonicalize(value) {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (!isRecord(value)) return value;
-  return Object.fromEntries(
-    Object.keys(value)
-      .filter((key) => !payloadHashNoise.has(key))
-      .sort()
-      .map((key) => [key, canonicalize(value[key])]),
-  );
 }
 
 function validateArtifactEnvelope(value, path) {

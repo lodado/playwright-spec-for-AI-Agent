@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { canonicalHash as sharedCanonicalHash, canonicalJson as sharedCanonicalJson } from "qa-kit/canonical";
 
 export const STUDY_SPEC_VERSION = "study-spec/0.1";
 export const SESSION_VERSION = "session/0.1";
@@ -41,11 +42,11 @@ export class ContractMigrationError extends Error {
 }
 
 export function canonicalJson(value) {
-  return JSON.stringify(canonicalize(value));
+  return sharedCanonicalJson(value);
 }
 
 export function canonicalHash(value) {
-  return `sha256:${createHash("sha256").update(canonicalJson(value)).digest("hex")}`;
+  return sharedCanonicalHash(value);
 }
 
 export function redactStudySecrets(study) {
@@ -718,12 +719,6 @@ function validateViewport(value, path) {
   positiveInteger(value.height, `${path}.height`);
   optional(value.deviceScaleFactor, number, `${path}.deviceScaleFactor`);
   optional(value.isMobile, boolean, `${path}.isMobile`);
-}
-
-function canonicalize(value) {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
 }
 
 function deepFreeze(value) {

@@ -58,6 +58,9 @@ importers:
       playwright-spec-extract:
         specifier: workspace:*
         version: link:../../packages/playwright-spec-extract
+      qa-kit:
+        specifier: workspace:*
+        version: link:../../packages/qa-kit
       vitest:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@24.13.3)(jiti@1.21.7)(yaml@2.9.0)
@@ -67,6 +70,9 @@ importers:
       playwright-spec-extract:
         specifier: workspace:*
         version: link:../../packages/playwright-spec-extract
+      qa-kit:
+        specifier: workspace:*
+        version: link:../../packages/qa-kit
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -251,6 +257,8 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+
+  packages/qa-kit: {}
 
   packages/reporter-github: {}
 

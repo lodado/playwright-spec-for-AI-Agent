@@ -1,5 +1,11 @@
 # @lodado/personaut
 
+## 0.5.3
+
+### Patch Changes
+
+- Release the QA Native v3 pipeline and share canonical hashing through the bundled QA kit.
+
 ## 0.5.2
 
 ### Patch Changes

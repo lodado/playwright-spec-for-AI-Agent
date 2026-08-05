@@ -1,6 +1,6 @@
 {
   "name": "@lodado/personaut",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Evidence-first behavioral testing CLI for running persona-based Playwright sessions from StudySpec files.",
   "type": "module",
   "license": "MIT",
@@ -60,6 +60,7 @@
     "@persona-runtime/hermes-transport": "workspace:*",
     "esbuild": "^0.28.1",
     "playwright-spec-extract": "workspace:*",
+    "qa-kit": "workspace:*",
     "vitest": "^3.2.7"
   }
 }
