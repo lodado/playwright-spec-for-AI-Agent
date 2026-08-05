@@ -2,6 +2,7 @@ packages:
   - "apps/*"
   - "packages/*"
   - "examples/*"
+nodeLinker: hoisted
 
 minimumReleaseAge: 10080
 blockExoticSubdeps: true
