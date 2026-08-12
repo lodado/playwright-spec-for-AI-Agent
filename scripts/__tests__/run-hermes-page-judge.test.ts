@@ -98,4 +98,55 @@ describe("buildBrowseHermesQuery", () => {
     expect(query).toContain("Login required: false");
     expect(query).not.toContain("Password:");
   });
+
+  it("keeps credentials out of the prompt in preauthenticated mode", () => {
+    const query = buildBrowseHermesQuery({
+      judgeDocument: "## Plan\n\n### 1. test",
+      stagingLogin: {
+        loginUrl: "https://example.com/login",
+        email: "qa@example.com",
+        password: "super-secret-pw",
+        targetUrl: "https://example.com/dashboard",
+      },
+      preauthenticated: true,
+    });
+
+    expect(query).not.toContain("super-secret-pw");
+    expect(query).not.toContain("qa@example.com");
+    expect(query).not.toContain("Password:");
+    expect(query).toContain("already authenticated");
+    expect(query).toContain("never enter credentials");
+    expect(query).toContain("Target URL: https://example.com/dashboard");
+  });
+
+  it("still embeds credentials in the legacy prompt flow", () => {
+    const query = buildBrowseHermesQuery({
+      judgeDocument: "## Plan\n\n### 1. test",
+      stagingLogin: {
+        loginUrl: "https://example.com/login",
+        email: "qa@example.com",
+        password: "pw",
+        targetUrl: "https://example.com/dashboard",
+      },
+    });
+
+    expect(query).toContain("Password: pw");
+    expect(query).toContain("Login URL: https://example.com/login");
+  });
+
+  it("tells the judge to wait for the page to settle before failing", () => {
+    const query = buildBrowseHermesQuery({
+      judgeDocument: "## Plan",
+      stagingLogin: {
+        authRequired: false,
+        loginUrl: "https://example.com/login",
+        email: "",
+        password: "",
+        targetUrl: "https://example.com/pricing",
+      },
+    });
+
+    expect(query).toContain("wait until the page settles");
+    expect(query).toContain("re-observe once settled before marking `fail`");
+  });
 });

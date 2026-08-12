@@ -15,8 +15,14 @@ import {
   assertStagingQaCredentials,
   buildJudgeTargetUrl,
   displayPathForJudgeTarget,
+  isAuthRequired,
   redactEmail,
 } from "./staging-qa-config.mjs";
+import {
+  hasSessionProfile,
+  launchAuthenticatedBrowser,
+} from "./qa-browser-session.mjs";
+import { clearRunInvalid, markRunInvalid } from "./qa-run-invalid.mjs";
 import { resolveStagingQaConfig } from "./staging-qa-prompt.mjs";
 import { listAlwaysRunScenarios } from "./dashboard-spec-parser.mjs";
 import { buildJudgeBrowseDocument } from "./qa-spec-judge-document.mjs";
@@ -37,27 +43,38 @@ const HERMES_MAX_TURNS_BROWSE = 150;
 export function buildBrowseHermesQuery({
   judgeDocument,
   stagingLogin,
+  preauthenticated = false,
 }) {
   const authRequired = stagingLogin.authRequired !== false;
-  const accessInstruction = authRequired
-    ? "Follow the **QA test plan** below. Log in, open the target page, run the tests that apply to this account, and report results."
-    : "Follow the **QA test plan** below. Open the target page directly without logging in, run the tests that apply, and report results.";
-  const sessionLines = authRequired
+  const accessInstruction = !authRequired
+    ? "Follow the **QA test plan** below. Open the target page directly without logging in, run the tests that apply, and report results."
+    : preauthenticated
+      ? "Follow the **QA test plan** below. Your browser is already logged in — open the target page directly, run the tests that apply to this account, and report results."
+      : "Follow the **QA test plan** below. Log in, open the target page, run the tests that apply to this account, and report results.";
+  const sessionLines = !authRequired
     ? [
-        "## Session credentials",
-        "",
-        `Login URL: ${stagingLogin.loginUrl}`,
-        `Email: ${stagingLogin.email}`,
-        `Password: ${stagingLogin.password}`,
-        `Target URL: ${stagingLogin.targetUrl}`,
-      ]
-    : [
         "## Session access",
         "",
         "Login required: false",
         "Open the target URL directly. Do not search for email or password fields.",
         `Target URL: ${stagingLogin.targetUrl}`,
-      ];
+      ]
+    : preauthenticated
+      ? [
+          "## Session access",
+          "",
+          "The browser session is already authenticated.",
+          "Never visit the login page and never enter credentials; if the session appears logged out, stop and report `manual_review`.",
+          `Target URL: ${stagingLogin.targetUrl}`,
+        ]
+      : [
+          "## Session credentials",
+          "",
+          `Login URL: ${stagingLogin.loginUrl}`,
+          `Email: ${stagingLogin.email}`,
+          `Password: ${stagingLogin.password}`,
+          `Target URL: ${stagingLogin.targetUrl}`,
+        ];
 
   return [
     "You are a QA judge for a live staging environment.",
@@ -67,6 +84,8 @@ export function buildBrowseHermesQuery({
     "The test plan uses **Given / When / Then** — not JSON. Use the exact test **titles** from the plan in your verdict `checks[].item` field.",
     "",
     "## Rules",
+    "- After every navigation or interaction, wait until the page settles before judging: content stops changing and no skeleton, spinner, or placeholder is still loading (give it up to ~5 seconds).",
+    "- Never treat a loading, skeleton, or mid-transition state as evidence that something is missing — re-observe once settled before marking `fail`.",
     "- Pick **one** scenario that matches the live account, plus every **Always run** scenario.",
     "- Never mutate subscription or billing (no checkout, cancel, or confirm on destructive dialogs).",
     "- For **Safe interaction** tests: follow Playwright source in the plan; dismiss risky dialogs with Esc only.",
@@ -200,7 +219,7 @@ function renderMarkdown(decision, page, targetPath) {
   ].join("\n");
 }
 
-async function runBrowseJudge(page, target, paths, config) {
+async function runBrowseJudge(page, target, paths, config, { preauthenticated = false } = {}) {
   const resolved = resolveSpecForJudge(paths);
   if (!resolved) {
     throw new Error(
@@ -209,6 +228,12 @@ async function runBrowseJudge(page, target, paths, config) {
   }
 
   const stagingLogin = buildHermesStagingLogin(config);
+  if (preauthenticated) {
+    // The agent browses a pre-authenticated browser over CDP; credentials and
+    // even the account email stay out of the prompt and the judge plan.
+    stagingLogin.email = "";
+    stagingLogin.password = "";
+  }
   stagingLogin.targetUrl = buildJudgeTargetUrl(target, config.baseUrl);
   const targetPath = displayPathForJudgeTarget(target);
 
@@ -251,19 +276,32 @@ async function runBrowseJudge(page, target, paths, config) {
     console.log(`Judge test plan source: ${planSource} (+ session header)`);
   }
 
-  const raw = runHermes(
-    buildBrowseHermesQuery({
-      judgeDocument,
-      stagingLogin,
-    }),
-    HERMES_MAX_TURNS_BROWSE,
-    {
-    paths,
-    secrets: [config.email, config.password],
-    requiredKeys: ["status"],
-    mode: "browse",
+  const query = buildBrowseHermesQuery({
+    judgeDocument,
+    stagingLogin,
+    preauthenticated,
   });
-  return normalizeBrowseDecision(raw);
+  const secrets = [config.email, config.password].filter(Boolean);
+
+  // Preauthenticated mode relaunches the operator-authenticated profile with a
+  // CDP endpoint; hermes-runner forwards process.env, so BROWSER_CDP_URL makes
+  // the agent's browser tools attach to that session instead of a fresh one.
+  const session = preauthenticated ? await launchAuthenticatedBrowser() : null;
+  if (session) process.env.BROWSER_CDP_URL = session.cdpUrl;
+  try {
+    const raw = runHermes(query, HERMES_MAX_TURNS_BROWSE, {
+      paths,
+      secrets,
+      requiredKeys: ["status"],
+      mode: "browse",
+    });
+    return normalizeBrowseDecision(raw);
+  } finally {
+    if (session) {
+      delete process.env.BROWSER_CDP_URL;
+      await session.close();
+    }
+  }
 }
 
 async function main() {
@@ -286,15 +324,41 @@ async function main() {
     process.exit(1);
   }
 
+  // Session-first: with an operator-authenticated browser profile the run
+  // needs no credentials anywhere. --credentials-in-prompt forces the legacy
+  // flow (plaintext credentials inside the Hermes prompt).
+  const credentialsInPrompt = argv.includes("--credentials-in-prompt");
+  const sessionAvailable = hasSessionProfile();
+  const requireCredentials = credentialsInPrompt || !sessionAvailable;
+
   const { config, target } = await resolveStagingQaConfig(argv, {
     stepLabel: `${page} Hermes judge`,
     target: judgeTarget,
     page,
+    requireCredentials,
   });
-  assertStagingQaCredentials(config);
+  const preauthenticated =
+    isAuthRequired(config) && sessionAvailable && !credentialsInPrompt;
+  if (isAuthRequired(config) && !preauthenticated) {
+    assertStagingQaCredentials(config);
+    console.warn(
+      "[security] Credentials will be embedded in the Hermes prompt and its session logs. " +
+        "Prefer `npx playwright-spec-for-ai-agent login` to create a pre-authenticated session."
+    );
+  }
 
   const targetPath = displayPathForJudgeTarget(target);
-  const decision = await runBrowseJudge(page, target, paths, config);
+  let decision;
+  try {
+    decision = await runBrowseJudge(page, target, paths, config, {
+      preauthenticated,
+    });
+  } catch (error) {
+    // Quarantine the run: partial artifacts (judge plan, raw output) may have
+    // been written already; downstream commands must not report on them.
+    markRunInvalid(paths, error?.message ?? error);
+    throw error;
+  }
 
   writeFileSync(
     paths.hermesJudgmentJson,
@@ -304,6 +368,7 @@ async function main() {
     paths.hermesJudgmentMd,
     renderMarkdown(decision, page, targetPath)
   );
+  clearRunInvalid(paths);
 
   console.log(`Hermes ${page} QA judgment (browse): ${decision.status}`);
   if (decision.status === "fail") process.exitCode = 1;

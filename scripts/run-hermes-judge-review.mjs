@@ -19,6 +19,7 @@ import {
   ensureProjectConfig,
   parsePageArg,
 } from "./page-qa-paths.mjs";
+import { assertRunNotInvalid } from "./qa-run-invalid.mjs";
 
 const HERMES_MAX_TURNS_REVIEW = 6;
 
@@ -167,6 +168,8 @@ async function main() {
   const paths = artifactPaths(page);
 
   mkdirSync(paths.outputDir, { recursive: true });
+
+  assertRunNotInvalid(paths, "review");
 
   const judgment = readJson(paths.hermesJudgmentJson);
   if (!judgment) {

@@ -6,6 +6,7 @@ import {
   parsePageArg,
   parseTargetPathArg,
 } from "./page-qa-paths.mjs";
+import { assertRunNotInvalid } from "./qa-run-invalid.mjs";
 
 const WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
 const RUN_URL = process.env.GITHUB_SERVER_URL
@@ -100,6 +101,8 @@ async function main() {
   const page = parsePageArg(argv);
   const targetPath = parseTargetPathArg(argv, page);
   const paths = artifactPaths(page);
+
+  assertRunNotInvalid(paths, "slack");
 
   const judgment = readJson(paths.hermesJudgmentJson, null);
 

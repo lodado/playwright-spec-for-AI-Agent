@@ -10,6 +10,7 @@ const SCRIPTS_DIR = join(PACKAGE_ROOT, "scripts");
 const COMMANDS = {
   spec: "extract-page-e2e-spec.mjs",
   "abstract-ai": "run-hermes-spec-abstractor.mjs",
+  login: "run-qa-login.mjs",
   judge: "run-hermes-page-judge.mjs",
   review: "run-hermes-judge-review.mjs",
   slack: "slack-page-qa-report.mjs",
@@ -24,7 +25,9 @@ Usage:
 Commands:
   spec        Parse @qa-scenario specs → raw + rule-abstracted JSON
   abstract-ai Hermes writes Given/When/Then livePlan → qa-spec-live.json/.md
-  judge       Hermes logs into staging, visits the page, and judges live DOM
+  login       Open a headed browser to log in once; judge reuses the session
+  judge       Hermes opens the target page in the pre-authenticated browser
+              (or logs in itself with --credentials-in-prompt) and judges live DOM
   review      Hermes re-reviews judge results (evidence + pedantic pass/fail)
   slack       Post verdict to Slack webhook
   nightly     spec → abstract-ai → judge → review → (optional slack)
@@ -37,6 +40,8 @@ Common options:
   --spec-dir=<template>      Spec dir, supports {page} and {root}
   --output-dir=<template>    Output dir, supports {page} and {root}
   --email= / --password=     Staging credentials (or env vars)
+  --credentials-in-prompt    Legacy: embed credentials in the Hermes prompt
+                             instead of using the login session
   --auth-required=false      Skip login for public/no-auth target pages
   --non-interactive          Skip prompts (CI)
 

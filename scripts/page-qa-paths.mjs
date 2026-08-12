@@ -113,6 +113,7 @@ export function artifactPaths(page, outputDir = resolveOutputDir(page)) {
       outputDir,
       `${slug}-hermes-abstract-raw-output.txt`
     ),
+    runInvalidMarker: join(outputDir, `${slug}-qa-run.invalid`),
     hermesReviewJson: join(outputDir, `${slug}-hermes-judge-review.json`),
     hermesReviewMd: join(outputDir, `${slug}-hermes-judge-review.md`),
     hermesReviewQuery: join(outputDir, `${slug}-hermes-judge-review-query.txt`),

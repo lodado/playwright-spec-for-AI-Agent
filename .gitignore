@@ -4,3 +4,5 @@ node_modules/
 .qa/
 **/__QA__/
 .serena/
+# Authenticated QA browser session (owner-only, never committed)
+.private/

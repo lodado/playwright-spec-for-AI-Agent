@@ -99,15 +99,18 @@ async function promptConfirm(question, defaultYes = true) {
 
 /**
  * @param {ReturnType<typeof parseStagingQaArgs>} config
- * @param {{ stepLabel?: string, target?: { targetPath?: string | null, pageUrl?: string | null } | null }} [options]
+ * @param {{ stepLabel?: string, target?: { targetPath?: string | null, pageUrl?: string | null } | null, requireCredentials?: boolean }} [options]
  */
 export async function promptRunConfig(
   config,
-  { stepLabel = "Hermes judge", target = null } = {}
+  { stepLabel = "Hermes judge", target = null, requireCredentials = true } = {}
 ) {
   output.write(`\n--- Page QA: ${stepLabel} ---\n\n`);
 
-  if (isAuthRequired(config)) {
+  if (!requireCredentials) {
+    // Pre-authenticated browser session: the run needs no credentials at all.
+    output.write("Using the pre-authenticated QA browser session.\n");
+  } else if (isAuthRequired(config)) {
     if (config.email) {
       const keepEmail = await promptConfirm(
         `Use email ${redactEmail(config.email)}?`,
@@ -149,7 +152,7 @@ export async function promptRunConfig(
     );
   }
 
-  assertStagingQaCredentials(config);
+  if (requireCredentials) assertStagingQaCredentials(config);
 
   let resolvedTarget = target ?? {
     targetPath: config.dashboardPath,
@@ -182,7 +185,7 @@ export async function promptRunConfig(
  */
 export async function resolveStagingQaConfig(
   argv = process.argv.slice(2),
-  { stepLabel, target = null, page = null } = {}
+  { stepLabel, target = null, page = null, requireCredentials = true } = {}
 ) {
   const config = parseStagingQaArgs(argv);
   if (page) {
@@ -190,9 +193,9 @@ export async function resolveStagingQaConfig(
     applyStagingUrlDefaults(config, argv);
   }
   if (!shouldPromptInteractively(argv)) {
-    assertStagingQaCredentials(config);
+    if (requireCredentials) assertStagingQaCredentials(config);
     return { config, target };
   }
 
-  return promptRunConfig(config, { stepLabel, target });
+  return promptRunConfig(config, { stepLabel, target, requireCredentials });
 }
