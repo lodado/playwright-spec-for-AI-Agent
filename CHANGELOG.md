@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.0.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.8.0...v6.0.0) (2026-08-12)
+
+
+### Miscellaneous Chores
+
+* restore v0.8.0 runtime as the published package ([15a21ef](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/15a21ef254e8e5da87dc1ac90986fb77b77ff614))
+
 ## [0.8.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v0.7.0...v0.8.0) (2026-06-21)
 
 
