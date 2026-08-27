@@ -11,7 +11,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ABSTRACTION_RULES_VERSION } from "./expectation-abstractor.mjs";
 import { buildGwtPromptSpec } from "./abstract-ai-payload.mjs";
-import { runHermes } from "./hermes-runner.mjs";
+import { runAgent } from "./ai-agent-adapter.mjs";
 import { normalizeAbstractAiResult } from "./normalize-abstracted-spec.mjs";
 import { renderLiveSpecMarkdown } from "./qa-spec-live-artifact.mjs";
 import {
@@ -110,7 +110,7 @@ async function main() {
     return;
   }
 
-  const raw = runHermes(query, HERMES_MAX_TURNS_ABSTRACT, {
+  const raw = runAgent(query, HERMES_MAX_TURNS_ABSTRACT, {
     paths: {
       hermesAbstractQuery: paths.hermesAbstractQuery,
       hermesAbstractRawOutput: paths.hermesAbstractRawOutput,

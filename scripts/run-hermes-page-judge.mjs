@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runHermes } from "./hermes-runner.mjs";
+import { runAgent } from "./ai-agent-adapter.mjs";
 import { resolveSpecForJudge } from "./resolve-spec-for-judge.mjs";
 import {
   buildHermesStagingLogin,
@@ -289,7 +289,7 @@ async function runBrowseJudge(page, target, paths, config, { preauthenticated = 
   const session = preauthenticated ? await launchAuthenticatedBrowser() : null;
   if (session) process.env.BROWSER_CDP_URL = session.cdpUrl;
   try {
-    const raw = runHermes(query, HERMES_MAX_TURNS_BROWSE, {
+    const raw = runAgent(query, HERMES_MAX_TURNS_BROWSE, {
       paths,
       secrets,
       requiredKeys: ["status"],

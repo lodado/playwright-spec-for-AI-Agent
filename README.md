@@ -551,6 +551,28 @@ curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scri
 
 Hermes needs an inference model in `~/.hermes/config.yaml` or `HERMES_INFERENCE_MODEL`.
 
+### Switching the AI agent backend
+
+Hermes is the default, but every stage (`abstract-ai`, `judge`, `review`) calls the agent
+through an adapter, so the backend is swappable per run:
+
+```bash
+QA_AI_ADAPTER=aside npx playwright-spec-for-ai-agent judge --page=dashboard
+```
+
+Supported adapters:
+
+- `hermes` (default) — Hermes Agent, stateless ephemeral home, toolsets disabled per mode
+- `aside` — [Aside Browser](https://aside.app) CLI (`aside exec`); model and effort come from
+  Aside user settings unless overridden with `ASIDE_QA_MODEL` / `ASIDE_QA_EFFORT`
+
+Aside caveats: no max-turns or toolset-disable flags (text-only stages rely on the prompt's
+"do not use tools" instruction), and the judge's pre-authenticated CDP attach is Hermes-only —
+Aside drives its own browser and performs the staging login itself.
+
+Adding a backend = one runner module exporting `(query, maxTurns, options) -> JSON` plus one
+entry in the adapter table in `scripts/ai-agent-adapter.mjs`.
+
 ## Limits
 
 This tool is not:

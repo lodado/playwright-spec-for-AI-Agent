@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runHermes } from "./hermes-runner.mjs";
+import { runAgent } from "./ai-agent-adapter.mjs";
 import {
   formatJudgmentForReview,
   normalizeJudgeReview,
@@ -202,7 +202,7 @@ async function main() {
     return;
   }
 
-  const raw = runHermes(query, HERMES_MAX_TURNS_REVIEW, {
+  const raw = runAgent(query, HERMES_MAX_TURNS_REVIEW, {
     paths: {
       hermesReviewQuery: paths.hermesReviewQuery,
       hermesReviewRawOutput: paths.hermesReviewRawOutput,
