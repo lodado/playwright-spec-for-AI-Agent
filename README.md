@@ -566,12 +566,24 @@ Supported adapters:
 - `aside` — [Aside Browser](https://aside.app) CLI (`aside exec`); model and effort come from
   Aside user settings unless overridden with `ASIDE_QA_MODEL` / `ASIDE_QA_EFFORT`
 
-Aside caveats: no max-turns or toolset-disable flags (text-only stages rely on the prompt's
-"do not use tools" instruction), and the judge's pre-authenticated CDP attach is Hermes-only —
-Aside drives its own browser and performs the staging login itself.
+Aside specifics:
 
-Adding a backend = one runner module exporting `(query, maxTurns, options) -> JSON` plus one
-entry in the adapter table in `scripts/ai-agent-adapter.mjs`.
+- `judge` pre-authenticates Aside Browser by piping a login script to `aside repl` over
+  stdin, so credentials stay out of the prompt, process argv, and session logs
+  (pass `--credentials-in-prompt` to force the legacy embedded-credential flow)
+- no max-turns flag — runs are capped by wall clock instead: `ASIDE_QA_TIMEOUT_MS`
+  (default 10 minutes)
+- no toolset-disable flags — text-only stages rely on the prompt's "do not use tools"
+  instruction
+
+Judgments record which backend ran (`agentMeta: { adapter, model, durationMs }` in
+`{page}-hermes-judgment.json`). Set `QA_RECORD_VIDEO=1` to save the Hermes
+pre-authenticated judge session as webm under `{outputDir}/videos/` (Hermes-only —
+Aside drives its own browser).
+
+Adding a backend = one runner module exporting `(query, maxTurns, options) -> JSON` that
+passes `scripts/__tests__/agent-runner-contract.test.ts`, plus one entry in the adapter
+table in `scripts/ai-agent-adapter.mjs`.
 
 ## Limits
 

@@ -24,12 +24,49 @@ describe("normalizeBrowseDecision", () => {
     ).toBe("pass");
   });
 
-  it("passes when all checks are skip", () => {
+  it("manual_reviews when all checks are skip (nothing was verified)", () => {
     expect(
       normalizeBrowseDecision({
-        checks: [{ item: "a", result: "skip", detail: "" }],
+        status: "pass",
+        checks: [{ item: "a", result: "skip", detail: "login failed" }],
       }).status,
-    ).toBe("pass");
+    ).toBe("manual_review");
+  });
+
+  it("never upgrades the agent's own verdict", () => {
+    expect(
+      normalizeBrowseDecision({
+        status: "manual_review",
+        checks: [{ item: "a", result: "pass", detail: "" }],
+      }).status,
+    ).toBe("manual_review");
+    expect(
+      normalizeBrowseDecision({
+        status: "fail",
+        checks: [{ item: "a", result: "pass", detail: "" }],
+      }).status,
+    ).toBe("fail");
+  });
+
+  it("downgrades the agent's verdict when checks are worse", () => {
+    expect(
+      normalizeBrowseDecision({
+        status: "pass",
+        checks: [{ item: "a", result: "fail", detail: "" }],
+      }).status,
+    ).toBe("fail");
+  });
+
+  it("passes agentMeta through to the decision", () => {
+    const decision = normalizeBrowseDecision({
+      checks: [{ item: "a", result: "pass", detail: "" }],
+      agentMeta: { adapter: "aside", model: "m", durationMs: 12 },
+    });
+    expect(decision.agentMeta).toEqual({
+      adapter: "aside",
+      model: "m",
+      durationMs: 12,
+    });
   });
 
   it("fails when any check fails", () => {

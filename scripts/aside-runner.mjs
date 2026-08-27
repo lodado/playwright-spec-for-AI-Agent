@@ -11,6 +11,19 @@ export const ASIDE_QA_COMMAND =
   process.env.ASIDE_QA_COMMAND?.trim() || REQUIRED_ASIDE_BIN;
 
 /**
+ * Aside has no max-turns flag, so a wall-clock timeout is the only runaway
+ * guard (Hermes caps at --max_turns instead).
+ */
+export const ASIDE_QA_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+
+export function resolveAsideTimeoutMs() {
+  const parsed = Number(process.env.ASIDE_QA_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : ASIDE_QA_DEFAULT_TIMEOUT_MS;
+}
+
+/**
  * Aside has no --max_turns or --disabled_toolsets flags, so maxTurns is
  * ignored and text-only discipline relies on the query's own "do not use
  * tools" instruction. Model/effort come from Aside user settings unless
@@ -51,14 +64,23 @@ export function runAside(
     writeFileSync(queryPath, redactSensitiveText(query, secrets));
   }
 
+  const timeout = resolveAsideTimeoutMs();
   const result = spawnSync(ASIDE_QA_COMMAND, buildAsideAgentArgs(query), {
     shell: false,
     encoding: "utf8",
     maxBuffer: 1024 * 1024 * 10,
     env: process.env,
+    timeout,
   });
 
-  if (result.error) throw result.error;
+  if (result.error) {
+    if (result.error.code === "ETIMEDOUT") {
+      throw new Error(
+        `Aside timed out after ${timeout}ms (ASIDE_QA_TIMEOUT_MS to adjust).`
+      );
+    }
+    throw result.error;
+  }
 
   const combinedOutput = [
     result.stdout ? `--- stdout ---\n${result.stdout}` : "",

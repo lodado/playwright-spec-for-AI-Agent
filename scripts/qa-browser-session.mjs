@@ -70,14 +70,20 @@ async function importChromium() {
 /**
  * Relaunch the operator-authenticated profile headless with a CDP endpoint.
  * Returns `{ cdpUrl, close }`; keep it open for the whole Hermes run.
+ * With `recordVideoDir`, the whole judge session is saved as webm — replay
+ * evidence for manual_review verdicts without re-running.
  */
-export async function launchAuthenticatedBrowser({ root = process.cwd() } = {}) {
+export async function launchAuthenticatedBrowser({
+  root = process.cwd(),
+  recordVideoDir = null,
+} = {}) {
   const profileDir = assertPrivateProfileDir(root);
   const chromium = await importChromium();
   const port = await findFreePort();
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: true,
     args: [`--remote-debugging-port=${port}`],
+    ...(recordVideoDir ? { recordVideo: { dir: recordVideoDir } } : {}),
   });
   return {
     cdpUrl: `http://127.0.0.1:${port}`,

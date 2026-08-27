@@ -1,4 +1,4 @@
-import { runHermes } from "./hermes-runner.mjs";
+import { readHermesModelConfig, runHermes } from "./hermes-runner.mjs";
 import { runAside } from "./aside-runner.mjs";
 
 /**
@@ -18,6 +18,15 @@ export function resolveAdapterName() {
   return process.env.QA_AI_ADAPTER?.trim() || "hermes";
 }
 
+function resolveAdapterModel(name) {
+  if (name === "aside") return process.env.ASIDE_QA_MODEL?.trim() || null;
+  try {
+    return readHermesModelConfig().model;
+  } catch {
+    return null;
+  }
+}
+
 export function runAgent(query, maxTurns, options = {}) {
   const name = resolveAdapterName();
   const adapter = ADAPTERS[name];
@@ -26,5 +35,17 @@ export function runAgent(query, maxTurns, options = {}) {
       `Unknown QA_AI_ADAPTER: ${JSON.stringify(name)}. Supported: ${Object.keys(ADAPTERS).join(", ")}`
     );
   }
-  return adapter(query, maxTurns, options);
+  const startedAt = Date.now();
+  const result = adapter(query, maxTurns, options);
+  // The agent's self-reported `source` comes from a prompt template and lies
+  // when the backend is swapped — the adapter is the authority on who ran.
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    result.source = name === "hermes" ? "hermes-agent" : name;
+    result.agentMeta = {
+      adapter: name,
+      model: resolveAdapterModel(name),
+      durationMs: Date.now() - startedAt,
+    };
+  }
+  return result;
 }

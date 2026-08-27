@@ -8,7 +8,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runAgent } from "./ai-agent-adapter.mjs";
+import { resolveAdapterName, runAgent } from "./ai-agent-adapter.mjs";
+import { preloginAside } from "./aside-prelogin.mjs";
 import { resolveSpecForJudge } from "./resolve-spec-for-judge.mjs";
 import {
   buildHermesStagingLogin,
@@ -150,22 +151,34 @@ export function normalizeBrowseDecision(raw) {
       }))
     : [];
 
+  // A run where nothing was actually executed (all skip, e.g. login failure)
+  // must never report green — same principle as pytest exit code 5 / Playwright
+  // "no tests found".
+  const executed = checks.filter(check => check.result !== "skip");
   const derivedStatus = checks.some(check => check.result === "fail")
     ? "fail"
     : checks.some(check => check.result === "manual_review") ||
-        checks.length === 0
+        executed.length === 0
       ? "manual_review"
       : "pass";
 
+  // Normalization may only downgrade the agent's own verdict, never upgrade
+  // it: if the agent said manual_review/fail, checks cannot turn that into pass.
+  const severity = { pass: 0, manual_review: 1, fail: 2 };
+  const agentStatus = allowedStatuses.has(raw.status) ? raw.status : null;
+  const status =
+    agentStatus && severity[agentStatus] > severity[derivedStatus]
+      ? agentStatus
+      : derivedStatus;
+
   return {
-    status: allowedStatuses.has(derivedStatus)
-      ? derivedStatus
-      : "manual_review",
+    status,
     summary: raw.summary ?? "Hermes QA judgment completed.",
     checks,
     evidence: Array.isArray(raw.evidence) ? raw.evidence : [],
     recommendedAction: raw.recommendedAction ?? "",
     source: raw.source ?? "hermes-agent",
+    ...(raw.agentMeta ? { agentMeta: raw.agentMeta } : {}),
   };
 }
 
@@ -191,6 +204,11 @@ function renderMarkdown(decision, page, targetPath) {
     `- Mode: \`browse\``,
     `- Page: \`${targetPath}\``,
     `- Source: ${decision.source}`,
+    ...(decision.agentMeta
+      ? [
+          `- Adapter: ${decision.agentMeta.adapter}${decision.agentMeta.model ? ` (${decision.agentMeta.model})` : ""}, ${Math.round(decision.agentMeta.durationMs / 1000)}s`,
+        ]
+      : []),
     "",
     "## Summary",
     "",
@@ -283,10 +301,29 @@ async function runBrowseJudge(page, target, paths, config, { preauthenticated = 
   });
   const secrets = [config.email, config.password].filter(Boolean);
 
-  // Preauthenticated mode relaunches the operator-authenticated profile with a
-  // CDP endpoint; hermes-runner forwards process.env, so BROWSER_CDP_URL makes
-  // the agent's browser tools attach to that session instead of a fresh one.
-  const session = preauthenticated ? await launchAuthenticatedBrowser() : null;
+  const adapterName = resolveAdapterName();
+
+  // Preauthenticated mode, per adapter:
+  // - hermes: relaunch the operator-authenticated profile with a CDP endpoint;
+  //   hermes-runner forwards process.env, so BROWSER_CDP_URL makes the agent's
+  //   browser tools attach to that session instead of a fresh one.
+  // - aside: drive Aside Browser's own persistent profile — log in via a repl
+  //   script over stdin (credentials never in argv or prompt), then the exec
+  //   agent reuses that session.
+  if (preauthenticated && adapterName === "aside") {
+    preloginAside({
+      loginUrl: stagingLogin.loginUrl,
+      email: config.email,
+      password: config.password,
+    });
+  }
+  const recordVideoDir = process.env.QA_RECORD_VIDEO
+    ? resolve(paths.outputDir, "videos")
+    : null;
+  const session =
+    preauthenticated && adapterName !== "aside"
+      ? await launchAuthenticatedBrowser({ recordVideoDir })
+      : null;
   if (session) process.env.BROWSER_CDP_URL = session.cdpUrl;
   try {
     const raw = runAgent(query, HERMES_MAX_TURNS_BROWSE, {
@@ -327,9 +364,13 @@ async function main() {
   // Session-first: with an operator-authenticated browser profile the run
   // needs no credentials anywhere. --credentials-in-prompt forces the legacy
   // flow (plaintext credentials inside the Hermes prompt).
+  // Aside preauths differently: it always needs credentials (for the repl
+  // prelogin script), but they stay out of the prompt and argv.
   const credentialsInPrompt = argv.includes("--credentials-in-prompt");
   const sessionAvailable = hasSessionProfile();
-  const requireCredentials = credentialsInPrompt || !sessionAvailable;
+  const asideAdapter = resolveAdapterName() === "aside";
+  const requireCredentials =
+    credentialsInPrompt || asideAdapter || !sessionAvailable;
 
   const { config, target } = await resolveStagingQaConfig(argv, {
     stepLabel: `${page} Hermes judge`,
@@ -338,7 +379,9 @@ async function main() {
     requireCredentials,
   });
   const preauthenticated =
-    isAuthRequired(config) && sessionAvailable && !credentialsInPrompt;
+    isAuthRequired(config) &&
+    !credentialsInPrompt &&
+    (asideAdapter || sessionAvailable);
   if (isAuthRequired(config) && !preauthenticated) {
     assertStagingQaCredentials(config);
     console.warn(
