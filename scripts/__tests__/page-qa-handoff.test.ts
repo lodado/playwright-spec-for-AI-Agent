@@ -295,6 +295,124 @@ describe("buildHandoffReport", () => {
   });
 });
 
+describe("evidence provenance", () => {
+  beforeEach(() => {
+    writeArtifact("demo-qa-spec.json", SPEC);
+    writeFileSync(join(qaDir, "demo-qa-spec-live.md"), LIVE_PLAN);
+  });
+
+  it("marks a judge-cited path outside the run's output directory as unverifiable", () => {
+    writeArtifact("demo-hermes-judgment.json", {
+      ...JUDGMENT,
+      checks: [
+        {
+          ...JUDGMENT.checks[1],
+          evidenceRefs: ["/Users/someone/.aside/sessions/2026/tmp/shot.png"],
+        },
+      ],
+    });
+
+    const rendered = renderHandoffReport(buildHandoffReport("demo"));
+
+    expect(rendered).toContain("Cited by the judge (self-reported");
+    expect(rendered).toContain("unverifiable — outside this run");
+    // The old wording promised every listed file came from the harness, which
+    // is false for anything the audited agent wrote in its own scratch space.
+    expect(rendered).not.toContain(
+      "Files under `Evidence:` were captured by the harness"
+    );
+  });
+
+  it("does not call a harness-owned artifact unverifiable", () => {
+    writeFileSync(join(qaDir, "shot.png"), "x");
+    writeArtifact("demo-hermes-judgment.json", {
+      ...JUDGMENT,
+      checks: [{ ...JUDGMENT.checks[1], evidenceRefs: ["shot.png"] }],
+    });
+
+    const rendered = renderHandoffReport(buildHandoffReport("demo"));
+    const citation = rendered
+      .split("\n")
+      .find(line => line.startsWith("- shot.png"));
+
+    // "unverifiable" appears in the trust frame by design; what matters is
+    // that this citation is not the thing being called that.
+    expect(citation).toBe("- shot.png");
+  });
+
+  it("says so when a cited path inside the run is not on disk", () => {
+    writeArtifact("demo-hermes-judgment.json", {
+      ...JUDGMENT,
+      checks: [{ ...JUDGMENT.checks[1], evidenceRefs: ["evidence/gone.png"] }],
+    });
+
+    const rendered = renderHandoffReport(buildHandoffReport("demo"));
+
+    expect(rendered).toContain("recorded, but missing on disk");
+  });
+});
+
+describe("reviewer criteria that name every check", () => {
+  beforeEach(() => {
+    writeArtifact("demo-qa-spec.json", SPEC);
+    writeFileSync(join(qaDir, "demo-qa-spec-live.md"), LIVE_PLAN);
+    writeArtifact("demo-hermes-judgment.json", {
+      ...JUDGMENT,
+      checks: [
+        { ...JUDGMENT.checks[0], result: "manual_review", cause: "SPEC_GAP" },
+        JUDGMENT.checks[1],
+      ],
+    });
+  });
+
+  it("states a run-wide concern once instead of under every check", () => {
+    writeArtifact("demo-hermes-judge-review.json", {
+      overallReview: "flagged",
+      summary: "Two conclusions are unreliable.",
+      criteria: [
+        {
+          id: "not-overly-pedantic",
+          verdict: "fail",
+          detail: "The judge made two pedantic non-pass decisions.",
+          affectedChecks: [
+            "shows the plan name in the header",
+            "shows an account health score",
+          ],
+        },
+      ],
+    });
+
+    const rendered = renderHandoffReport(buildHandoffReport("demo"));
+    const occurrences = rendered.split("The judge made two pedantic").length - 1;
+
+    expect(occurrences).toBe(1);
+    expect(rendered).toContain("The reviewer's concerns about this run");
+  });
+
+  it("keeps a criterion that names only one check attached to that check", () => {
+    writeArtifact("demo-hermes-judge-review.json", {
+      overallReview: "flagged",
+      summary: "One check is thin.",
+      criteria: [
+        {
+          id: "evidence-cited",
+          verdict: "concern",
+          detail: "no artifact filename cited",
+          affectedChecks: ["shows an account health score"],
+        },
+      ],
+    });
+
+    const report = buildHandoffReport("demo");
+    const target = report.checks.find(
+      check => check.item === "shows an account health score"
+    );
+
+    expect(target?.reviewFlags).toHaveLength(1);
+    expect(report.review?.runWideFlags).toEqual([]);
+  });
+});
+
 describe("renderHandoffReport", () => {
   beforeEach(() => {
     writeArtifact("demo-qa-spec.json", SPEC);
