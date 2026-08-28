@@ -17,7 +17,7 @@ sends an AI agent to look at the real staging page, and returns `pass`, `fail`,
 evidence supports it.
 
 ```text
-spec → abstract-ai → judge → review → slack (optional)
+spec → abstract-ai → judge → review → slack · issues (optional)
 ```
 
 ## What it is, and is not
@@ -81,6 +81,24 @@ mock values are not required; a loading or label-only widget is ambiguous
 
 Out of `fail` because the widget is present; out of `pass` because the plan asked for a score and none was observed.
 
+**④ `handoff` (or `issues`)** — the same verdict, addressed to whoever fixes it.
+
+```markdown
+## Check 1 — shows health score on dashboard
+
+Result: **manual_review** · cause SPEC_GAP · judge confidence high
+
+Contract (frozen live plan, do not restate it differently):
+- Then: a numeric score with its unit and a readable status label are shown
+
+Origin: spec file `dashboard.spec.ts` · policy `@qa-live-policy: mock-judgment`
+
+What the judge reported observing:
+> Widget visible but shows label "Good" with no numeric score.
+```
+
+Piped into a coding agent, or filed as a GitHub issue by `nightly --with-issues`.
+
 ## Annotations
 
 QA intent lives in the specs you already have, as `//` comments. `spec` reads
@@ -123,13 +141,38 @@ Three rules account for most annotations that "did not work":
 Full reference, including what each verb means to the harness:
 [docs/reference/annotations.md](docs/reference/annotations.md).
 
+## Closing the loop
+
+A verdict that only a person reads is a verdict that waits for a person.
+`nightly --with-issues` files one GitHub issue per page that still needs action,
+with the `handoff` document as the body: each unsettled check beside the frozen
+contract it was judged against, the spec file behind it, the evidence the
+harness captured, and the guardrails that say *propose, do not apply* and
+*never weaken a check to make it pass*. Label a coding agent onto it and the
+fix arrives as a pull request you review.
+
+**Nothing in that loop can certify itself.** The agent has no staging
+credentials, so it cannot run `judge`. Merging its pull request closes no
+issue. The issue closes when the next scheduled run re-judges the deployed page
+and passes — an independent check, for free, because the tool that files the
+work is not the tool that does it. It still fixes nothing on its own.
+
+Same failures tonight means silence, so a comment always means something
+changed; a returning failure reopens the original thread; a flipping check is
+labelled `qa:flaky` rather than presented as fact. Harness defects and
+quarantined runs are not filed at all — a check that was never really judged is
+ops work, and filing it at the product team is how a label becomes noise.
+
+Full walkthrough: [docs/how-to/close-the-loop.md](docs/how-to/close-the-loop.md).
+
 ## Commands
 
-Thirteen commands. The pipeline is `spec`, `abstract-ai`, `judge`, `review`, `slack`;
-`nightly` runs all five over one page or every page. `login` gives the judge a
-session, `doctor` preflights the setup, and `show`, `report`, and `ack` triage what
-came back. `handoff` turns a verdict into a fix-planning task you can pipe into a
-coding agent. `demo` runs the whole pipeline offline.
+Fourteen commands. The pipeline is `spec`, `abstract-ai`, `judge`, `review`, and
+the optional notifiers `slack` and `issues`; `nightly` runs them over one page or
+every page. `login` gives the judge a session, `doctor` preflights the setup, and
+`show`, `report`, and `ack` triage what came back. `handoff` turns a verdict into
+a fix-planning task you can pipe into a coding agent. `demo` runs the whole
+pipeline offline.
 
 Run `<command> --help` for its flags, or read
 [docs/reference/cli.md](docs/reference/cli.md) for the full reference.
@@ -169,6 +212,10 @@ Other tools are summarised briefly from their stated purpose — check their own
 - **Origin pinning.** `allowedOrigins` defaults to the staging origin; a navigation
   off it floors the verdict at `fail` with cause `HARNESS_DEFECT`. On a read-only
   plan, non-GET requests are treated the same.
+- **A filed issue is still quoted evidence.** The judge's prose reaches a reader
+  with write access to your repository, so it travels quoted and injection-scanned
+  with the same patterns applied to aria snapshots. Filing on a public repository
+  is refused unless you opt in: the body carries the staging URL and page structure.
 - **The harness captures the evidence, not the agent.** Trace, HAR, screenshots, and
   aria snapshots come from the Playwright context the runner owns, so the audited
   thing cannot forge or omit them. Secrets are redacted from every artifact.
@@ -182,7 +229,9 @@ Not a replacement for deterministic Playwright CI, API contract tests, or a QA e
 It cannot catch backend regressions with no user-facing effect, it is not a deterministic
 production test runner, and it is unsafe for destructive flows unless they are marked
 `skip` or a `blocked-*` policy. Judgments carry model non-determinism — verdict
-history and `--samples=` exist because one run is not proof.
+history and `--samples=` exist because one run is not proof. Filing an issue does
+not make a verdict more certain: `qa:flaky` and `manual_review` propagate a
+suspended judgment, they do not resolve one.
 
 ## Documentation
 
@@ -191,6 +240,7 @@ Start at [docs/get-started.md](docs/get-started.md); the full map is
 
 - [docs/how-to/authentication.md](docs/how-to/authentication.md) — give the judge a session
 - [docs/how-to/ci.md](docs/how-to/ci.md) — run it unattended, and read the exit code
+- [docs/how-to/close-the-loop.md](docs/how-to/close-the-loop.md) — file failing verdicts as issues an agent can work on
 - [docs/reference/configuration.md](docs/reference/configuration.md) — every config key, flag, and environment variable
 - [docs/reference/annotations.md](docs/reference/annotations.md) — the annotation vocabulary and live policies
 - [docs/explanation/how-verdicts-are-decided.md](docs/explanation/how-verdicts-are-decided.md) — why a verdict came out the way it did
