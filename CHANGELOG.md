@@ -13,6 +13,22 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [7.0.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v6.3.0...v7.0.0) (2026-08-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* `{slug}-qa-spec-abstracted.json` is no longer written and `--strict-parser` is gone. Spec artifacts no longer carry `expectations`, `steps`, `parserCoverage`, `parserIntegrity`, or `unsupportedConstructs`. `parserVersion` is `2.0.0`, which invalidates cached plans built from 1.x artifacts. `scripts/dashboard-spec-parser.mjs` is now `scripts/spec-annotation-reader.mjs` and `parseDashboardSpecFile` is `parseSpecFile`.
+
+### Features
+
+* remove the Playwright assertion parser ([c41164d](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/c41164d1ffbe4574889d2b6835f8f1a06624bdc8))
+
+
+### Bug Fixes
+
+* **abstract-ai:** state the no-confirm rule and keep setup steps in When ([711674d](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/711674d3a620078d9b67861b70ffc33ae3c2849f))
+
 ## [6.3.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v6.2.0...v6.3.0) (2026-08-28)
 
 
