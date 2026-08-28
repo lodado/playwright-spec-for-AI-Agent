@@ -40,6 +40,45 @@ function pageLabel(page) {
     .join(" ");
 }
 
+export function summarizeParserCoverage(spec) {
+  return (spec?.scenarios ?? []).reduce(
+    (total, scenario) => {
+      const coverage = scenario.parserCoverage ?? {};
+      for (const key of [
+        "testsFound",
+        "testsParsed",
+        "assertionsFound",
+        "assertionsParsed",
+        "unsupportedCount",
+      ]) {
+        total[key] += coverage[key] ?? 0;
+      }
+      return total;
+    },
+    {
+      testsFound: 0,
+      testsParsed: 0,
+      assertionsFound: 0,
+      assertionsParsed: 0,
+      unsupportedCount: 0,
+    }
+  );
+}
+
+export function assertParserIntegrity(spec, { strict = false } = {}) {
+  const coverage = summarizeParserCoverage(spec);
+  if (strict && coverage.unsupportedCount > 0) {
+    throw new UsageError(
+      `${coverage.unsupportedCount} unsupported Playwright construct(s) would weaken the QA spec.`,
+      {
+        hint:
+          "Remove --strict-parser to emit manual_review parser-gap checks, or rewrite/support the reported constructs.",
+      }
+    );
+  }
+  return coverage;
+}
+
 export async function run(argv) {
   await ensureProjectConfig(argv);
   const page = parsePageArg(argv);
@@ -54,6 +93,10 @@ export async function run(argv) {
   mkdirSync(paths.outputDir, { recursive: true });
 
   const parsedSpec = parseSpecDirectory(specDir);
+  const parserCoverage = assertParserIntegrity(parsedSpec, {
+    strict:
+      argv.includes("--strict-parser") || process.env.QA_STRICT_PARSER === "1",
+  });
   assertFixturesExist(parsedSpec, page, {
     allowMissing: argv.includes("--allow-missing-fixtures"),
   });
@@ -94,6 +137,9 @@ export async function run(argv) {
     `  Live QA tests in JSON: ${includedTests} included, ${excluded.length} excluded (${parsedTests} parsed total)`
   );
   console.log(`  Excluded tests recorded in artifact: ${excluded.length}`);
+  console.log(
+    `  Parser coverage: tests ${parserCoverage.testsParsed}/${parserCoverage.testsFound}, assertions ${parserCoverage.assertionsParsed}/${parserCoverage.assertionsFound}, unsupported ${parserCoverage.unsupportedCount}`
+  );
   if (unparsedTestCount > 0) {
     console.warn(
       `  Unparsed test declarations recorded in artifact: ${unparsedTestCount}`

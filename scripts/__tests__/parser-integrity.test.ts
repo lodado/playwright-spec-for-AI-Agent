@@ -3,6 +3,10 @@ import {
   analyzeReadOnlyExpectations,
   parseDashboardSpecFile,
 } from "../dashboard-spec-parser.mjs";
+import {
+  assertParserIntegrity,
+  summarizeParserCoverage,
+} from "../extract-page-e2e-spec.mjs";
 
 describe("spec parser integrity as a mixed supported and unsupported test", () => {
   it("to be accountable for every Playwright assertion without silent loss", () => {
@@ -60,5 +64,36 @@ test("uses common APIs", async ({ page }) => {
       expectations: [],
     });
     expect(parsed?.tests[0].unsupportedConstructs).toHaveLength(2);
+  });
+});
+
+describe("spec command as a parser integrity boundary", () => {
+  it("to be explicit about aggregate coverage and strict failure", () => {
+    const spec = {
+      scenarios: [
+        {
+          parserCoverage: {
+            testsFound: 1,
+            testsParsed: 1,
+            assertionsFound: 2,
+            assertionsParsed: 1,
+            unsupportedCount: 1,
+          },
+          tests: [],
+        },
+      ],
+    };
+
+    expect(summarizeParserCoverage(spec)).toEqual({
+      testsFound: 1,
+      testsParsed: 1,
+      assertionsFound: 2,
+      assertionsParsed: 1,
+      unsupportedCount: 1,
+    });
+    expect(() => assertParserIntegrity(spec, { strict: true })).toThrow(
+      /1 unsupported Playwright construct/
+    );
+    expect(() => assertParserIntegrity(spec, { strict: false })).not.toThrow();
   });
 });
