@@ -13,6 +13,21 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [7.1.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.0.0...v7.1.0) (2026-08-28)
+
+
+### Features
+
+* add the handoff command ([c300c4f](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/c300c4f3b5b8560884763ab06fe89bf2441caa15))
+* file GitHub issues for verdicts that still need action ([ca08db1](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/ca08db117691fc1d690ff28981438ddcddbe6e62))
+
+
+### Bug Fixes
+
+* **ci:** close out the release PR the publish job tagged ([ffe89d6](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/ffe89d6747d3785a2e6b67c309c3697124fa9022))
+* **handoff:** stop vouching for evidence the audited agent reported ([bfc3910](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/bfc39106f1d990a2830864fbc502592d8ef3851e))
+* review failing verdicts, and resolve scenario-prefixed check names ([65fbeee](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/65fbeee36e02678cac2b03ec1f05354f3d0a29fc))
+
 ## [7.0.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v6.3.0...v7.0.0) (2026-08-28)
 
 
