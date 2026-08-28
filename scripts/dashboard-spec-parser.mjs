@@ -742,6 +742,56 @@ export function analyzeReadOnlyExpectations(
   };
 }
 
+/** Parse statically representable, line-oriented safe actions in source order. */
+export function parseSafeActions(body) {
+  const steps = [];
+  const actionMethods = new Set([
+    "blur",
+    "check",
+    "click",
+    "dblclick",
+    "dragTo",
+    "fill",
+    "focus",
+    "hover",
+    "press",
+    "selectOption",
+    "setInputFiles",
+    "uncheck",
+  ]);
+
+  for (const line of body.split("\n")) {
+    const navigation = line.match(
+      /await\s+page\.(goto|goBack|goForward|reload)\(\s*(.*?)\s*\)\s*;?/
+    );
+    if (navigation) {
+      const expected = parseStaticExpected(navigation[2]);
+      steps.push({
+        type: "navigation",
+        method: navigation[1],
+        ...(expected?.kind === "literal" ? { value: expected.value } : {}),
+      });
+      continue;
+    }
+
+    const action = line.match(
+      /await\s+([\s\S]+)\.([A-Za-z_$][\w$]*)\(\s*(.*?)\s*\)\s*;?$/
+    );
+    if (!action || !actionMethods.has(action[2])) continue;
+    const locator = parseLocatorExpression(action[1]);
+    if (!locator) continue;
+    const expected = parseStaticExpected(action[3]);
+    steps.push({
+      type: "action",
+      method: action[2],
+      locator,
+      ...(expected?.kind === "literal" ? { value: expected.value } : {}),
+    });
+  }
+
+  return steps;
+}
+
 import {
   adaptExpectationForLive,
   liveRegexFromLiteral,
@@ -830,6 +880,7 @@ export function parseDashboardSpecFile(fileName, source) {
     );
     const parserIntegrity =
       analysis.unsupportedConstructs.length > 0 ? "incomplete" : "complete";
+    const steps = parseSafeActions(block.body);
 
     const fixtures = resolveTestFixtures(source, block.index, fileFixtures);
 
@@ -842,6 +893,7 @@ export function parseDashboardSpecFile(fileName, source) {
           : liveRunPolicy,
       livePolicyAnnotation,
       expectations,
+      ...(steps.length > 0 ? { steps } : {}),
       parserIntegrity,
       parserCoverage: analysis.coverage,
       ...(analysis.unsupportedConstructs.length > 0
