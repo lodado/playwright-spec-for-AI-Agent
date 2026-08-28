@@ -296,7 +296,10 @@ function renderPlaywrightExcerpts(spec, specSourceFiles) {
       );
       if (!block) continue;
       lines.push(
-        `### ${test.title} · \`${scenario.sourceFile}\``,
+        // `####`, never `###`: a plan block heading is `### <scenario> — <title>`
+        // and a reader that enumerates checks by heading counts an excerpt as a
+        // fourth check it must report on.
+        `#### ${test.title} · \`${scenario.sourceFile}\``,
         "",
         "```typescript",
         excerptBody(block.body),
@@ -480,13 +483,18 @@ export function buildJudgeBrowseDocument({
 }) {
   const saved = specLiveMarkdown?.trim();
   // No second H1 in the fallback: the session header above already titles the run.
+  // The appendices are derived from the spec, not from the plan prose, so they
+  // are appended either way: a saved live plan states intent but never carries
+  // the Playwright steps or the upload paths the judge needs to act.
   const body = saved
     ? saved
-    : renderJudgeScenarioBody(spec, {
-        alwaysRunScenarioIds,
-        uploadFixtures,
-        specSourceFiles,
-      }).trim();
+    : renderGwtPlanFromSpec(spec, { alwaysRunScenarioIds }).trim();
+
+  const appendices = renderLiveSpecAppendices({
+    spec,
+    uploadFixtures,
+    specSourceFiles,
+  }).trim();
 
   const sessionHeader = renderJudgeSessionHeader({
     page,
@@ -503,6 +511,7 @@ export function buildJudgeBrowseDocument({
       DATA_BEGIN,
       "",
       stripDataMarkers(body),
+      ...(appendices ? ["", stripDataMarkers(appendices)] : []),
       "",
       DATA_END,
       "",
