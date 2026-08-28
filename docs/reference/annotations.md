@@ -102,12 +102,11 @@ execute — and a staging mode.
 | `auth-mock`                   | `blocked-auth-mock`               | auth         | Blocked on live: reported as `skip`.                                                             |
 | `skip`                        | `blocked-live-skip`               | live-skip    | Blocked on live: reported as `skip`.                                                              |
 
-There is one more verb no annotation produces. When a read-only test's Playwright
-assertions cannot be fully parsed, the parser assigns `judgment-parser-gap`
-itself and lists the unreadable API calls in the plan. The judge may inspect the
-page but may not pass the check: the result is capped at `manual_review` with
-cause `SPEC_GAP` until the parser gap is closed. Because it is derived rather
-than declared, `judgment-parser-gap` is not accepted in a `livePolicies` entry.
+Every annotation maps to exactly one verb; there are no derived verbs. What the
+parser cannot read does not change a test's policy, because the parser is not
+the only reader of the spec: the abstraction agent and the judge are both handed
+the Playwright source. An assertion the parser cannot name is still named in the
+plan, with its source location, and quoted verbatim under `## Playwright source`.
 
 
 The two `executable-*` verbs are the ones the harness treats as **mutating**: a

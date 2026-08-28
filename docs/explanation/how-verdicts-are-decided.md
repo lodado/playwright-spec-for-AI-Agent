@@ -68,20 +68,27 @@ failed login, for example — floors at `manual_review`. This is the same
 principle as pytest's exit code 5 or Playwright's "no tests found": zero
 executed checks is not a pass.
 
-## The parser-gap floor
+## The cross-check floor
 
-A check can be capped before the agent ever sees it. When the parser cannot read
-every Playwright assertion in a read-only test, it assigns that test the derived
-verb `judgment-parser-gap` instead of `executable-readonly`, and the plan lists
-the API calls it could not resolve. The judge is told to inspect the page and
-report what it sees, but that a pass is forbidden: the check settles at
-`manual_review` with cause `SPEC_GAP`.
+Two readers derive the plan from the same Playwright source, independently. The
+abstraction agent reads the test body as prose and writes Given/When/Then. The
+parser reads the same body mechanically and extracts the locators it asserts on.
+Where the plan never mentions an element the parser saw the test assert on, the
+two readings describe different checks — and there is no ground to prefer one.
+So the block is amended in place to cap that check at `manual_review`, and the
+disagreement is recorded in the abstraction audit as `plan-parser-disagreement`.
 
-The reasoning is the same as everywhere else here. A test whose assertions were
-only half understood produces a plan that asserts less than the test does, and a
-`pass` against a weakened plan claims more than was checked. Capping keeps the
-gap visible — in the verdict and in the plan — until the parser learns the
-construct or the spec is rewritten in one it already reads.
+The check is deliberately one-directional. A plan may say *more* than the parser
+read, because the parser only names the assertions it supports and that set is
+partial by construction. A test whose assertions the parser could not read at all
+is skipped by the cross-check entirely: its silence is not a second opinion.
+
+This replaces an earlier, blunter rule. The parser used to cap any read-only test
+whose assertions it could not fully parse, which made the tool's own API coverage
+the ceiling on the user's verdict — a spec was punished for using Playwright the
+parser had not learned yet. Now the unread assertion is named with its source
+location and the source is quoted for the agent to read, and only a *conflict*
+between two readings floors the verdict.
 
 
 ## The coverage floor
