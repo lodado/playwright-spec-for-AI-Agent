@@ -28,6 +28,7 @@ import {
 import {
   getAllowedOrigins,
   getHooks,
+  getStorageStatePath,
   isPlaceholderBaseUrl,
 } from "./hermes-qa-project-config.mjs";
 import {
@@ -38,6 +39,7 @@ import {
   resolveJudgeTurnBudget,
 } from "./judge-verdict.mjs";
 import { resolveSpecForJudge } from "./resolve-spec-for-judge.mjs";
+import { seedAsideSession } from "./qa-session-seed.mjs";
 import { appendRunEvent, newRunId } from "./qa-run-ledger.mjs";
 import { writeCtrf } from "./qa-ctrf.mjs";
 import { appendVerdict } from "./qa-verdict-history.mjs";
@@ -51,6 +53,7 @@ import {
   isAuthRequired,
 } from "./staging-qa-config.mjs";
 import {
+  connectExistingBrowser,
   hasSessionProfile,
   launchAuthenticatedBrowser,
 } from "./qa-browser-session.mjs";
@@ -74,6 +77,20 @@ import {
 } from "./page-qa-paths.mjs";
 
 const PREFLIGHT_TIMEOUT_MS = 10_000;
+
+/**
+ * A browser the operator already runs and signed into. This is the only path
+ * that works with an identity provider that blocks automation-controlled
+ * browsers, so it outranks the private QA profile when both are available.
+ */
+export function resolveAttachUrl(argv = []) {
+  const flag = argv
+    .find(arg => arg.startsWith("--cdp-url="))
+    ?.slice("--cdp-url=".length)
+    .trim();
+  return flag || process.env.QA_BROWSER_CDP_URL?.trim() || "";
+}
+
 const FAIL_ON_VALUES = ["fail", "manual_review", "never"];
 
 export function buildBrowseHermesQuery({
@@ -389,22 +406,36 @@ function inspectRecordedHar(harPath, { allowedOrigins, readOnly }) {
 }
 
 async function executeJudge({
+  page,
   paths,
   plan,
   adapter,
   config,
   preauthenticated,
   allowedOrigins,
+  attachUrl,
   runId,
 }) {
   if (preauthenticated && adapter.capabilities.auth === "self-prelogin") {
-    // The adapter drives its own persistent browser profile: log it in over its
-    // own channel so credentials stay out of argv and out of the prompt.
-    adapter.prelogin?.({
-      loginUrl: plan.stagingLogin.loginUrl,
-      email: config.email,
-      password: config.password,
-    });
+    const storageStatePath = getStorageStatePath(page);
+    if (storageStatePath) {
+      // No login form to drive: the project already mints its session (an e2e
+      // auth setup, a signed cookie). Replay that state into the adapter's own
+      // browser instead of typing credentials it would have no field for.
+      const origin = new URL(plan.stagingLogin.targetUrl).origin;
+      const seeded = seedAsideSession({ storageStatePath, origin });
+      console.log(
+        `Session seeded from ${storageStatePath} (${seeded.cookies} cookie(s)).`
+      );
+    } else {
+      // The adapter drives its own persistent browser profile: log it in over
+      // its own channel so credentials stay out of argv and out of the prompt.
+      adapter.prelogin?.({
+        loginUrl: plan.stagingLogin.loginUrl,
+        email: config.email,
+        password: config.password,
+      });
+    }
   }
 
   // Live `context.route` interception needs this process's event loop, and a
@@ -412,16 +443,26 @@ async function executeJudge({
   // guards there deadlocks the browser. Blocking adapters get the same coverage
   // from the recorded HAR, inspected after the run.
   const liveInterception = adapter.capabilities.blocksEventLoop === false;
-  const session =
-    preauthenticated && adapter.capabilities.auth === "cdp-attach"
-      ? await launchAuthenticatedBrowser({
-          recordVideoDir: process.env.QA_RECORD_VIDEO ? paths.videosDir : null,
+  const usesRunnerBrowser = adapter.capabilities.auth === "cdp-attach";
+  const session = !usesRunnerBrowser
+    ? null
+    : attachUrl
+      ? // The operator's own browser, already signed in — the only path an
+        // identity provider that blocks automated browsers leaves open.
+        await connectExistingBrowser({
+          cdpUrl: attachUrl,
           evidenceDir: paths.evidenceDir,
           label: `${paths.slug}-${runId}`,
-          allowedOrigins: liveInterception ? allowedOrigins : [],
-          blockMutations: liveInterception && plan.readOnly,
         })
-      : null;
+      : preauthenticated
+        ? await launchAuthenticatedBrowser({
+            recordVideoDir: process.env.QA_RECORD_VIDEO ? paths.videosDir : null,
+            evidenceDir: paths.evidenceDir,
+            label: `${paths.slug}-${runId}`,
+            allowedOrigins: liveInterception ? allowedOrigins : [],
+            blockMutations: liveInterception && plan.readOnly,
+          })
+        : null;
   if (session) process.env.BROWSER_CDP_URL = session.cdpUrl;
 
   let raw;
@@ -564,9 +605,14 @@ export async function main(argv = process.argv.slice(2)) {
   const credentialsInPrompt = argv.includes("--credentials-in-prompt");
   const selfPrelogin = adapter.capabilities.auth === "self-prelogin";
   const cdpAttach = adapter.capabilities.auth === "cdp-attach";
-  const attachable = cdpAttach && hasSessionProfile();
+  const attachUrl = cdpAttach ? resolveAttachUrl(argv) : "";
+  const attachable = cdpAttach && (Boolean(attachUrl) || hasSessionProfile());
+  // A configured storage state IS the session, so nothing needs to type
+  // credentials — demanding them anyway blocks exactly the apps this path
+  // exists for (no login form to drive in the first place).
+  const seedable = Boolean(getStorageStatePath(page));
   const requireCredentials =
-    credentialsInPrompt || selfPrelogin || !attachable;
+    credentialsInPrompt || (!seedable && selfPrelogin) || (!seedable && !attachable);
 
   const { config, target } = await resolveStagingQaConfig(argv, {
     stepLabel: `${page} Hermes judge`,
@@ -577,7 +623,7 @@ export async function main(argv = process.argv.slice(2)) {
   const preauthenticated =
     isAuthRequired(config) &&
     !credentialsInPrompt &&
-    (selfPrelogin || attachable);
+    (selfPrelogin || attachable || (seedable && cdpAttach));
   if (isAuthRequired(config) && !preauthenticated) {
     assertStagingQaCredentials(config);
     console.warn(
@@ -658,12 +704,14 @@ export async function main(argv = process.argv.slice(2)) {
       );
     }
     result = await executeWithRetries({
+      page,
       paths,
       plan,
       adapter,
       config,
       preauthenticated,
       allowedOrigins,
+      attachUrl,
       runId,
     });
   } catch (error) {

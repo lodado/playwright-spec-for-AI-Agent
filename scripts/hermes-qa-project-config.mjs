@@ -62,7 +62,7 @@ const ACCOUNT_KEYS = [
   "accountNotes",
   "fixtures",
 ];
-const URL_KEYS = ["baseUrl", "loginPath", "allowedOrigins", "versionUrl"];
+const URL_KEYS = ["baseUrl", "loginPath", "allowedOrigins", "versionUrl", "storageState"];
 const STAGING_KEYS = [...ACCOUNT_KEYS, ...URL_KEYS, "dashboardPath"];
 const PAGE_KEYS = [
   ...ACCOUNT_KEYS,
@@ -723,6 +723,20 @@ export function getAllowedOrigins(page) {
 }
 
 /** Deploy-version endpoint used to skip judging an unchanged staging build. */
+/**
+ * Path to a Playwright `storageState` file that already holds a valid session.
+ * Apps whose e2e suite mints its session in code have no login form for the
+ * `login` command to drive, so reusing that file is the only way to judge them
+ * signed in — and it keeps credentials out of this tool entirely.
+ */
+export function getStorageStatePath(page) {
+  const project = getProjectConfig();
+  const pageConfig = page ? getPageConfig(page) : {};
+  const configured = pageConfig.storageState ?? project.staging?.storageState;
+  if (!configured) return null;
+  return resolve(project.root, String(configured));
+}
+
 export function getStagingVersionUrl(page) {
   const project = getProjectConfig();
   const pageConfig = page ? getPageConfig(page) : {};

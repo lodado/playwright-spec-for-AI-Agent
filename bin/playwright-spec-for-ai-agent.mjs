@@ -45,7 +45,14 @@ const COMMANDS = {
   login: {
     script: "run-qa-login.mjs",
     summary: "Open a headed browser to log in once; judge reuses the session",
-    flags: ["--page", "--base-url", "--login-path", "--email", "--password", "--config"],
+    flags: [
+      "--base-url",
+      "--login-path",
+      "--channel",
+      "--attach",
+      "--config",
+      "--project-root",
+    ],
   },
   judge: {
     script: "run-hermes-page-judge.mjs",
@@ -69,6 +76,7 @@ const COMMANDS = {
       "--non-interactive",
       "--dry-run",
       "--fail-on",
+      "--cdp-url",
     ],
   },
   review: {
@@ -166,6 +174,9 @@ const FLAG_HELP = {
   "--skip-abstract-ai": ["--skip-abstract-ai", "Reuse the existing live plan"],
   "--skip-review": ["--skip-review", "Stop after judge; do not run the review pass"],
   "--non-interactive": ["--non-interactive", "Skip prompts (CI); --yes and -y are aliases"],
+  "--channel": ["--channel=<name>", "Log in with real Chrome/Edge instead of bundled Chromium"],
+  "--attach": ["--attach", "Print how to attach to a browser you already run, then exit"],
+  "--cdp-url": ["--cdp-url=<url>", "Judge through a browser you already run and signed into"],
   "--allow-missing-fixtures": [
     "--allow-missing-fixtures",
     "Warn instead of failing when a @qa-fixture file does not exist",
@@ -192,6 +203,8 @@ const FLAG_HELP = {
 const VALUE_FLAGS = new Set([
   "--page",
   "--pages",
+  "--cdp-url",
+  "--channel",
   "--target-path",
   "--base-url",
   "--login-path",

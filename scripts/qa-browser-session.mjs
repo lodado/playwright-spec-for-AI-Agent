@@ -22,7 +22,7 @@ import {
 } from "node:fs";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
-import { EnvironmentError } from "./errors.mjs";
+import { EnvironmentError, UsageError } from "./errors.mjs";
 import { captureSettledEvidence } from "./qa-evidence.mjs";
 
 export const SESSION_PROFILE_DIR = join(".private", "qa-browser-profile");
@@ -50,6 +50,15 @@ export function sessionMarkerPath(root = process.cwd()) {
  */
 export function hasSessionProfile(root = process.cwd()) {
   return existsSync(sessionMarkerPath(root));
+}
+
+/** Written only once a session actually exists; `hasSessionProfile` reads it. */
+export function writeSessionMarker(root = process.cwd(), { cookieCount = 0 } = {}) {
+  writeFileSync(
+    sessionMarkerPath(root),
+    `${JSON.stringify({ savedAt: new Date().toISOString(), cookieCount })}\n`,
+    { mode: 0o600 }
+  );
 }
 
 export function ensurePrivateProfileDir(root = process.cwd()) {
@@ -99,7 +108,7 @@ export async function findFreePort() {
   });
 }
 
-async function importChromium() {
+export async function importChromium() {
   try {
     const mod = await import("@playwright/test");
     return mod.chromium;
@@ -333,6 +342,123 @@ export async function launchAuthenticatedBrowser({
   return { cdpUrl: `http://127.0.0.1:${port}`, capture, close, evidence };
 }
 
+/**
+ * Attach to a browser the operator already runs and already signed into.
+ *
+ * The headed `login` command covers password and SSO flows, but an identity
+ * provider that refuses automation-controlled browsers (Google is the common
+ * one) cannot be signed into there at all. Letting the operator use their own
+ * Chrome — started once with `--remote-debugging-port` — sidesteps that
+ * entirely: they log in as a human, we only borrow the session.
+ *
+ * Evidence is thinner than a runner-launched context: tracing and per-page
+ * capture work, HAR does not, because `recordHar` is a launch-time option and
+ * this context already exists. `close()` disconnects; it never closes the
+ * operator's browser.
+ */
+export async function connectExistingBrowser({
+  cdpUrl,
+  evidenceDir = null,
+  label = "session",
+  chromiumFactory = importChromium,
+} = {}) {
+  if (!cdpUrl) {
+    throw new UsageError("connectExistingBrowser needs a cdpUrl.", {
+      hint: "Pass --cdp-url=http://127.0.0.1:9222 or set QA_BROWSER_CDP_URL.",
+    });
+  }
+  const chromium = await chromiumFactory();
+  if (evidenceDir) mkdirSync(evidenceDir, { recursive: true });
+
+  const evidence = {
+    tracePath: null,
+    harPath: null,
+    videoPath: null,
+    screenshots: [],
+    ariaSnapshots: [],
+    violations: [],
+  };
+
+  let browser;
+  try {
+    browser = await chromium.connectOverCDP(cdpUrl);
+  } catch (cause) {
+    throw new EnvironmentError(
+      `Could not attach to a browser at ${cdpUrl}: ${describe(cause)}`,
+      {
+        hint: [
+          "Start Chrome with a dedicated profile and remote debugging, sign in there, then re-run:",
+          '  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \\',
+          "    --remote-debugging-port=9222 --user-data-dir=/tmp/qa-chrome",
+        ].join("\n"),
+        cause,
+      }
+    );
+  }
+
+  const context = browser.contexts()[0] ?? (await browser.newContext());
+
+  if (evidenceDir) {
+    try {
+      await context.tracing.start({ screenshots: true, snapshots: true });
+      evidence.tracePath = join(evidenceDir, `${label}-trace.zip`);
+    } catch (error) {
+      evidence.violations.push({
+        kind: "capture-failed",
+        detail: `tracing.start: ${describe(error)}`,
+      });
+    }
+    evidence.violations.push({
+      kind: "capture-unavailable",
+      detail: "HAR is not recorded for an attached browser (launch-time option).",
+    });
+  }
+
+  async function capture(captureLabel = "capture") {
+    if (!evidenceDir) return { screenshots: [], ariaSnapshots: [], violations: [] };
+    const captured = await captureSettledEvidence(
+      context,
+      evidenceDir,
+      captureLabel
+    );
+    evidence.screenshots.push(...captured.screenshots);
+    evidence.ariaSnapshots.push(...captured.ariaSnapshots);
+    evidence.violations.push(...captured.violations);
+    return captured;
+  }
+
+  let closed = false;
+  async function close() {
+    if (closed) return evidence;
+    closed = true;
+    await capture(`${label}-final`);
+    if (evidence.tracePath) {
+      try {
+        await context.tracing.stop({ path: evidence.tracePath });
+      } catch (error) {
+        evidence.violations.push({
+          kind: "capture-failed",
+          detail: `tracing.stop: ${describe(error)}`,
+        });
+        evidence.tracePath = null;
+      }
+    }
+    try {
+      // Disconnects the client. The operator's browser keeps running — we did
+      // not launch it, so it is not ours to close.
+      await browser.close();
+    } catch (error) {
+      evidence.violations.push({
+        kind: "session-close-failed",
+        detail: describe(error),
+      });
+    }
+    return evidence;
+  }
+
+  return { cdpUrl, capture, close, evidence, attached: true };
+}
+
 async function readCookies(context) {
   try {
     return await context.cookies();
@@ -366,12 +492,17 @@ export async function runOperatorLogin({
   loginUrl,
   root = process.cwd(),
   pollMs = 1000,
+  channel = null,
   chromiumFactory = importChromium,
 }) {
   const profileDir = ensurePrivateProfileDir(root);
   const chromium = await chromiumFactory();
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: false,
+    // Real Chrome, not bundled Chromium, when asked: some identity providers
+    // (Google above all) refuse to sign in from a browser they do not
+    // recognise, and the bundled build is the one they refuse most.
+    ...(channel ? { channel } : {}),
   });
   const page = context.pages()[0] ?? (await context.newPage());
   await page.goto(loginUrl);
@@ -396,11 +527,7 @@ export async function runOperatorLogin({
 
   const authenticated = [...latest].some(cookie => !baseline.has(cookie));
   if (authenticated) {
-    writeFileSync(
-      join(profileDir, SESSION_MARKER_FILE),
-      `${JSON.stringify({ savedAt: new Date().toISOString(), cookieCount: latest.size })}\n`,
-      { mode: 0o600 }
-    );
+    writeSessionMarker(root, { cookieCount: latest.size });
   } else {
     console.warn(
       [
