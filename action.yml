@@ -32,7 +32,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f5 # v4.0.2
       with:
         node-version: ${{ inputs.node-version }}
 
@@ -69,7 +69,7 @@ runs:
 
     - name: Upload QA artifacts
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@1746f4ab65b179e0ea60a494b83293b640dd3fa5 # v4.3.4
       with:
         name: qa-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
         path: "**/__QA__/**"
