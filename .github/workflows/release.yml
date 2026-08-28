@@ -102,3 +102,25 @@ jobs:
         if: steps.check.outputs.publish == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # release-please closes out a release by labelling its merged PR, but it
+      # does that while creating the GitHub Release — which `skip-github-release`
+      # turns off. Left `pending`, the merged PR still reads as the outstanding
+      # release, so release-please never opens the next one and the repo silently
+      # stops cutting versions. Since this job owns the tag, it owns the label.
+      - name: Close out the release PR
+        if: steps.check.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          number="$(gh pr list --state merged --label 'autorelease: pending' \
+            --limit 1 --json number --jq '.[0].number // empty')"
+          if [ -z "${number}" ]; then
+            echo "::notice::No release PR is pending; nothing to relabel."
+            exit 0
+          fi
+          gh pr edit "${number}" \
+            --remove-label 'autorelease: pending' \
+            --add-label 'autorelease: tagged'
+          echo "::notice::Marked PR #${number} as tagged for ${{ steps.check.outputs.tag }}."
