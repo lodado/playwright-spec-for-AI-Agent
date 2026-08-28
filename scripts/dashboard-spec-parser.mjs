@@ -197,6 +197,7 @@ export function extractTestBlocks(source) {
     blocks.push({
       title: unescapeString(match[2]),
       body: source.slice(bodyStart, findBlockEnd(source, bodyStart)),
+      bodyStart,
       index: match.index,
     });
   }
@@ -506,6 +507,8 @@ export function describeLiveRunPolicy(liveRunPolicy) {
       return "UI action where completing verification would be dangerous on live — Hermes replays safe open steps, verifies up to the dangerous point, dismisses with Esc only (never clicks confirm)";
     case "judgment-mock-api":
       return "CI uses API mocks (not replayable on live); Hermes passes if live UI reasonably matches intent, manual_review if ambiguous";
+    case "judgment-parser-gap":
+      return "Playwright assertions were not fully parsed; the result is capped at manual_review until the parser gap is resolved";
     case "blocked-subscription-mutation":
       return "skipped on Playwright; Hermes must not mutate subscription/billing";
     case "blocked-auth-mock":
@@ -594,6 +597,55 @@ export function parseReadOnlyExpectations(body) {
   return expectations;
 }
 
+function sourceLocation(source, index, fileName) {
+  const before = source.slice(0, index);
+  const lines = before.split("\n");
+  return {
+    file: fileName,
+    line: lines.length,
+    column: lines.at(-1).length + 1,
+  };
+}
+
+/** Account for every static `await expect(...)` candidate, including unsupported ones. */
+export function analyzeReadOnlyExpectations(
+  body,
+  { fileName = "<source>", sourceOffset = 0, source = body } = {}
+) {
+  const expectations = [];
+  const unsupportedConstructs = [];
+  const candidates = [...body.matchAll(/await\s+expect\s*\(/g)];
+
+  for (const [candidateIndex, candidate] of candidates.entries()) {
+    const end = candidates[candidateIndex + 1]?.index ?? body.length;
+    const statement = body.slice(candidate.index, end);
+    const parsed = parseReadOnlyExpectations(statement);
+    if (parsed.length > 0) {
+      expectations.push(...parsed);
+      continue;
+    }
+
+    const matcher = statement.match(/\)\s*\.\s*(?:not\s*\.\s*)?([A-Za-z_$][\w$]*)/)?.[1];
+    unsupportedConstructs.push({
+      api: matcher ?? "expect",
+      category: "assertion",
+      reason: "unsupported assertion or locator expression",
+      severity: "error",
+      location: sourceLocation(source, sourceOffset + candidate.index, fileName),
+    });
+  }
+
+  return {
+    expectations,
+    unsupportedConstructs,
+    coverage: {
+      assertionsFound: candidates.length,
+      assertionsParsed: expectations.length,
+      unsupportedCount: unsupportedConstructs.length,
+    },
+  };
+}
+
 import {
   adaptExpectationForLive,
   liveRegexFromLiteral,
@@ -661,25 +713,64 @@ export function parseDashboardSpecFile(fileName, source) {
       liveRunPolicy,
       annotation: livePolicyAnnotation,
     } = declared;
-    const expectations =
+    const analysis =
       stagingMode === "read-only"
-        ? parseReadOnlyExpectations(block.body).map(expectation =>
-            adaptExpectationForLive(expectation, block.title, scenarioId)
-          )
-        : [];
+        ? analyzeReadOnlyExpectations(block.body, {
+            fileName,
+            sourceOffset: block.bodyStart,
+            source,
+          })
+        : {
+            expectations: [],
+            unsupportedConstructs: [],
+            coverage: {
+              assertionsFound: 0,
+              assertionsParsed: 0,
+              unsupportedCount: 0,
+            },
+          };
+    const expectations = analysis.expectations.map(expectation =>
+      adaptExpectationForLive(expectation, block.title, scenarioId)
+    );
+    const parserIntegrity =
+      analysis.unsupportedConstructs.length > 0 ? "incomplete" : "complete";
 
     const fixtures = resolveTestFixtures(source, block.index, fileFixtures);
 
     return {
       title: block.title,
       stagingMode,
-      liveRunPolicy,
+      liveRunPolicy:
+        stagingMode === "read-only" && parserIntegrity === "incomplete"
+          ? "judgment-parser-gap"
+          : liveRunPolicy,
       livePolicyAnnotation,
       expectations,
+      parserIntegrity,
+      parserCoverage: analysis.coverage,
+      ...(analysis.unsupportedConstructs.length > 0
+        ? { unsupportedConstructs: analysis.unsupportedConstructs }
+        : {}),
       ...(Object.keys(fixtures).length > 0 ? { fixtures } : {}),
       checkId: slugify(block.title) || "unnamed-test",
     };
   });
+
+  const parserCoverage = tests.reduce(
+    (coverage, test) => {
+      coverage.assertionsFound += test.parserCoverage?.assertionsFound ?? 0;
+      coverage.assertionsParsed += test.parserCoverage?.assertionsParsed ?? 0;
+      coverage.unsupportedCount += test.parserCoverage?.unsupportedCount ?? 0;
+      return coverage;
+    },
+    {
+      testsFound: blocks.length + unparsedTestCount,
+      testsParsed: blocks.length,
+      assertionsFound: 0,
+      assertionsParsed: 0,
+      unsupportedCount: unparsedTestCount,
+    }
+  );
 
   return {
     scenarioId,
@@ -690,6 +781,7 @@ export function parseDashboardSpecFile(fileName, source) {
     label,
     ...(Object.keys(fileFixtures).length > 0 ? { fixtures: fileFixtures } : {}),
     ...(unparsedTestCount > 0 ? { unparsedTestCount } : {}),
+    parserCoverage,
     tests,
   };
 }
