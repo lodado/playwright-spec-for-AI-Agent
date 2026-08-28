@@ -16,7 +16,6 @@ const POLICY_WHEN = {
 };
 
 /** Only safe-interaction tests need their Playwright steps quoted. */
-const EXCERPT_POLICY = "executable-interaction";
 const MAX_EXCERPT_CHARS = 900;
 
 const DATA_BEGIN = "<<<QA-PLAN-DATA:BEGIN>>>";
@@ -268,8 +267,12 @@ function excerptBody(body) {
 }
 
 /**
- * Quote the steps of safe-interaction tests only. Every other policy is judged
- * from Given/When/Then, so its source is prompt weight with no reader.
+ * Quote the steps of every test the run will actually reach. The source is the
+ * authority on what a check does: the parsed `expectations` are a lossy
+ * projection of it (only the assertions this parser understands survive), so a
+ * reader given only the projection judges a check the spec never described.
+ * Blocked policies are excluded — nothing runs them, so their source is prompt
+ * weight with no reader.
  */
 function renderPlaywrightExcerpts(spec, specSourceFiles) {
   if (!spec || !specSourceFiles || Object.keys(specSourceFiles).length === 0) {
@@ -290,7 +293,7 @@ function renderPlaywrightExcerpts(spec, specSourceFiles) {
   for (const scenario of spec.scenarios ?? []) {
     if (scenario.liveSkip) continue;
     for (const test of scenario.tests ?? []) {
-      if (test.liveRunPolicy !== EXCERPT_POLICY) continue;
+      if (isBlockedPolicy(test.liveRunPolicy)) continue;
       const block = blocksFor(scenario.sourceFile).find(
         candidate => candidate.title === test.title
       );
@@ -310,7 +313,7 @@ function renderPlaywrightExcerpts(spec, specSourceFiles) {
   }
 
   if (lines.length === 0) return [];
-  return ["## Playwright steps (safe-interaction)", "", ...lines];
+  return ["## Playwright source", "", ...lines];
 }
 
 /**

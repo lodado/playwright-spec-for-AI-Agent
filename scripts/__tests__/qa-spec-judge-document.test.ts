@@ -168,7 +168,7 @@ describe("renderFriendlyQaSpecMarkdown", () => {
     expect(md).not.toContain("non-deterministic");
   });
 
-  it("excerpts Playwright steps for safe-interaction tests only", () => {
+  it("excerpts Playwright steps for every runnable policy, not just safe-interaction", () => {
     const md = renderFriendlyQaSpecMarkdown(
       {
         scenarios: [
@@ -179,6 +179,11 @@ describe("renderFriendlyQaSpecMarkdown", () => {
             tests: [
               { title: "opens dialog", liveRunPolicy: "executable-interaction" },
               { title: "reads score", liveRunPolicy: "judgment-mock-api" },
+              { title: "shows plan", liveRunPolicy: "executable-readonly" },
+              {
+                title: "cancels plan",
+                liveRunPolicy: "blocked-subscription-mutation",
+              },
             ],
           },
         ],
@@ -193,14 +198,23 @@ describe("renderFriendlyQaSpecMarkdown", () => {
             'test("reads score", async ({ page }) => {',
             '  await expect(page.getByTestId("score")).toBeVisible();',
             "});",
+            'test("shows plan", async ({ page }) => {',
+            '  await expect(page.getByTestId("plan")).toHaveText("Growth");',
+            "});",
+            'test("cancels plan", async ({ page }) => {',
+            '  await page.getByTestId("cancel").click();',
+            "});",
           ].join("\n"),
         },
       },
     );
 
-    expect(md).toContain("## Playwright steps (safe-interaction)");
+    expect(md).toContain("## Playwright source");
     expect(md).toContain('await page.getByRole("button").click();');
-    expect(md).not.toContain('await expect(page.getByTestId("score"))');
+    expect(md).toContain('await expect(page.getByTestId("score")).toBeVisible();');
+    expect(md).toContain('await expect(page.getByTestId("plan")).toHaveText("Growth");');
+    // A blocked test is never run, so its steps are prompt weight with no reader.
+    expect(md).not.toContain('await page.getByTestId("cancel").click();');
   });
 
   it("truncates an oversized excerpt instead of embedding the whole test", () => {
@@ -328,7 +342,7 @@ describe("buildJudgeBrowseDocument", () => {
       specSourceFiles: { "dashboard-active.spec.ts": source },
     });
 
-    expect(document).toContain("## Playwright steps (safe-interaction)");
+    expect(document).toContain("## Playwright source");
     expect(document).toContain('await page.getByRole("button").click();');
   });
 
