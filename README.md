@@ -125,10 +125,11 @@ Full reference, including what each verb means to the harness:
 
 ## Commands
 
-Twelve commands. The pipeline is `spec`, `abstract-ai`, `judge`, `review`, `slack`;
+Thirteen commands. The pipeline is `spec`, `abstract-ai`, `judge`, `review`, `slack`;
 `nightly` runs all five over one page or every page. `login` gives the judge a
 session, `doctor` preflights the setup, and `show`, `report`, and `ack` triage what
-came back. `demo` runs the whole pipeline offline.
+came back. `handoff` turns a verdict into a fix-planning task you can pipe into a
+coding agent. `demo` runs the whole pipeline offline.
 
 Run `<command> --help` for its flags, or read
 [docs/reference/cli.md](docs/reference/cli.md) for the full reference.

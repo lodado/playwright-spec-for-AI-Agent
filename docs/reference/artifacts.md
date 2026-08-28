@@ -14,26 +14,26 @@ characters.
 
 | File                                         | Written by                         | Read by                                                         |
 | -------------------------------------------- | ---------------------------------- | ----------------------------------------------------------------- |
-| `{slug}-qa-spec.json`                        | `spec`                             | `abstract-ai`, `judge`, `nightly`, `show`                         |
+| `{slug}-qa-spec.json`                        | `spec`                             | `abstract-ai`, `judge`, `nightly`, `show`, `handoff`              |
 | `{slug}-qa-spec-live.json`                   | `abstract-ai`                      | `judge`, `nightly` (reuse check)                                  |
-| `{slug}-qa-spec-live.md`                     | `abstract-ai`                      | `judge` (the plan), `review` (fallback)                           |
+| `{slug}-qa-spec-live.md`                     | `abstract-ai`                      | `judge` (the plan), `review` (fallback), `handoff` (the contract) |
 | `{slug}-qa-abstract-audit.json`              | `abstract-ai`                      | `abstract-ai` (reuse bookkeeping)                                 |
 | `{slug}-hermes-abstract-query.txt`           | `abstract-ai`                      | humans; `--dry-run` writes only this                              |
 | `{slug}-hermes-abstract-raw-output.txt`      | `abstract-ai`                      | humans, when the output is unusable                               |
 | `{slug}-qa-judge-plan.md`                    | `judge`                            | `review` (the pinned plan)                                        |
 | `{slug}-hermes-query.txt`                    | `judge`                            | humans (secrets redacted)                                         |
 | `{slug}-hermes-raw-output.txt`               | `judge`                            | humans (secrets redacted)                                         |
-| `{slug}-hermes-judgment.json`                | `judge`                            | `review`, `slack`, `report`, `show`, `ack`, `doctor`, `nightly`   |
+| `{slug}-hermes-judgment.json`                | `judge`                            | `review`, `slack`, `report`, `show`, `ack`, `doctor`, `nightly`, `handoff` |
 | `{slug}-hermes-judgment.md`                  | `judge`                            | humans                                                            |
-| `{slug}-qa-evidence-manifest.json`           | `judge`                            | humans                                                            |
+| `{slug}-qa-evidence-manifest.json`           | `judge`                            | humans, `handoff` (per-check fallback)                            |
 | `{slug}-qa-report.ctrf.json`                 | `judge`                            | any CTRF-consuming reporter                                       |
-| `{slug}-qa-verdict-history.json`             | `judge`                            | `flakinessReport()` / `stableVerdict()`; no CLI command today     |
+| `{slug}-qa-verdict-history.json`             | `judge`                            | `flakinessReport()` / `stableVerdict()`, `handoff` (stability)    |
 | `{slug}-qa-runs.jsonl`                       | `judge`, `review`, `nightly`, `slack`, `ack` | `report`, `review` packet, `doctor`                     |
 | `{slug}-qa-run.invalid`                      | `judge`, on failure                | `review`, `slack`, `report`, `show`, `doctor`                     |
 | `{slug}-hermes-judge-review-packet.md`       | `review`                           | humans (the reviewer's exact input)                               |
 | `{slug}-hermes-judge-review-query.txt`       | `review`                           | humans                                                            |
 | `{slug}-hermes-judge-review-raw-output.txt`  | `review`                           | humans (`-sampleN.txt` with `--samples=`)                         |
-| `{slug}-hermes-judge-review.json`            | `review`                           | `slack`, `report`, `show`                                         |
+| `{slug}-hermes-judge-review.json`            | `review`                           | `slack`, `report`, `show`, `handoff`                              |
 | `{slug}-hermes-judge-review.md`              | `review`                           | humans                                                            |
 | `{slug}-qa-ack.json`                         | `ack`                              | `slack`                                                           |
 | `evidence/`                                  | `judge` runner                     | `review` packet, `show --evidence`, both via the paths in the judgment |

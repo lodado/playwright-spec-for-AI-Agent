@@ -31,7 +31,7 @@ then walks the same pipeline against a page of your own.
 
 | Document                                                        | Answers                                                             |
 | --------------------------------------------------------------- | ------------------------------------------------------------------- |
-| [reference/cli.md](./reference/cli.md)                          | What are the twelve commands and every flag they take?              |
+| [reference/cli.md](./reference/cli.md)                          | What are the thirteen commands and every flag they take?              |
 | [reference/configuration.md](./reference/configuration.md)      | What config keys and environment variables exist, and which wins?   |
 | [reference/annotations.md](./reference/annotations.md)          | Which `@qa-*` annotations does `spec` read, and what does each mean?|
 | [reference/adapters.md](./reference/adapters.md)                | What can each adapter do, and what is the adapter contract?         |

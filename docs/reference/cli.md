@@ -15,8 +15,8 @@ npx playwright-spec-for-ai-agent <command> [options]
 ```
 
 Seven pipeline commands run in this order: `spec`, `abstract-ai`, `login`,
-`judge`, `review`, `slack`, `nightly`. Five operator commands inspect or
-rehearse a project: `doctor`, `show`, `report`, `ack`, `demo`.
+`judge`, `review`, `slack`, `nightly`. Six operator commands inspect or
+rehearse a project: `doctor`, `show`, `report`, `handoff`, `ack`, `demo`.
 
 Two conventions apply to every command:
 
@@ -283,6 +283,38 @@ Exit codes: 0 when no page fails the `--fail-on` gate. 1 when a page fails on
 its verdict. 3 when a failing page is `quarantined` or `unreadable`, because
 that is an infrastructure failure rather than a verdict. 2 when no pages resolve
 or a value flag is invalid.
+
+## handoff
+
+Renders the latest verdict as a fix-planning task for a coding agent: every
+unsettled check with the frozen Given/When/Then it was judged against, the spec
+file and `@qa-live-policy` it came from, what the judge reported observing, the
+reviewer's flags, and how often the check has flipped across same-spec runs.
+
+| Option          | Default | Required | Effect                                                    |
+| --------------- | ------- | -------- | --------------------------------------------------------- |
+| `--page=<slug>` | —       | yes      | Page id.                                                  |
+| `--all-checks`  | off     | no       | Include passing checks too, not only `fail`/`manual_review`. |
+| `--out=<path>`  | —       | no       | Write to this file instead of stdout.                     |
+
+Reads: `<page>-hermes-judgment.json`, falling back to
+`<page>-qa-evidence-manifest.json` for per-check results when the judgment
+recorded none; `<page>-qa-spec-live.md` for each check's contract;
+`<page>-qa-spec.json` for the spec file behind it;
+`<page>-hermes-judge-review.json`; `<page>-qa-verdict-history.json`.
+
+Writes: the document to stdout, or to `--out=` when given. It writes nothing
+else, and it neither edits a spec nor re-runs a stage — the output stops at a
+plan, because a verdict that repairs itself is a verdict nobody can trust.
+
+Everything the judge wrote is quoted, never inlined as instruction, and scanned
+with the same injection patterns the runner applies to aria snapshots; a
+suspicious line keeps its text and gains an `[!] injection-shaped` marker. This
+is the one artifact whose reader holds write access to the repository, so it is
+built to be read as evidence rather than obeyed.
+
+Exit codes: 0, including when there is no judgment to hand off. 2 when `--page=`
+is missing or `--out=` cannot be written.
 
 ## ack
 

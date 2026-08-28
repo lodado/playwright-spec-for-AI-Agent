@@ -139,6 +139,10 @@ const COMMANDS = {
     script: "page-qa-report.mjs",
     summary: "Render a run report from stored artifacts",
   },
+  handoff: {
+    script: "page-qa-handoff.mjs",
+    summary: "Render the verdict as a fix-planning task for a coding agent",
+  },
   ack: {
     script: "page-qa-ack.mjs",
     summary: "Acknowledge a verdict so the next run can compare against it",

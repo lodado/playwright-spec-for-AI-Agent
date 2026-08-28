@@ -259,6 +259,7 @@ async function main() {
           ? [
               `Kept: ${outDir}`,
               `Inspect a verdict: npx playwright-spec-for-ai-agent show --page=${DEMO_PAGE} --config=${configPath}`,
+              `Hand it to a coding agent: npx playwright-spec-for-ai-agent handoff --page=${DEMO_PAGE} --config=${configPath}`,
             ]
           : [
               "Output directory removed (pass --keep or --out=<dir> to inspect it).",
