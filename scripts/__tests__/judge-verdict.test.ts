@@ -444,3 +444,45 @@ describe("isReadOnlyPlan", () => {
     expect(isReadOnlyPlan([{ liveRunPolicy: "judgment-mock-api" }])).toBe(true);
   });
 });
+
+describe("coverage and the evidence manifest agree", () => {
+  it("counts a paraphrased title as addressed in both", async () => {
+    const { buildCoverage, buildEvidenceManifest } = await import(
+      "../judge-verdict.mjs"
+    );
+    const planned = ["to be: '구독 정보' 섹션이 표시된다"];
+    const checks = [
+      {
+        item: "'구독 정보' 섹션이 표시된다",
+        result: "pass",
+        detail: 'header reads "구독 정보"',
+        cause: "NONE",
+        evidenceRefs: [],
+      },
+    ];
+
+    expect(buildCoverage(planned, checks).addressed).toBe(1);
+    const manifest = buildEvidenceManifest({ plannedChecks: planned, checks });
+    // Previously the manifest matched by normalized title only, so the same
+    // check was "unaddressed" here and a stray unplanned entry as well.
+    expect(manifest.items).toHaveLength(1);
+    expect(manifest.items[0]).toMatchObject({
+      planned: true,
+      addressed: true,
+      result: "pass",
+    });
+  });
+
+  it("still lists a check nobody planned", async () => {
+    const { buildEvidenceManifest } = await import("../judge-verdict.mjs");
+    const manifest = buildEvidenceManifest({
+      plannedChecks: ["shows the plan name"],
+      checks: [
+        { item: "shows the plan name", result: "pass", detail: 'reads "Pro"' },
+        { item: "an entirely different thing", result: "fail", detail: "boom" },
+      ],
+    });
+
+    expect(manifest.items.map(entry => entry.planned)).toEqual([true, false]);
+  });
+});

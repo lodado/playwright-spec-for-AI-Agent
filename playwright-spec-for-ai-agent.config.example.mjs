@@ -24,6 +24,8 @@ export default defineConfig({
    * Any of these can be overridden per page below.
    */
   staging: {
+    // PLACEHOLDER — every example.com host (subdomains included) is refused
+    // before a live run. Replace it with your real staging origin.
     baseUrl: "https://staging.example.com",
     loginPath: "/login",
     authRequired: true,
@@ -38,6 +40,11 @@ export default defineConfig({
     // Optional: endpoint returning the deployed build id, so an unchanged
     // deploy can be skipped instead of re-judged.
     versionUrl: "https://staging.example.com/version.json",
+    // Optional: a Playwright storageState JSON that already holds a session —
+    // normally the one your e2e auth setup writes. Relative paths resolve from
+    // the project root. Use it for apps that mint their session in code and
+    // have no login form for `login` to drive; no credential is needed then.
+    // storageState: "playwright/.auth/user.json",
   },
 
   pages: {
@@ -56,6 +63,8 @@ export default defineConfig({
       loginPath: "/accounts/sign-in",
       targetPath: "/settings/billing",
       expectedAccountState: "ACTIVE",
+      // A second app has its own session; this overrides staging.storageState.
+      // storageState: "apps/billing/playwright/.auth/user.json",
     },
   },
 

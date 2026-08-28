@@ -39,7 +39,7 @@ import {
   resolveJudgeTurnBudget,
 } from "./judge-verdict.mjs";
 import { resolveSpecForJudge } from "./resolve-spec-for-judge.mjs";
-import { seedAsideSession } from "./qa-session-seed.mjs";
+import { seedAsideSession, seedProfileSession } from "./qa-session-seed.mjs";
 import { appendRunEvent, newRunId } from "./qa-run-ledger.mjs";
 import { writeCtrf } from "./qa-ctrf.mjs";
 import { appendVerdict } from "./qa-verdict-history.mjs";
@@ -405,6 +405,41 @@ function inspectRecordedHar(harPath, { allowedOrigins, readOnly }) {
   }
 }
 
+/**
+ * The runner's own profile, seeded first when a storage state is configured.
+ *
+ * Without the seed a `storageState` on a cdp-attach adapter only suppressed the
+ * credential requirement: the run then launched an empty profile and browsed
+ * signed out while reporting itself pre-authenticated. Cookies go in over CDP
+ * here, so httpOnly session cookies work on this path.
+ */
+async function launchRunnerBrowser({
+  page,
+  paths,
+  plan,
+  runId,
+  allowedOrigins,
+  blockMutations,
+}) {
+  const storageStatePath = getStorageStatePath(page);
+  if (storageStatePath) {
+    const seeded = await seedProfileSession({
+      storageStatePath,
+      origin: new URL(plan.stagingLogin.targetUrl).origin,
+    });
+    console.log(
+      `Session seeded from ${storageStatePath} (${seeded.cookies} cookie(s)).`
+    );
+  }
+  return launchAuthenticatedBrowser({
+    recordVideoDir: process.env.QA_RECORD_VIDEO ? paths.videosDir : null,
+    evidenceDir: paths.evidenceDir,
+    label: `${paths.slug}-${runId}`,
+    allowedOrigins,
+    blockMutations,
+  });
+}
+
 async function executeJudge({
   page,
   paths,
@@ -455,10 +490,11 @@ async function executeJudge({
           label: `${paths.slug}-${runId}`,
         })
       : preauthenticated
-        ? await launchAuthenticatedBrowser({
-            recordVideoDir: process.env.QA_RECORD_VIDEO ? paths.videosDir : null,
-            evidenceDir: paths.evidenceDir,
-            label: `${paths.slug}-${runId}`,
+        ? await launchRunnerBrowser({
+            page,
+            paths,
+            plan,
+            runId,
             allowedOrigins: liveInterception ? allowedOrigins : [],
             blockMutations: liveInterception && plan.readOnly,
           })

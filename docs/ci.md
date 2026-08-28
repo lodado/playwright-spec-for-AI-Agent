@@ -38,6 +38,25 @@ unreadable — that is infrastructure, not a verdict.
 Use `--strict-config` (or `QA_STRICT_CONFIG=1`) so a typo'd config key fails the
 run instead of printing a warning nobody reads.
 
+## Sessions in CI
+
+Of the three ways to give the judge a session, only two belong in CI.
+
+- **`staging.storageState`** (or `pages.<page>.storageState`) — a path to the
+  Playwright storageState JSON your e2e auth setup already writes. Generate it in
+  an earlier step, then judge. Nothing is prompted and no credential reaches this
+  tool.
+- **`STAGING_QA_EMAIL` / `STAGING_QA_PASSWORD`** — the credential flow, from
+  repository secrets, as in the workflow above.
+- **`--cdp-url=` / `QA_BROWSER_CDP_URL` is a local-operator path, not a CI one.**
+  It attaches to a browser a human already started and signed into, which is what
+  makes it the answer for identity providers that refuse automation-controlled
+  browsers — and exactly what a CI runner cannot provide. `login` and its private
+  profile are local-only for the same reason: there is nobody at the keyboard.
+
+If a provider only lets a human sign in, that page cannot be judged unattended.
+Either arrange a storageState for it or keep it out of the nightly.
+
 ## GitHub Actions
 
 ### The bundled composite action

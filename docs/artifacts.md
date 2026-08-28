@@ -38,9 +38,46 @@ the page id with `/` replaced by `-`.
 `evidence/` holds what the **runner** captured, not what the agent reported:
 `<slug>-<runId>.har`, `<slug>-<runId>-trace.zip`, and per open page
 `<label>-<n>.png` plus `<label>-<n>.yaml` (a sanitised aria snapshot). It is
-populated only when the pre-authenticated session flow runs — that is,
-`authRequired` is on, `--credentials-in-prompt` was not passed, the adapter
-declares `auth: "cdp-attach"`, and `login` has stored a session.
+populated only when the runner owns a browser — that is, when the adapter
+declares `auth: "cdp-attach"` and either
+
+- `judge` **launched** the browser: `authRequired` is on,
+  `--credentials-in-prompt` was not passed, and `login` has stored a session (or
+  a `storageState` is configured); or
+- `judge` **attached** to one you already run, via `--cdp-url=` /
+  `QA_BROWSER_CDP_URL`. Attaching wins when both are available.
+
+An adapter that drives its own browser (`auth: "self-prelogin"`) leaves
+`evidence/` empty: there is no runner-owned context to record.
+
+### Attached browsers capture less
+
+Evidence from an attached browser is narrower than from a launched one, and the
+run records the gap instead of implying it captured more:
+
+| Capture                    | Launched | Attached (`--cdp-url`) |
+| -------------------------- | -------- | ---------------------- |
+| trace (`-trace.zip`)       | yes      | yes                    |
+| screenshots + aria (`.png`/`.yaml`) | yes | yes                |
+| HAR (`.har`)               | yes      | **no**                 |
+| video (`QA_RECORD_VIDEO`)  | yes      | no                     |
+
+HAR recording is a launch-time context option and the attached context already
+exists, so it cannot be added afterwards. The run pushes one violation instead:
+
+```json
+{ "kind": "capture-unavailable",
+  "detail": "HAR is not recorded for an attached browser (launch-time option)." }
+```
+
+It is recorded, not verdict-moving. The practical consequence is in
+[verdicts.md](./verdicts.md#violation-floors): blocking adapters derive
+mutation and off-origin violations from the recorded HAR after the run, so with
+no HAR there is no post-run mutation analysis — the trace and the aria snapshots
+are what remain.
+
+Closing the session on an attached browser disconnects the client. It never
+closes the browser the operator started.
 
 ## The judgment contract
 
@@ -101,10 +138,22 @@ appended to `summary`.
 }
 ```
 
-Violation kinds: `off-origin-navigation`, `blocked-mutation`,
-`unexpected-mutation`, `suspicious-aria`, `capture-failed`, `route-error`,
-`session-close-failed`. Which of them move the verdict is in
-[verdicts.md](./verdicts.md).
+On an attached browser `harPath` and `videoPath` are always `null`.
+
+Violation kinds:
+
+| Kind                    | Written by                                              |
+| ----------------------- | -------------------------------------------------------- |
+| `off-origin-navigation` | live route interception, or post-run HAR inspection      |
+| `blocked-mutation`      | live route interception on a read-only plan              |
+| `unexpected-mutation`   | post-run HAR inspection on a read-only plan              |
+| `suspicious-aria`       | aria-snapshot scan                                       |
+| `capture-failed`        | a screenshot, aria snapshot, trace, HAR, or video that could not be written |
+| `capture-unavailable`   | a capture this session cannot do at all (HAR on an attached browser) |
+| `route-error`           | the interception handler itself threw                    |
+| `session-close-failed`  | the browser did not close (or, when attached, disconnect) cleanly |
+
+Which of them move the verdict is in [verdicts.md](./verdicts.md).
 
 ## The evidence manifest
 
@@ -124,6 +173,12 @@ check, plus any check the agent invented.
 ```
 
 An unplanned check appears with `planned: false`.
+
+The manifest matches a planned title to a reported check by normalised title
+only — it does not use the containment rung of the
+[coverage ladder](./verdicts.md#coverage-floor). A check the agent paraphrased
+therefore counts as addressed in `coverage` while the manifest still lists it as
+`"result": "unaddressed"`. The verdict follows `coverage`.
 
 ## The review artifact
 

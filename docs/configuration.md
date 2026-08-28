@@ -85,6 +85,7 @@ Both accept the same account and URL keys.
 | `fixtures`                   | `{name: path}`    | Upload fixtures, repo-relative. Merged root → `staging` → page.                             |
 | `allowedOrigins`             | `string[]｜false` | Origins the browser layer may navigate to. See below.                                       |
 | `versionUrl`                 | string (URL)      | Deploy-version endpoint used by `nightly` to skip an unchanged build.                       |
+| `storageState`               | string (path)     | Playwright `storageState` JSON holding an existing session. See below.                      |
 | `dashboardPath`              | string            | `staging` only. Default path used when building login context.                              |
 
 `pages.{page}` additionally accepts:
@@ -120,6 +121,42 @@ body is used as-is, truncated to 200 characters). When that build id matches the
 one the last **passing** judgment ran against *and* the spec hash is unchanged,
 `judge` and `review` are skipped. `--force-judge` overrides. An unreachable or
 non-OK endpoint judges anyway — the gate is a cost optimisation, never a block.
+
+### `storageState`
+
+Unset by default. Set it to a Playwright `storageState` JSON that already holds
+a valid session — normally the file the project's own e2e auth setup writes. A
+relative path resolves from the project `root` (`resolve(root, storageState)`),
+so an absolute path is used as given. `pages.{page}.storageState` overrides
+`staging.storageState`.
+
+This is the session path for an app that has no login form to drive: projects
+whose e2e suite mints a session in code (a signed cookie, a magic token, a
+service account) leave the `login` command nothing to type. No credential
+enters this tool — nothing is prompted and nothing is stored here. When a
+storage state is configured, `judge` stops asking for `STAGING_QA_EMAIL` /
+`STAGING_QA_PASSWORD` altogether.
+
+```js
+staging: {
+  storageState: "playwright/.auth/user.json",
+},
+```
+
+Today the replay happens for an adapter whose `auth` capability is
+`self-prelogin` (`aside`): before the judge run, the cookies whose domain
+matches the target origin and that origin's `localStorage` entries are seeded
+into the adapter's own browser, and the seed replaces the credential prelogin
+rather than running alongside it. Cookies go in through `document.cookie`,
+which cannot set an httpOnly cookie — an httpOnly cookie in the file is an
+environment error naming the cookies, not a run that silently judges as an
+anonymous visitor. For those, attach to a browser you already signed into
+(`judge --cdp-url=`), which sets cookies over CDP.
+
+The file must exist, parse as JSON, and contain at least one `cookies` or
+`origins` entry; otherwise the run stops with a usage error naming the path.
+See [adapters.md](./adapters.md) for how each adapter's `auth` mode picks a
+session.
 
 ### `livePolicies`
 
@@ -166,15 +203,24 @@ what the run decided.
 
 ## Environment variables
 
-Loaded from `./.env` (or `--env-file=<path>`) at CLI startup. **Real environment
-variables always win** over the file; the CLI prints `[env] <path>: N applied, M
-already set in the environment (kept)`. `QA_NO_ENV_FILE=1` disables loading.
-Node older than 20.12 cannot parse env files and the load is skipped with a
-message.
+At CLI startup two files are loaded, in this order: `./.env.local`, then
+`./.env`. **Earlier wins** — a key already set is never overwritten — and a
+**real environment variable always beats both**, so an exported var or a CI
+secret cannot be shadowed by a checked-out file. `.env.local` comes first
+because that is where Next/Vite/CRA projects keep their untracked secrets,
+staging credentials included. A missing file is simply skipped; each file that
+is read prints `[env] <path>: N applied, M already set in the environment
+(kept)`.
+
+`--env-file=<path>` **replaces both** defaults with that one file, and a missing
+`--env-file` is a usage error. `QA_NO_ENV_FILE=1` disables env-file loading
+entirely — export it in the real environment, since setting it inside a file
+that is only read afterwards does nothing. Node older than 20.12 cannot parse
+env files and the load is skipped with a message.
 
 | Variable                                 | Used by                                                                  |
 | ---------------------------------------- | ------------------------------------------------------------------------ |
-| `STAGING_QA_EMAIL`                       | `login`, `judge` (credentials-in-prompt mode)                            |
+| `STAGING_QA_EMAIL`                       | `login`; `judge` only when it has no session path (see `storageState`)   |
 | `STAGING_QA_PASSWORD`                    | same                                                                     |
 | `STAGING_QA_BASE_URL`                    | staging origin; wins over config                                         |
 | `STAGING_QA_LOGIN_PATH`                  | login path                                                               |
@@ -187,11 +233,12 @@ message.
 | `QA_STRICT_CONFIG=1`                     | same as `--strict-config`                                                |
 | `QA_OUTPUT_DIR`                          | output directory for every page                                          |
 | `DASHBOARD_QA_OUTPUT_DIR`                | output directory for the `dashboard` page only                           |
-| `QA_NO_ENV_FILE=1`                       | do not load `.env`                                                       |
+| `QA_NO_ENV_FILE=1`                       | do not load `.env.local` / `.env`                                        |
 | `QA_AI_ADAPTER`                          | adapter name or module specifier — see [adapters.md](./adapters.md)      |
+| `QA_BROWSER_CDP_URL`                     | attach the judge to a browser you already run; `--cdp-url=` wins over it |
 | `QA_JUDGE_MAX_TURNS`                     | override the judge's computed turn budget                                |
-| `QA_RECORD_VIDEO`                        | any truthy value records the judge session as webm                       |
-| `QA_FIXTURE_DIR`                         | directory of `<stage>.json` files for the `fixture` adapter              |
+| `QA_RECORD_VIDEO`                        | any non-empty value records webm — runner-launched browser only          |
+| `QA_FIXTURE_DIR`                         | per-stage `<stage>.json` overrides for the `fixture` adapter             |
 | `QA_AGENT_CMD`                           | agent CLI for the `exec` adapter                                         |
 | `QA_AGENT_AUTH`                          | `cdp-attach` to declare the exec CLI honours `BROWSER_CDP_URL`           |
 | `QA_AGENT_TIMEOUT_MS`                    | `exec` adapter timeout (default 600000)                                  |
@@ -203,9 +250,10 @@ message.
 | `ASIDE_QA_MODEL` / `ASIDE_QA_EFFORT`     | Aside model and effort; otherwise Aside's own settings apply             |
 | `ASIDE_QA_TIMEOUT_MS`                    | Aside adapter timeout (default 600000)                                   |
 | `ASIDE_QA_COMMAND`                       | reserved: any value other than `aside` aborts the run                    |
+| `<PROVIDER>_API_KEY`                     | read by `doctor`'s `adapter provider` check for the Hermes provider      |
 | `BROWSER_CDP_URL`                        | set by `judge` for the agent; do not set it yourself                     |
 | `SLACK_WEBHOOK_URL`                      | required by `slack`                                                      |
-| `CI`                                     | when set, `judge` never prompts interactively                            |
+| `CI=true` / `CI=1`                       | no interactive prompts; any other value is ignored                       |
 | `GITHUB_STEP_SUMMARY`                    | when set, `judge`/`report` append markdown to it                         |
 | `GITHUB_SERVER_URL` / `GITHUB_REPOSITORY` / `GITHUB_RUN_ID` | build the Slack "GitHub Actions" run link            |
 | `USER`                                   | default `--by=` for `ack`                                                |

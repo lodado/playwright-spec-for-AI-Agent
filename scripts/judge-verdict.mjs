@@ -139,13 +139,22 @@ function containsEitherWay(a, b) {
   return short.length >= MIN_FUZZY_MATCH_LENGTH && long.includes(short);
 }
 
-/** @returns {{ planned: number, addressed: number, missing: string[] }} */
-export function buildCoverage(plannedChecks = [], checks = []) {
+/**
+ * Pair each planned check with at most one reported check, and report what was
+ * left over on both sides. Coverage and the evidence manifest must agree on
+ * this: when they used different rungs, a paraphrased title counted as covered
+ * in one and as never-reported in the other.
+ *
+ * @returns {{ pairs: Map<string, object>, missing: string[], unplanned: object[] }}
+ */
+export function pairPlannedChecks(plannedChecks = [], checks = []) {
   const reported = checks.map(check => ({
+    check,
     raw: String(check?.item ?? ""),
     norm: normalizeItem(check?.item),
     used: false,
   }));
+  const pairs = new Map();
   const missing = [];
 
   for (const item of plannedChecks) {
@@ -165,10 +174,24 @@ export function buildCoverage(plannedChecks = [], checks = []) {
             Math.abs(b.norm.length - norm.length)
         )[0];
     }
-    if (hit) hit.used = true;
-    else missing.push(item);
+    if (hit) {
+      hit.used = true;
+      pairs.set(item, hit.check);
+    } else {
+      missing.push(item);
+    }
   }
 
+  return {
+    pairs,
+    missing,
+    unplanned: reported.filter(entry => !entry.used).map(entry => entry.check),
+  };
+}
+
+/** @returns {{ planned: number, addressed: number, missing: string[] }} */
+export function buildCoverage(plannedChecks = [], checks = []) {
+  const { missing } = pairPlannedChecks(plannedChecks, checks);
   return {
     planned: plannedChecks.length,
     addressed: plannedChecks.length - missing.length,
@@ -398,11 +421,10 @@ export function buildEvidenceManifest({
   checks = [],
   runnerEvidence = null,
 } = {}) {
-  const byItem = new Map(checks.map(check => [normalizeItem(check.item), check]));
-  const plannedSet = new Set(plannedChecks.map(normalizeItem));
+  const { pairs, unplanned } = pairPlannedChecks(plannedChecks, checks);
 
   const items = plannedChecks.map(item => {
-    const check = byItem.get(normalizeItem(item));
+    const check = pairs.get(item);
     if (!check) {
       return {
         item,
@@ -425,8 +447,7 @@ export function buildEvidenceManifest({
     };
   });
 
-  for (const check of checks) {
-    if (plannedSet.has(normalizeItem(check.item))) continue;
+  for (const check of unplanned) {
     items.push({
       item: check.item,
       planned: false,

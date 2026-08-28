@@ -23,6 +23,7 @@ import {
 import {
   getPageConfig,
   getProjectConfig,
+  getStorageStatePath,
   isPlaceholderBaseUrl,
   listConfiguredPages,
   resolveBaseUrlForPage,
@@ -411,6 +412,11 @@ function credentialChecks(pages) {
   const email = process.env.STAGING_QA_EMAIL?.trim() ?? "";
   const password = process.env.STAGING_QA_PASSWORD?.trim() ?? "";
   const session = hasSessionProfile();
+  // A storage state or an attached browser IS the session, so a project using
+  // either needs no credentials at all — failing it here would send the
+  // operator hunting for a password the run never asks for.
+  const seeded = authPages.filter(page => getStorageStatePath(page));
+  const attachUrl = process.env.QA_BROWSER_CDP_URL?.trim() ?? "";
 
   const checks = [
     check(
@@ -430,10 +436,33 @@ function credentialChecks(pages) {
     return checks;
   }
 
+  if (attachUrl) {
+    checks.push(
+      check(
+        "credentials",
+        "skip",
+        `QA_BROWSER_CDP_URL=${attachUrl} — judge attaches to your browser, no credentials needed`
+      )
+    );
+    return checks;
+  }
+
+  if (seeded.length === authPages.length) {
+    checks.push(
+      check(
+        "credentials",
+        "pass",
+        `storage state configured for: ${seeded.join(", ")} — no credentials needed`
+      )
+    );
+    return checks;
+  }
+
   const have = email && password;
+  const needing = authPages.filter(page => !getStorageStatePath(page));
   const detail = `${email ? redactEmail(email) : "STAGING_QA_EMAIL unset"} / ${
     password ? "password set" : "STAGING_QA_PASSWORD unset"
-  } — required by: ${authPages.join(", ")}`;
+  } — required by: ${needing.join(", ")}`;
 
   checks.push(
     have || session

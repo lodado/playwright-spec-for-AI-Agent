@@ -42,11 +42,37 @@ tests found": zero executed checks is not a pass.
 
 ## Coverage floor
 
-`coverage` is `{ planned, addressed, missing[] }`, computed by matching the
-plan's check titles against the agent's `checks[].item` (exact first, then
-whitespace- and case-normalised). Any unaddressed planned check floors the
-verdict at `manual_review` and appends
+`coverage` is `{ planned, addressed, missing[] }`. Any unaddressed planned check
+floors the verdict at `manual_review` and appends
 `N planned check(s) unaddressed: …` to the summary.
+
+`planned` counts **one entry per plan block, duplicates included** — it is the
+length of the checklist the agent was handed, not a set. The same title is
+legitimately planned once per scenario (`shows the plan name` under ACTIVE, under
+INACTIVE, under CANCEL_PENDING), the agent reports one check per block, and
+deduplicating here made `coverage.planned` disagree with the very document the
+run pinned — which `review` then flags, correctly. For the same reason the
+abstraction validator identifies a planned test by **(scenario, title)**: a title
+repeated across scenarios is not `test planned more than once`.
+
+Matching a planned title to a reported `checks[].item` is a ladder, tried in
+order:
+
+1. exact string equality;
+2. equality after collapsing whitespace and lowercasing;
+3. bounded containment — either side may contain the other, but the shorter side
+   must be at least 8 characters. When several reported checks qualify, the one
+   closest in length to the planned title wins.
+
+Each reported check can satisfy only one planned entry: once matched it is
+consumed, so a single vague line cannot cover a whole plan.
+
+Rung 3 exists because real agents paraphrase a title even when told not to —
+dropping a project's `"to be: "` prefix, or re-adding the scenario name. Under
+exact-only matching that read a complete run as **0 addressed**, floored it to
+`manual_review`, and listed every check as unaddressed. The 8-character floor and
+the one-to-one consumption are what keep the fallback from turning into "any
+check counts for anything".
 
 ## Violation floors
 
@@ -56,7 +82,7 @@ The harness watches the browser, not the narrative.
 | ------------------------------------------- | -------------------------------------------------- |
 | `off-origin-navigation`                     | `fail`, cause forced to `HARNESS_DEFECT`          |
 | `unexpected-mutation` / `blocked-mutation`  | `manual_review`                                    |
-| `suspicious-aria`, `capture-failed`, `route-error`, `session-close-failed` | recorded only  |
+| `suspicious-aria`, `capture-failed`, `capture-unavailable`, `route-error`, `session-close-failed` | recorded only |
 
 A run that left the site under test can say nothing trustworthy about the
 target, hence `fail`. A write that landed on a read-only plan may have changed
