@@ -13,6 +13,14 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [7.1.1](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.1.0...v7.1.1) (2026-08-28)
+
+
+### Bug Fixes
+
+* catch a stale URL read, and a whole-page script failure, before they read as product defects ([e651b70](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/e651b7015c5654f5f2ec78a19f051be821b80968))
+* **ci:** give the publish job permission to close out the release PR ([0496c42](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/0496c4280e4d328ef5c198800779bfc90dc4b746))
+
 ## [7.1.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.0.0...v7.1.0) (2026-08-28)
 
 
