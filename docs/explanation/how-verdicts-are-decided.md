@@ -68,43 +68,6 @@ failed login, for example — floors at `manual_review`. This is the same
 principle as pytest's exit code 5 or Playwright's "no tests found": zero
 executed checks is not a pass.
 
-## The contract confirmation floor
-
-The plan is intent-level by instruction: it says "the cancel link is shown as
-disabled", not `subscription-disabled-link`. That is deliberate — a live page
-does not serve the mock data a CI test pins, so a plan written in selectors
-would fail on differences that are not defects.
-
-It also means nothing static can prove the plan describes the same check the
-test asserts on. Comparing the two textually was tried and does not work: the
-parser reads English identifiers from the source, the plan is prose in the
-project's own language, and a correct Korean sentence naming the same element
-contains no English string. Two different models produced identical false
-flags on 18 of 39 checks in one real suite, and the plans were right.
-
-The page settles it. The parser reads the `data-testid` values the test asserts
-on — the one locator kind that is a stable contract rather than rendered
-content — and they reach the judge as contract points to confirm, never as the
-expectation. Each check may report `observedTestIds`: the ids it actually found
-on the page. A `pass` on a check whose source named contract points, that
-confirms none of them, floors at `manual_review` with `demotedFrom: "pass"`.
-Quoting an id in `detail` or citing it in `evidenceRefs` counts as confirming
-it, so a judge that reports well in prose is not punished for skipping a field.
-
-Three deliberate limits:
-
-- A check whose source named no test id carries no requirement. The parser's
-  coverage is partial by construction, and a floor built on its silence would
-  make the tool's own API coverage the ceiling on the user's verdict.
-- The id list never overrides the plan. A contract point that is present but
-  behaves against the plan is a `fail`, not a `pass`.
-- A confirmed id cannot lift a verdict. Like every rule here, this one only
-  lowers.
-
-The abstraction stage still runs the textual comparison, but only records it:
-`audit.contractHints` lists each check whose plan never mentioned a test id the
-parser read. It is a reading aid for a human reviewing a plan, not a verdict.
-
 ## The coverage floor
 
 `coverage` is `{ planned, addressed, missing[] }`. Any unaddressed planned check

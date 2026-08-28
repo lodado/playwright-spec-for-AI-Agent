@@ -88,7 +88,6 @@ you through the `Verdict floor applied — …` note appended to `summary`.
 | `confidence`   | `high｜medium｜low`                | Missing means `medium`, not `low`.                                                  |
 | `cause`        | see the taxonomy above            | `pass` → `NONE`; a non-pass with no valid cause → `HARNESS_DEFECT`.                 |
 | `evidenceRefs` | string[]                          | Artifact filenames or paths backing the check. `[]` when there are none.            |
-| `observedTestIds` | string[], optional             | `data-testid` values the judge confirmed present on the page. Omitted when it reported none. |
 | `demotedFrom`  | string, optional                  | Present only when a floor rule lowered the result, e.g. `"pass"`.                    |
 
 ### `coverage`

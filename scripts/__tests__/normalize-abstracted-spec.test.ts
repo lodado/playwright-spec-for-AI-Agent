@@ -100,45 +100,6 @@ describe("normalizeAbstractAiResult", () => {
     expect(result.spec.abstraction.stage).toBe("rules");
   });
 
-  it("records an unmentioned contract point as a hint, not a cap", () => {
-    const withLocator = {
-      ...baseSpec,
-      scenarios: [
-        {
-          scenarioId: "ACTIVE",
-          tests: [
-            {
-              checkId: "t1",
-              title: "shows score",
-              livePolicyAnnotation: "safe-interaction",
-              parserIntegrity: "complete",
-              expectations: [
-                {
-                  type: "visible",
-                  locator: { kind: "testId", value: "health-score" },
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-
-    const result = normalizeAbstractAiResult(withLocator, {
-      livePlan: validPlan,
-    });
-
-    // The plan describes the check in its own words; a missing English
-    // identifier is not evidence that it describes a different check. The judge
-    // settles it against the live page instead.
-    expect(result.audit.contractHints).toEqual([
-      { checkId: "t1", title: "shows score", unmentioned: ["health-score"] },
-    ]);
-    expect(result.audit.repairs).toEqual([]);
-    expect(result.livePlan).toBe(validPlan);
-    expect(result.audit.coverage).toMatchObject({ planned: 1, addressed: 1 });
-  });
-
   it("repairs a plan that misses a planned test", () => {
     const twoTests = {
       ...baseSpec,
@@ -442,5 +403,27 @@ describe("abstract-ai stage", () => {
       addressed: 1,
       missing: ["shows plan"],
     });
+  });
+});
+
+describe("scenario section headings", () => {
+  it("demotes them instead of rejecting the plan as an invented test", () => {
+    const withSection = plan(
+      "### ACTIVE [always-run]",
+      "",
+      "### ACTIVE — shows score",
+      "Given: the user is signed in",
+      "When: the dashboard finishes loading",
+      "Then: a numeric score is displayed",
+      "Never: the score area renders an error state or stays empty",
+    );
+
+    const result = normalizeAbstractAiResult(baseSpec, { livePlan: withSection });
+
+    expect(result.ok).toBe(true);
+    // Left as `###` the judge would count the section as a check nobody planned.
+    expect(result.livePlan).toContain("## ACTIVE [always-run]");
+    expect(result.livePlan!.match(/^###\s/gm)).toHaveLength(1);
+    expect(result.audit.coverage).toMatchObject({ planned: 1, addressed: 1 });
   });
 });

@@ -33,7 +33,6 @@ import {
 } from "./hermes-qa-project-config.mjs";
 import {
   analyzeHarViolations,
-  collectContractHints,
   buildEvidenceManifest,
   isReadOnlyPlan,
   normalizeBrowseDecision,
@@ -173,9 +172,6 @@ export function buildBrowseHermesQuery({
     "- Every `pass` must quote something you actually observed in its `detail`: exact on-screen text in quotes, a URL/path, or a number with its unit.",
     "- A `pass` whose `detail` cites nothing concrete, or whose `confidence` is `low`, is downgraded to `manual_review` automatically. Do not pad — report what you saw.",
     "- `evidenceRefs` may name captured artifact files (screenshots, aria snapshots) when you have them; leave it `[]` otherwise.",
-    "- The quoted Playwright source names elements with `getByTestId(\"...\")`. Those ids are a stable contract; the page copy and numbers around them are not.",
-    "- List in `observedTestIds` the ids you actually confirmed present on the page for that check. Report only what you saw — an unconfirmed id left out is correct, an invented one is not.",
-    "- The plan, not the id list, is still the expectation: a present id whose behaviour contradicts the plan is a `fail`, not a `pass`.",
     "",
     "## Cause classification",
     "Every non-pass check, and the top-level verdict, needs a `cause` from exactly these:",
@@ -204,7 +200,7 @@ export function buildBrowseHermesQuery({
     "## Response format (JSON only for your final message)",
     "After browsing, reply with **only** one raw JSON object (no markdown fences).",
     "`detail` comes before `result` on purpose: write down what you observed, then decide.",
-    '{ "status": "pass"|"fail"|"manual_review", "cause": "PRODUCT_DEFECT"|"SPEC_GAP"|"ENVIRONMENT_DEFECT"|"HARNESS_DEFECT"|"NONE", "summary": "...", "checks": [{ "item": "<exact test title>", "detail": "what you observed, quoting exact values", "result": "pass"|"fail"|"skip"|"manual_review", "confidence": "high"|"medium"|"low", "cause": "PRODUCT_DEFECT"|"SPEC_GAP"|"ENVIRONMENT_DEFECT"|"HARNESS_DEFECT"|"NONE", "evidenceRefs": ["..."], "observedTestIds": ["..."] }], "evidence": ["..."], "recommendedAction": "...", "source": "hermes-agent" }',
+    '{ "status": "pass"|"fail"|"manual_review", "cause": "PRODUCT_DEFECT"|"SPEC_GAP"|"ENVIRONMENT_DEFECT"|"HARNESS_DEFECT"|"NONE", "summary": "...", "checks": [{ "item": "<exact test title>", "detail": "what you observed, quoting exact values", "result": "pass"|"fail"|"skip"|"manual_review", "confidence": "high"|"medium"|"low", "cause": "PRODUCT_DEFECT"|"SPEC_GAP"|"ENVIRONMENT_DEFECT"|"HARNESS_DEFECT"|"NONE", "evidenceRefs": ["..."] }], "evidence": ["..."], "recommendedAction": "...", "source": "hermes-agent" }',
     "",
     "---",
     "",
@@ -455,10 +451,6 @@ export function prepareJudgePlan({
   // deduplicating here made `coverage.planned` disagree with the very document
   // the agent was handed — which the review stage then flags, correctly.
   const plannedChecks = checklist.map(test => test.title);
-  // The parser reads these `data-testid` values from the same source the plan
-  // was written from. They stay out of the plan — it is intent-level on purpose
-  // — and reach the judge as contract points to confirm on the page.
-  const contractHints = collectContractHints(scopedSpec);
 
   const savedPlanMarkdown = existsSync(paths.specLiveMd)
     ? scopePlanMarkdown(
@@ -504,7 +496,6 @@ export function prepareJudgePlan({
     specHash,
     planSource,
     plannedChecks,
-    contractHints,
     notApplicable,
     readOnly: isReadOnlyPlan(checklist),
     // An adapter that cannot cap its turns ignores the budget entirely.
@@ -906,7 +897,6 @@ export async function main(argv = process.argv.slice(2)) {
 
   const decision = normalizeBrowseDecision(result.raw, {
     plannedChecks: plan.plannedChecks,
-    contractHints: plan.contractHints,
     runnerEvidence: result.runnerEvidence,
     // A page judged in a state nobody asked for was not the test anyone
     // planned, so the run does not get to be green — but the reading still
