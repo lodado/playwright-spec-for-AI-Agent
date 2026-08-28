@@ -95,7 +95,12 @@ export function parseLivePlanBlocks(markdown) {
     const heading = /^###\s+(.*?)\s+[—-]\s+(.*)$/.exec(line.trim());
     if (heading) {
       current = { scenarioId: heading[1].trim(), lines: [] };
+      // A judgment names a check either by its bare title or by the whole
+      // heading, depending on how the plan was written. Indexing both is the
+      // difference between showing a check its contract and claiming it has
+      // none.
       blocks.set(heading[2].trim(), current);
+      blocks.set(line.trim().replace(/^###\s+/, ""), current);
       continue;
     }
     if (line.startsWith("#")) {
@@ -105,6 +110,16 @@ export function parseLivePlanBlocks(markdown) {
     if (current && line.trim()) current.lines.push(line.trim());
   }
   return blocks;
+}
+
+/**
+ * Resolve a judged check against an index keyed by title. The check may arrive
+ * as `<scenario> — <title>`, so a miss retries without that prefix.
+ */
+function lookup(index, item) {
+  if (index.has(item)) return index.get(item);
+  const separator = item.indexOf(" — ");
+  return separator === -1 ? null : (index.get(item.slice(separator + 3)) ?? null);
 }
 
 /** Index every parsed test by title, so a check can name its own source file. */
@@ -203,8 +218,8 @@ export function buildHandoffReport(page, { allChecks = false } = {}) {
       ? allChecksList
       : allChecksList.filter(check => UNSETTLED.has(check.result))
   ).map(check => {
-    const plan = livePlan.get(check.item) ?? null;
-    const source = specTests.get(check.item) ?? null;
+    const plan = lookup(livePlan, check.item);
+    const source = lookup(specTests, check.item);
     const flake = flakyByItem.get(check.item) ?? null;
     return {
       ...check,

@@ -183,6 +183,18 @@ describe("review gating", () => {
     expect(spawned.stages()).toContain("run-hermes-judge-review.mjs");
   });
 
+  it("reviews a failing verdict, which is the outcome the reviewer exists for", async () => {
+    writeSpec("dashboard");
+    writeJudgment("dashboard", { status: "fail", checks: [{ item: "a", result: "fail" }] });
+    // Exit 1 is the judge reporting a verdict, not the judge breaking.
+    const spawned = recorder({ "run-hermes-page-judge.mjs": 1 });
+
+    const code = await run([...ARGS(), "--page=dashboard"], { spawn: spawned.spawn });
+
+    expect(code).toBe(1);
+    expect(spawned.stages()).toContain("run-hermes-judge-review.mjs");
+  });
+
   it("does not review a judge run that failed", async () => {
     writeSpec("dashboard");
     const spawned = recorder({ "run-hermes-page-judge.mjs": 3 });

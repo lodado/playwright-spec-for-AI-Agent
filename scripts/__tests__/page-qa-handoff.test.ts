@@ -130,12 +130,14 @@ afterEach(() => {
 });
 
 describe("parseLivePlanBlocks", () => {
-  it("keys each Given/When/Then block by its test title", () => {
+  it("keys each Given/When/Then block by its title and by its whole heading", () => {
     const blocks = parseLivePlanBlocks(LIVE_PLAN);
 
     expect([...blocks.keys()]).toEqual([
       "shows the plan name in the header",
+      "ACTIVE — shows the plan name in the header",
       "shows an account health score",
+      "ACTIVE — shows an account health score",
     ]);
     expect(blocks.get("shows an account health score")).toEqual({
       scenarioId: "ACTIVE",
@@ -177,6 +179,25 @@ describe("buildHandoffReport", () => {
     expect(check.contract).toContain(
       "Then: a numeric score is shown with its meter"
     );
+  });
+
+  it("resolves a check the judge named as `<scenario> — <title>`", () => {
+    // Real judgments name checks by the whole live-plan heading; the demo
+    // fixtures name them by bare title. Both must find the same contract.
+    writeArtifact("demo-hermes-judgment.json", {
+      ...JUDGMENT,
+      checks: [
+        { ...JUDGMENT.checks[1], item: "ACTIVE — shows an account health score" },
+      ],
+    });
+
+    const report = buildHandoffReport("demo");
+
+    expect(report.checks[0].contract).toContain(
+      "Then: a numeric score is shown with its meter"
+    );
+    expect(report.checks[0].sourceFile).toBe("demo.spec.ts");
+    expect(renderHandoffReport(report)).not.toContain("not found in the frozen live plan");
   });
 
   it("includes passing checks under allChecks", () => {

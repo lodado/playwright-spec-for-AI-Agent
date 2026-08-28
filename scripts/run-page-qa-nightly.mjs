@@ -393,7 +393,12 @@ async function runPage(page, ctx) {
     const judgeExit = runStage(ctx, page, "judge", judgeArgs);
     codes.push(judgeExit);
 
-    if (judgeExit !== 0) {
+    // Exit 1 is a verdict, not a broken run: the judge worked and the page
+    // failed. Treating it as a crash skipped the review stage on exactly the
+    // verdicts it exists to double-check, leaving `fail` the one outcome
+    // nobody re-read. Only a usage, environment, or agent-output failure
+    // leaves nothing to review.
+    if (judgeExit !== 0 && judgeExit !== EXIT_VERDICT_FAIL) {
       skipStage(ctx, page, "review", `judge exited ${judgeExit}`);
     } else {
       const judgment = readJsonArtifact(paths.hermesJudgmentJson, "judgment");
