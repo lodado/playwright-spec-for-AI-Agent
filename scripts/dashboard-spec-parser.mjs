@@ -181,7 +181,7 @@ function findBlockEnd(source, bodyStart) {
 // empty, named, or destructured argument list (optionally with `testInfo`); and
 // whitespace or newlines anywhere inside the signature.
 const TEST_BLOCK_PATTERN =
-  /\btest(?:\s*\.\s*(?:only|skip|fixme))?\s*\(\s*(["'`])((?:\\.|(?!\1).)*?)\1\s*,\s*(?:async\s*)?(?:function\s*\*?\s*)?\(\s*(?:\{[\s\S]*?\}|[A-Za-z_$][\w$]*)?\s*(?:,[^)]*)?\)\s*(?:=>\s*)?\{/g;
+  /\btest(?:\s*\.\s*(?:only|skip|fixme))?\s*\(\s*(["'`])((?:\\.|(?!\1).)*?)\1\s*,\s*(?:\{[\s\S]*?\}\s*,\s*)?(?:async\s*)?(?:function\s*\*?\s*)?\(\s*(?:\{[\s\S]*?\}|[A-Za-z_$][\w$]*)?\s*(?:,[^)]*)?\)\s*(?:=>\s*)?\{/g;
 
 // Loose enough to spot a declaration TEST_BLOCK_PATTERN failed to parse, strict
 // enough to ignore hooks (`test.beforeEach`) and in-body modifiers (`test.skip(cond)`).

@@ -327,6 +327,15 @@ describe("annotation line anchoring", () => {
 });
 
 describe("extractTestBlocks", () => {
+  it("extracts Playwright test details objects without dropping the declaration", () => {
+    const source = `test("tagged", { tag: "@slow", annotation: { type: "issue", description: "QA-1" } }, async ({ page }) => {
+      await expect(page.getByTestId("root")).toBeVisible();
+    });`;
+
+    expect(extractTestBlocks(source).map(block => block.title)).toEqual(["tagged"]);
+    expect(countUnparsedTests(source)).toBe(0);
+  });
+
   it("extracts modifier, quote-style, and signature variants", () => {
     const source = [
       "test.only('only test', async () => {});",
@@ -360,22 +369,21 @@ describe("extractTestBlocks", () => {
     expect(countUnparsedTests(source)).toBe(0);
   });
 
-  it("warns about and counts a test it cannot parse", () => {
+  it("does not warn or drop a test details declaration", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const source = [
       "// @qa-scenario: ACTIVE",
       "// @qa-live-policy: readonly",
       'test("parsed", async ({ page }) => {});',
-      'test("unparsed", { tag: "@slow" }, async ({ page }) => {});',
+      "// @qa-live-policy: readonly",
+      'test("tagged", { tag: "@slow" }, async ({ page }) => {});',
     ].join("\n");
 
     const parsed = parseDashboardSpecFile("drops.spec.ts", source);
 
-    expect(parsed?.tests).toHaveLength(1);
-    expect(parsed?.unparsedTestCount).toBe(1);
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("drops.spec.ts: 1 test(s) could not be parsed"),
-    );
+    expect(parsed?.tests).toHaveLength(2);
+    expect(parsed?.unparsedTestCount).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 });
