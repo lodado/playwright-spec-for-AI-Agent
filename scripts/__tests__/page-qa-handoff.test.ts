@@ -295,6 +295,95 @@ describe("buildHandoffReport", () => {
   });
 });
 
+describe("detectInteractionWipeout", () => {
+  const spec = {
+    ...SPEC,
+    scenarios: [
+      {
+        scenarioId: "ACTIVE",
+        sourceFile: "demo.spec.ts",
+        tests: [
+          { title: "reads the header", livePolicyAnnotation: "readonly" },
+          { title: "opens the menu", livePolicyAnnotation: "safe-interaction" },
+          { title: "opens the panel", livePolicyAnnotation: "safe-interaction" },
+        ],
+      },
+    ],
+  };
+
+  function judgment(results: Record<string, string>) {
+    return {
+      ...JUDGMENT,
+      checks: Object.entries(results).map(([item, result]) => ({
+        item,
+        result,
+        cause: result === "pass" ? "NONE" : "PRODUCT_DEFECT",
+        confidence: "high",
+        detail: `observed ${item}`,
+        evidenceRefs: [],
+      })),
+    };
+  }
+
+  beforeEach(() => {
+    writeArtifact("demo-qa-spec.json", spec);
+    writeFileSync(join(qaDir, "demo-qa-spec-live.md"), LIVE_PLAN);
+  });
+
+  it("flags a run where every interaction failed and every read-only check passed", () => {
+    writeArtifact(
+      "demo-hermes-judgment.json",
+      judgment({
+        "reads the header": "pass",
+        "opens the menu": "fail",
+        "opens the panel": "fail",
+      })
+    );
+
+    const report = buildHandoffReport("demo");
+
+    expect(report.interactionWipeout).toEqual({ interactive: 2, readOnly: 1 });
+    expect(renderHandoffReport(report)).toContain(
+      "the page's JavaScript may never have run"
+    );
+  });
+
+  it("stays quiet when a read-only check failed too — that is not the pattern", () => {
+    writeArtifact(
+      "demo-hermes-judgment.json",
+      judgment({
+        "reads the header": "fail",
+        "opens the menu": "fail",
+        "opens the panel": "fail",
+      })
+    );
+
+    expect(buildHandoffReport("demo").interactionWipeout).toBeNull();
+  });
+
+  it("stays quiet when one interaction still worked", () => {
+    writeArtifact(
+      "demo-hermes-judgment.json",
+      judgment({
+        "reads the header": "pass",
+        "opens the menu": "pass",
+        "opens the panel": "fail",
+      })
+    );
+
+    expect(buildHandoffReport("demo").interactionWipeout).toBeNull();
+  });
+
+  it("needs more than one interaction check before calling it a pattern", () => {
+    writeArtifact(
+      "demo-hermes-judgment.json",
+      judgment({ "reads the header": "pass", "opens the menu": "fail" })
+    );
+
+    expect(buildHandoffReport("demo").interactionWipeout).toBeNull();
+  });
+});
+
 describe("evidence provenance", () => {
   beforeEach(() => {
     writeArtifact("demo-qa-spec.json", SPEC);

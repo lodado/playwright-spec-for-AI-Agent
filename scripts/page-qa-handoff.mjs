@@ -212,12 +212,9 @@ export function buildHandoffReport(page, { allChecks = false } = {}) {
     }
   }
 
-  const allChecksList = collectChecks(judgment, manifest);
-  const checks = (
-    allChecks
-      ? allChecksList
-      : allChecksList.filter(check => UNSETTLED.has(check.result))
-  ).map(check => {
+  // Enrich every check, then filter: the wipeout detector below has to see the
+  // passing read-only ones to recognise the pattern at all.
+  const allChecksList = collectChecks(judgment, manifest).map(check => {
     const plan = lookup(livePlan, check.item);
     const source = lookup(specTests, check.item);
     const flake = flakyByItem.get(check.item) ?? null;
@@ -238,6 +235,10 @@ export function buildHandoffReport(page, { allChecks = false } = {}) {
       reviewFlags: criteriaByItem.get(check.item) ?? [],
     };
   });
+
+  const checks = allChecks
+    ? allChecksList
+    : allChecksList.filter(check => UNSETTLED.has(check.result));
 
   // A criterion that names every shown check distinguishes none of them, and
   // its detail is one blob about the run. Repeating that blob under each check
@@ -288,6 +289,7 @@ export function buildHandoffReport(page, { allChecks = false } = {}) {
       : null,
     checks,
     totalChecks: allChecksList.length,
+    interactionWipeout: detectInteractionWipeout(allChecksList),
     verdictStability: {
       flaky: Boolean(flakiness.summary.verdictFlaky),
       runs: flakiness.summary.runs,
@@ -306,6 +308,32 @@ export function buildHandoffReport(page, { allChecks = false } = {}) {
       evidenceDir: paths.evidenceDir,
     },
   };
+}
+
+/** Policies whose check cannot be judged unless the page's JavaScript runs. */
+const INTERACTIVE_POLICIES = new Set([
+  "safe-interaction",
+  "safe-interaction-no-confirm",
+]);
+
+/**
+ * Every check that needed JavaScript failed while every check that only needed
+ * the served HTML passed. That is one broken page bundle, not N independent
+ * product defects — and the judge reports each one separately, with confidence,
+ * as a defect in the feature it happened to be looking at.
+ *
+ * Reported rather than applied: rewriting the judge's causes here would be this
+ * tool deciding a product question. The reader is told what to rule out first.
+ */
+export function detectInteractionWipeout(checks) {
+  const interactive = checks.filter(check =>
+    INTERACTIVE_POLICIES.has(check.policy)
+  );
+  const readOnly = checks.filter(check => check.policy === "readonly");
+  if (interactive.length < 2 || readOnly.length === 0) return null;
+  if (!interactive.every(check => UNSETTLED.has(check.result))) return null;
+  if (!readOnly.every(check => check.result === "pass")) return null;
+  return { interactive: interactive.length, readOnly: readOnly.length };
 }
 
 /**
@@ -436,6 +464,24 @@ export function renderHandoffReport(report) {
 
   if (judgment.summary) {
     lines.push("Judge summary:", ...quote(judgment.summary), "");
+  }
+
+  if (report.interactionWipeout) {
+    const { interactive, readOnly } = report.interactionWipeout;
+    lines.push(
+      "## Rule this out first: the page's JavaScript may never have run",
+      "",
+      `All ${interactive} check(s) that needed an interaction are unsettled, and all`,
+      `${readOnly} check(s) that only needed the served HTML passed. One page whose`,
+      "script never ran produces exactly this split, and the judge would report it",
+      "as a separate confident defect in each feature it happened to click.",
+      "",
+      "Check the deployed bundle, the console, and whether the target host is the",
+      "one the app serves its scripts to, before treating any of these as a product",
+      "defect. If that is the cause, every check below is a HARNESS_DEFECT and none",
+      "of them is evidence about the feature it names.",
+      ""
+    );
   }
 
   lines.push(...TASK_FRAME, "", ...TRUST_FRAME, "");
