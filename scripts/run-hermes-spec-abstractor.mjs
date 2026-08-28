@@ -31,7 +31,7 @@ const HERMES_MAX_TURNS_ABSTRACT = 2;
  * stamped next to the input hash so a prompt change re-runs the agent even
  * though the specs are untouched.
  */
-export const ABSTRACT_PROMPT_REV = "4.0.0";
+export const ABSTRACT_PROMPT_REV = "4.1.0";
 
 function hasFlag(argv, flag) {
   return argv.includes(flag);
@@ -62,10 +62,12 @@ export function buildAbstractHermesQuery(payload) {
     "- `liveSkip: true` -> scenario should be marked as skipped on live; tests under it should not be executable.",
     "- `fixtures` -> the check uploads those named files; say so in Given.",
     "- `qaLivePolicy` values: `readonly`, `safe-interaction`, `safe-interaction-no-confirm`, `mock-judgment`, `subscription-mutation`, `auth-mock`, `skip`.",
+    "- `safe-interaction-no-confirm` means the confirm/submit action is UNSAFE on live. When must open the flow and stop before it; Then may only assert what is observable up to that point, and must never instruct clicking confirm/OK/submit. Dismiss with Esc.",
     "- For `subscription-mutation` / `auth-mock` / `skip`, Then should state `skip`.",
     "Use semantic intent for non-deterministic live data: generalize literals/counts/labels/dates.",
     "Example: prefer '문서를 확인한다' over exact mock literal like '세금계산서를 확인한다'.",
     "Given must state scenario + context, When must state action/review mode, Then must state pass condition.",
+    "Given describes only what is already true when the page loads. Every check starts from a freshly loaded page, so any step needed to reach the state under test (opening a dialog, entering a flow) is an action and belongs in When. A Given that assumes a dialog is 'already open' leaves nobody to open it.",
     "Include every test title exactly once, verbatim, in its heading. Never invent a test.",
     "",
     "## Never (mandatory, one per block)",

@@ -111,3 +111,20 @@ describe("buildAbstractHermesQuery", () => {
     expect(query).toContain("Do not invent selectors");
   });
 });
+
+describe("buildAbstractHermesQuery safety rules", () => {
+  it("to forbid planning a confirm click for safe-interaction-no-confirm", () => {
+    const query = buildAbstractHermesQuery({ task: "abstract-qa-spec-gwt" });
+
+    // Naming the policy is not enough: the judge follows the plan, so a plan
+    // that says "click 확인" mutates live state no matter what the policy meant.
+    expect(query).toContain("safe-interaction-no-confirm` means");
+    expect(query).toContain("never instruct clicking confirm");
+  });
+
+  it("to keep setup steps in When so nobody assumes a pre-opened dialog", () => {
+    const query = buildAbstractHermesQuery({ task: "abstract-qa-spec-gwt" });
+
+    expect(query).toContain("belongs in When");
+  });
+});
