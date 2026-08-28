@@ -1,0 +1,99 @@
+name: playwright-spec-for-AI-Agent
+description: >-
+  Run the AI staging QA pipeline (spec -> abstract-ai -> judge -> review) for one
+  or more pages, upload the __QA__ artifacts, and write the verdict table to the
+  job summary. This action does NOT install the agent CLI it drives
+  (hermes-agent, aside, or whatever QA_AGENT_CMD points at) and does NOT provide
+  its credentials or the staging account — install and authenticate the backend
+  in your own steps before calling this action.
+author: lodado
+
+inputs:
+  pages:
+    description: "Comma-separated page slugs. One nightly run per page."
+    required: true
+  adapter:
+    description: "QA_AI_ADAPTER value: hermes, aside, exec, fixture, or a module specifier."
+    required: false
+    default: hermes
+  config-path:
+    description: "Path to playwright-spec-for-ai-agent.config.mjs. Empty = auto-discovered from the project root."
+    required: false
+    default: ""
+  extra-args:
+    description: "Extra flags appended to every nightly run, e.g. --with-slack --skip-review."
+    required: false
+    default: ""
+  node-version:
+    description: "Node version used to run the CLI (the package requires >= 20)."
+    required: false
+    default: "20"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    # Every page runs even if an earlier one fails, so one bad page still
+    # produces artifacts for the rest. The worst exit code is replayed at the
+    # end, which keeps the taxonomy intact: 1 verdict fail, 2 usage,
+    # 3 environment, 4 unusable agent output.
+    - name: Run QA nightly per page
+      id: nightly
+      shell: bash
+      env:
+        QA_AI_ADAPTER: ${{ inputs.adapter }}
+        QA_PAGES: ${{ inputs.pages }}
+        QA_CONFIG_PATH: ${{ inputs.config-path }}
+        QA_EXTRA_ARGS: ${{ inputs.extra-args }}
+      run: |
+        set -u
+        config_flag=""
+        if [ -n "$QA_CONFIG_PATH" ]; then config_flag="--config=$QA_CONFIG_PATH"; fi
+        worst=0
+        IFS=',' read -ra pages <<< "$QA_PAGES"
+        for page in "${pages[@]}"; do
+          page="$(echo "$page" | tr -d '[:space:]')"
+          [ -z "$page" ] && continue
+          echo "::group::nightly --page=$page"
+          status=0
+          npx --yes playwright-spec-for-ai-agent nightly \
+            "--page=$page" $config_flag --non-interactive $QA_EXTRA_ARGS || status=$?
+          echo "::endgroup::"
+          echo "$page exited $status"
+          if [ "$status" -gt "$worst" ]; then worst="$status"; fi
+        done
+        echo "worst=$worst" >> "$GITHUB_OUTPUT"
+
+    - name: Upload QA artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: qa-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
+        path: "**/__QA__/**"
+        if-no-files-found: warn
+
+    # `report` appends its own run table to $GITHUB_STEP_SUMMARY, so nothing is
+    # written here by hand. --fail-on=never keeps the gate in the step below,
+    # where the original exit code still is.
+    - name: Write the run table to the job summary
+      if: always()
+      shell: bash
+      env:
+        QA_PAGES: ${{ inputs.pages }}
+        QA_CONFIG_PATH: ${{ inputs.config-path }}
+      run: |
+        set -u
+        config_flag=""
+        if [ -n "$QA_CONFIG_PATH" ]; then config_flag="--config=$QA_CONFIG_PATH"; fi
+        npx --yes playwright-spec-for-ai-agent report \
+          "--pages=$QA_PAGES" $config_flag --fail-on=never
+
+    - name: Replay the worst nightly exit code
+      if: steps.nightly.outputs.worst != '0'
+      shell: bash
+      env:
+        WORST: ${{ steps.nightly.outputs.worst }}
+      run: exit "$WORST"

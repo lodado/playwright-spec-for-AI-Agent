@@ -1,0 +1,65 @@
+name: Adapter request
+description: Ask for a new agent backend, or report that one you wrote fails the contract suite.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        You may not need us. `QA_AI_ADAPTER` accepts a module specifier — a path
+        (`./qa-adapters/my-agent.mjs`) or a package (`@acme/qa-adapter`)
+        resolved from your project root — so a backend can live entirely in your
+        repo. The module exports `run(query, maxTurns, options)` and optionally
+        `capabilities`, `prelogin`, and `resolveModel`.
+
+        Before filing, run your adapter against the exported contract suite in
+        `scripts/__tests__/agent-runner-contract.test.ts`
+        (`runAdapterContractSuite`). A backend is done when that suite passes;
+        if it does not, the failing case below is the whole bug report.
+
+        If your CLI takes a prompt on stdin and answers JSON on stdout, try the
+        built-in `exec` adapter first: `QA_AI_ADAPTER=exec` with
+        `QA_AGENT_CMD="<your cli> ..."`.
+
+  - type: input
+    id: backend
+    attributes:
+      label: Backend
+      description: The agent CLI or SDK, and a link to its docs.
+    validations:
+      required: true
+
+  - type: textarea
+    id: invocation
+    attributes:
+      label: How it is invoked
+      description: >-
+        The command line, how the prompt is passed (stdin, argv, file), and the
+        shape of what it prints. If it can already run under `exec`, say what
+        stopped you.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: capabilities
+    attributes:
+      label: Capabilities it can honestly declare
+      description: >-
+        `auth` (cdp-attach | self-prelogin | credentials-in-prompt),
+        `supportsMaxTurns`, `supportsToolsetDisable`, `supportsVideo`,
+        `blocksEventLoop`. `blocksEventLoop: false` is only true if the backend
+        does not freeze the Node event loop while the agent browses.
+      render: javascript
+    validations:
+      required: true
+
+  - type: textarea
+    id: contract-result
+    attributes:
+      label: Contract suite result
+      description: >-
+        Paste the failing case from `runAdapterContractSuite`, or say "passes"
+        if you are only asking for the adapter to ship built in.
+      render: text
+    validations:
+      required: true

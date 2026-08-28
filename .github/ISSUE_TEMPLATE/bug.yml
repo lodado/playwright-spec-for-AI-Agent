@@ -1,0 +1,85 @@
+name: Bug report
+description: Something in the pipeline misbehaved — a wrong verdict, a crash, an unusable artifact.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Redact before you paste.** Judgment artifacts quote live DOM and the
+        prompt, so they can contain your staging origin, account email, plan
+        names, and customer data. Replace them with placeholders
+        (`https://staging.example.com`, `qa@example.com`) — the shape of the
+        output is what matters here, not the values.
+
+        `npx playwright-spec-for-ai-agent doctor` prints most of what this form
+        asks for and refuses to print secrets.
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: Output of `npx playwright-spec-for-ai-agent --version`, and your Node version.
+      placeholder: "6.1.0, node 20.11.1"
+    validations:
+      required: true
+
+  - type: input
+    id: command
+    attributes:
+      label: Command you ran
+      description: The full command line, with credentials removed.
+      placeholder: "npx playwright-spec-for-ai-agent nightly --page=dashboard --non-interactive"
+    validations:
+      required: true
+
+  - type: input
+    id: adapter
+    attributes:
+      label: Adapter and model
+      description: >-
+        `QA_AI_ADAPTER` (hermes, aside, exec, fixture, or a module specifier)
+        and the model behind it — `HERMES_INFERENCE_MODEL`, `ASIDE_QA_MODEL`,
+        or the `QA_AGENT_CMD` command line for the exec adapter.
+      placeholder: "QA_AI_ADAPTER=hermes, HERMES_INFERENCE_MODEL=..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+      description: Include the exit code the command returned (0 ok, 1 verdict fail, 2 usage, 3 environment, 4 unusable agent output).
+    validations:
+      required: true
+
+  - type: textarea
+    id: raw-output
+    attributes:
+      label: "{page}-hermes-raw-output.txt"
+      description: >-
+        The agent's unparsed answer, from your page's `__QA__` directory
+        (default `src/page/{page}/__QA__/`). Redact first. Truncate to the
+        relevant part if it is very long, and say where you truncated.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: judgment
+    attributes:
+      label: "{page}-hermes-judgment.json"
+      description: >-
+        The parsed verdict from the same directory — status, cause, checks,
+        coverage, evidence, runId. Redact first.
+      render: json
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config (optional)
+      description: The `playwright-spec-for-ai-agent.config.mjs` block for this page, with the real origin replaced.
+      render: javascript
+    validations:
+      required: false

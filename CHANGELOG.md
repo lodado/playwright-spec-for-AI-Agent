@@ -1,5 +1,18 @@
 # Changelog
 
+> **About the 0.8.0 → 6.0.0 jump.** This file has no entries for 1.x through
+> 5.x because none of those releases came from the history behind `main`. Their
+> tags (`playwright-spec-for-ai-agent@1.0.0` … `@5.0.0`) still exist in the
+> repository, but no commit they point at is reachable from `main`, so
+> release-please had nothing to write. 6.0.0 was cut from `main` and, per its
+> own entry below, restored the v0.8.0 runtime as the published package.
+>
+> Entries from 0.4.0 through 0.8.0 are commit subjects copied verbatim, and a
+> few of them are Korean one-liners that say little. They are left as they are —
+> rewriting released changelog entries breaks the links they carry. Going
+> forward, commit subjects are written in English (see `CONTRIBUTING.md`),
+> because release-please publishes each one unedited.
+
 ## [6.1.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v6.0.0...v6.1.0) (2026-08-12)
 
 

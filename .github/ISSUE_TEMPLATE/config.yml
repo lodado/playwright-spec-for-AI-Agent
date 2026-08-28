@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Setup, configuration, and troubleshooting
+    url: https://github.com/lodado/playwright-spec-for-AI-Agent/blob/main/README.md
+    about: >-
+      Read the quick start and configuration sections first, and run
+      `npx playwright-spec-for-ai-agent doctor` — it checks config, credentials,
+      the agent CLI, and staging reachability before you file anything.
