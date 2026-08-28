@@ -11,11 +11,9 @@ const POLICY_WHEN = {
   "executable-interaction": "Safe UI steps per Playwright excerpt; Esc for dialogs.",
   "judgment-interaction-no-confirm": "Open flow; stop before confirm; Esc.",
   "judgment-mock-api": "View page; judge by intent (mock-api).",
-  "judgment-parser-gap":
-    "Inspect available evidence, but never pass; report manual_review / SPEC_GAP.",
 };
 
-/** Only safe-interaction tests need their Playwright steps quoted. */
+/** Per-test source excerpt budget: the whole document is re-sent each turn. */
 const MAX_EXCERPT_CHARS = 900;
 
 const DATA_BEGIN = "<<<QA-PLAN-DATA:BEGIN>>>";
@@ -144,13 +142,17 @@ function buildGivenWhenThen(test) {
     given.push("abstractReview");
   }
 
-  if (test.liveRunPolicy === "judgment-parser-gap") {
-    for (const diagnostic of test.unsupportedConstructs ?? []) {
-      const location = diagnostic.location
-        ? `${diagnostic.location.file}:${diagnostic.location.line}:${diagnostic.location.column}`
-        : "unknown location";
-      given.push(`Unsupported Playwright API ${diagnostic.api} at ${location}`);
-    }
+  // Name what the Then below omits. The summary is a projection of the source:
+  // an assertion this parser cannot represent is absent from it, and a reader
+  // who does not know that reads a narrower check than the test makes. The
+  // source itself is quoted under `## Playwright source`.
+  for (const diagnostic of test.unsupportedConstructs ?? []) {
+    const location = diagnostic.location
+      ? `${diagnostic.location.file}:${diagnostic.location.line}:${diagnostic.location.column}`
+      : "unknown location";
+    given.push(
+      `Not summarised below: ${diagnostic.api} at ${location} — read the source`
+    );
   }
 
   const when = [POLICY_WHEN[test.liveRunPolicy] ?? test.liveRunPolicy];
@@ -160,14 +162,15 @@ function buildGivenWhenThen(test) {
     for (const expectation of test.expectations) {
       then.push(formatExpectationThen(expectation));
     }
+  } else if (test.unsupportedConstructs?.length > 0) {
+    // Nothing was summarised, but the source is quoted: judge from it.
+    then.push("Matches the assertions in the quoted Playwright source");
   } else if (test.liveRunPolicy === "executable-interaction") {
     then.push("Matches Playwright assertions");
   } else if (test.liveRunPolicy === "judgment-interaction-no-confirm") {
     then.push("UI matches intent up to safe point");
   } else if (test.liveRunPolicy === "judgment-mock-api") {
     then.push("UI matches intent");
-  } else if (test.liveRunPolicy === "judgment-parser-gap") {
-    then.push("Result is manual_review / SPEC_GAP; pass is forbidden");
   }
 
   return { given, when, then };

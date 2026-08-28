@@ -83,7 +83,7 @@ describe("crossCheckLivePlan as an oracle over the agent plan", () => {
           tests: [
             {
               title: "shows plan",
-              liveRunPolicy: "judgment-parser-gap",
+              liveRunPolicy: "executable-readonly",
               parserIntegrity: "incomplete",
               expectations: [],
             },

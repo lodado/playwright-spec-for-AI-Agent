@@ -40,7 +40,7 @@ describe("spec parser integrity as a mixed supported and unsupported test", () =
 });
 
 describe("dashboard spec as a read-only test with unsupported assertions", () => {
-  it("to be marked incomplete instead of executable with empty expectations", () => {
+  it("to record the gap without demoting the policy, because the agent reads the source itself", () => {
     const parsed = parseDashboardSpecFile(
       "unsupported.spec.ts",
       `// @qa-scenario: ACTIVE
@@ -59,8 +59,12 @@ test("uses common APIs", async ({ page }) => {
       unsupportedCount: 2,
     });
     expect(parsed?.tests[0]).toMatchObject({
+      // The gap is still stated: it is what makes the cross-check stand down.
       parserIntegrity: "incomplete",
-      liveRunPolicy: "judgment-parser-gap",
+      // ...but the check still runs. The abstraction agent is handed the
+      // Playwright body, so an assertion this parser cannot name is not an
+      // assertion nobody can read.
+      liveRunPolicy: "executable-readonly",
       expectations: [],
     });
     expect(parsed?.tests[0].unsupportedConstructs).toHaveLength(2);

@@ -108,7 +108,7 @@ describe("renderJudgeHermesDocument", () => {
     expect(doc).toContain("**Then:**");
   });
 
-  it("caps parser gaps at manual_review and names unsupported APIs", () => {
+  it("to name an unread assertion and point at the source instead of forbidding pass", () => {
     const doc = renderJudgeHermesDocument({
       page: "dashboard",
       spec: {
@@ -118,7 +118,7 @@ describe("renderJudgeHermesDocument", () => {
           sourceFile: "gap.spec.ts",
           tests: [{
             title: "uses unsupported assertion",
-            liveRunPolicy: "judgment-parser-gap",
+            liveRunPolicy: "executable-readonly",
             expectations: [],
             unsupportedConstructs: [{
               api: "toHaveScreenshot",
@@ -128,13 +128,21 @@ describe("renderJudgeHermesDocument", () => {
         }],
       },
       includeSession: false,
-      specSourceFiles: {},
+      specSourceFiles: {
+        "gap.spec.ts": [
+          'test("uses unsupported assertion", async ({ page }) => {',
+          '  await expect(page.getByTestId("title")).toHaveScreenshot();',
+          "});",
+        ].join("\n"),
+      },
     });
 
-    expect(doc).toContain("manual_review");
+    // The reader is told which assertion the summary omits, and where to read it.
     expect(doc).toContain("toHaveScreenshot");
     expect(doc).toContain("gap.spec.ts:8:3");
-    expect(doc).not.toContain("Matches Playwright assertions");
+    expect(doc).toContain("## Playwright source");
+    // A gap in this parser is not a gap in the spec: the source is right there.
+    expect(doc).not.toContain("pass is forbidden");
   });
 });
 

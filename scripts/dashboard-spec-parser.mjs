@@ -507,8 +507,6 @@ export function describeLiveRunPolicy(liveRunPolicy) {
       return "UI action where completing verification would be dangerous on live — Hermes replays safe open steps, verifies up to the dangerous point, dismisses with Esc only (never clicks confirm)";
     case "judgment-mock-api":
       return "CI uses API mocks (not replayable on live); Hermes passes if live UI reasonably matches intent, manual_review if ambiguous";
-    case "judgment-parser-gap":
-      return "Playwright assertions were not fully parsed; the result is capped at manual_review until the parser gap is resolved";
     case "blocked-subscription-mutation":
       return "skipped on Playwright; Hermes must not mutate subscription/billing";
     case "blocked-auth-mock":
@@ -887,10 +885,7 @@ export function parseDashboardSpecFile(fileName, source) {
     return {
       title: block.title,
       stagingMode,
-      liveRunPolicy:
-        stagingMode === "read-only" && parserIntegrity === "incomplete"
-          ? "judgment-parser-gap"
-          : liveRunPolicy,
+      liveRunPolicy,
       livePolicyAnnotation,
       expectations,
       ...(steps.length > 0 ? { steps } : {}),
