@@ -37,6 +37,10 @@ jobs:
     permissions:
       contents: write
       id-token: write
+      # Labels live on the issues resource, and the close-out step edits the
+      # release PR's.
+      issues: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
