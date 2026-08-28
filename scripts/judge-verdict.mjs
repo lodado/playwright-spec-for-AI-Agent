@@ -307,15 +307,61 @@ function deriveCause({ status, declared, checks, violations }) {
  *           violations?: Array<{kind:string,detail?:string}>,
  *           fileExists?: (path: string) => boolean }} [options]
  */
+/**
+ * The `data-testid` values the parser positively read for a check — the only
+ * locator kind that is a stable contract rather than rendered content.
+ *
+ * @returns {Map<string, string[]>} normalized check title -> test ids
+ */
+export function collectContractHints(spec) {
+  const hints = new Map();
+  for (const scenario of spec?.scenarios ?? []) {
+    for (const test of scenario?.tests ?? []) {
+      const ids = (test?.expectations ?? [])
+        .map(expectation => expectation?.locator)
+        .filter(locator => locator?.kind === "testId")
+        .map(locator => String(locator.value ?? "").trim())
+        .filter(Boolean);
+      if (ids.length) hints.set(normalizeItem(test.title), [...new Set(ids)]);
+    }
+  }
+  return hints;
+}
+
+/**
+ * Did the judge confirm any of this check's contract points on the page?
+ *
+ * The declared field is the primary answer; quoting an id in `detail` or citing
+ * it as an evidence ref counts too, so a judge that reports well in prose is not
+ * punished for skipping a field.
+ */
+export function confirmsContract(check, ids = []) {
+  if (ids.length === 0) return true;
+  const declared = Array.isArray(check?.observedTestIds)
+    ? check.observedTestIds.map(id => String(id).trim().toLowerCase())
+    : [];
+  const haystack = [
+    String(check?.detail ?? ""),
+    ...(check?.evidenceRefs ?? []).map(String),
+  ]
+    .join(" ")
+    .toLowerCase();
+  return ids.some(
+    id => declared.includes(id.toLowerCase()) || haystack.includes(id.toLowerCase())
+  );
+}
+
 export function normalizeBrowseDecision(raw = {}, options = {}) {
   const {
     plannedChecks = [],
     runnerEvidence = null,
     violations = [],
+    contractHints = new Map(),
     fileExists,
   } = options;
   const evidenceOptions = fileExists ? { fileExists } : {};
   const floorNotes = [];
+  const hintsFor = item => contractHints.get(normalizeItem(item)) ?? [];
 
   const checks = (Array.isArray(raw.checks) ? raw.checks : []).map(check => {
     const item = String(check?.item ?? "Untitled check");
@@ -342,6 +388,17 @@ export function normalizeBrowseDecision(raw = {}, options = {}) {
         result = "manual_review";
         demotedFrom = "pass";
         floorNotes.push(`"${item}" passed without citing concrete evidence`);
+      } else if (!confirmsContract({ ...check, detail, evidenceRefs }, hintsFor(item))) {
+        // The plan is intent-level on purpose, so nothing static can prove it
+        // describes the same check the source asserts on. The page can: the
+        // parser read these test ids from the source, and the judge was looking
+        // at the live DOM. None confirmed means the judge verified something
+        // else, or the contract point is gone — either way not a pass.
+        result = "manual_review";
+        demotedFrom = "pass";
+        floorNotes.push(
+          `"${item}" passed without confirming ${hintsFor(item).join(", ")} on the page`
+        );
       }
     }
 
@@ -352,6 +409,9 @@ export function normalizeBrowseDecision(raw = {}, options = {}) {
       confidence,
       cause: normalizeCause(check?.cause, { result }),
       evidenceRefs,
+      ...(Array.isArray(check?.observedTestIds) && check.observedTestIds.length
+        ? { observedTestIds: check.observedTestIds.map(String) }
+        : {}),
       ...(demotedFrom ? { demotedFrom } : {}),
     };
   });

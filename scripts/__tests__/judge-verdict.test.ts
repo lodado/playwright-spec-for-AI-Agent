@@ -486,3 +486,126 @@ describe("coverage and the evidence manifest agree", () => {
     expect(manifest.items.map(entry => entry.planned)).toEqual([true, false]);
   });
 });
+
+describe("contract confirmation floor", () => {
+  const hints = new Map([["shows the cancel link", ["subscription-cancel-link"]]]);
+
+  it("demotes a pass that confirmed no contract point on the page", async () => {
+    const { normalizeBrowseDecision } = await import("../judge-verdict.mjs");
+    const decision = normalizeBrowseDecision(
+      {
+        status: "pass",
+        checks: [
+          {
+            item: "shows the cancel link",
+            // Concrete enough for the evidence floor, but about nothing the
+            // source asserts on.
+            detail: 'the page reads "구독 정보"',
+            result: "pass",
+            confidence: "high",
+          },
+        ],
+      },
+      { contractHints: hints },
+    );
+
+    expect(decision.checks[0]).toMatchObject({
+      result: "manual_review",
+      demotedFrom: "pass",
+    });
+    expect(decision.summary).toContain("subscription-cancel-link");
+  });
+
+  it("accepts the declared field", async () => {
+    const { normalizeBrowseDecision } = await import("../judge-verdict.mjs");
+    const decision = normalizeBrowseDecision(
+      {
+        checks: [
+          {
+            item: "shows the cancel link",
+            detail: 'the link reads "구독 취소"',
+            result: "pass",
+            confidence: "high",
+            observedTestIds: ["subscription-cancel-link"],
+          },
+        ],
+      },
+      { contractHints: hints },
+    );
+
+    expect(decision.status).toBe("pass");
+    expect(decision.checks[0].observedTestIds).toEqual(["subscription-cancel-link"]);
+  });
+
+  it("accepts an id quoted in the detail instead of the field", async () => {
+    const { normalizeBrowseDecision } = await import("../judge-verdict.mjs");
+    const decision = normalizeBrowseDecision(
+      {
+        checks: [
+          {
+            item: "shows the cancel link",
+            detail: 'subscription-cancel-link is present and reads "구독 취소"',
+            result: "pass",
+            confidence: "high",
+          },
+        ],
+      },
+      { contractHints: hints },
+    );
+    expect(decision.status).toBe("pass");
+  });
+
+  it("leaves a check with no parsed contract point alone", async () => {
+    const { normalizeBrowseDecision } = await import("../judge-verdict.mjs");
+    const decision = normalizeBrowseDecision(
+      { checks: [passing("a check the parser read no test id for")] },
+      { contractHints: hints },
+    );
+    expect(decision.status).toBe("pass");
+  });
+
+  it("never promotes: a fail stays a fail even with the id confirmed", async () => {
+    const { normalizeBrowseDecision } = await import("../judge-verdict.mjs");
+    const decision = normalizeBrowseDecision(
+      {
+        checks: [
+          {
+            item: "shows the cancel link",
+            detail: "the link is missing",
+            result: "fail",
+            cause: "PRODUCT_DEFECT",
+            observedTestIds: ["subscription-cancel-link"],
+          },
+        ],
+      },
+      { contractHints: hints },
+    );
+    expect(decision.status).toBe("fail");
+  });
+});
+
+describe("collectContractHints", () => {
+  it("keeps only test ids, keyed by normalized title", async () => {
+    const { collectContractHints } = await import("../judge-verdict.mjs");
+    const hints = collectContractHints({
+      scenarios: [
+        {
+          tests: [
+            {
+              title: "Shows   The Cancel Link",
+              expectations: [
+                { locator: { kind: "testId", value: "subscription-cancel-link" } },
+                { locator: { kind: "text", value: "구독 취소" } },
+                { locator: { kind: "testId", value: "subscription-cancel-link" } },
+              ],
+            },
+            { title: "no locators", expectations: [] },
+          ],
+        },
+      ],
+    });
+
+    expect(hints.get("shows the cancel link")).toEqual(["subscription-cancel-link"]);
+    expect(hints.has("no locators")).toBe(false);
+  });
+});

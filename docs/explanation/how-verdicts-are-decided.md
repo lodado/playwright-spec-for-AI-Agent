@@ -68,28 +68,42 @@ failed login, for example — floors at `manual_review`. This is the same
 principle as pytest's exit code 5 or Playwright's "no tests found": zero
 executed checks is not a pass.
 
-## The cross-check floor
+## The contract confirmation floor
 
-Two readers derive the plan from the same Playwright source, independently. The
-abstraction agent reads the test body as prose and writes Given/When/Then. The
-parser reads the same body mechanically and extracts the locators it asserts on.
-Where the plan never mentions an element the parser saw the test assert on, the
-two readings describe different checks — and there is no ground to prefer one.
-So the block is amended in place to cap that check at `manual_review`, and the
-disagreement is recorded in the abstraction audit as `plan-parser-disagreement`.
+The plan is intent-level by instruction: it says "the cancel link is shown as
+disabled", not `subscription-disabled-link`. That is deliberate — a live page
+does not serve the mock data a CI test pins, so a plan written in selectors
+would fail on differences that are not defects.
 
-The check is deliberately one-directional. A plan may say *more* than the parser
-read, because the parser only names the assertions it supports and that set is
-partial by construction. A test whose assertions the parser could not read at all
-is skipped by the cross-check entirely: its silence is not a second opinion.
+It also means nothing static can prove the plan describes the same check the
+test asserts on. Comparing the two textually was tried and does not work: the
+parser reads English identifiers from the source, the plan is prose in the
+project's own language, and a correct Korean sentence naming the same element
+contains no English string. Two different models produced identical false
+flags on 18 of 39 checks in one real suite, and the plans were right.
 
-This replaces an earlier, blunter rule. The parser used to cap any read-only test
-whose assertions it could not fully parse, which made the tool's own API coverage
-the ceiling on the user's verdict — a spec was punished for using Playwright the
-parser had not learned yet. Now the unread assertion is named with its source
-location and the source is quoted for the agent to read, and only a *conflict*
-between two readings floors the verdict.
+The page settles it. The parser reads the `data-testid` values the test asserts
+on — the one locator kind that is a stable contract rather than rendered
+content — and they reach the judge as contract points to confirm, never as the
+expectation. Each check may report `observedTestIds`: the ids it actually found
+on the page. A `pass` on a check whose source named contract points, that
+confirms none of them, floors at `manual_review` with `demotedFrom: "pass"`.
+Quoting an id in `detail` or citing it in `evidenceRefs` counts as confirming
+it, so a judge that reports well in prose is not punished for skipping a field.
 
+Three deliberate limits:
+
+- A check whose source named no test id carries no requirement. The parser's
+  coverage is partial by construction, and a floor built on its silence would
+  make the tool's own API coverage the ceiling on the user's verdict.
+- The id list never overrides the plan. A contract point that is present but
+  behaves against the plan is a `fail`, not a `pass`.
+- A confirmed id cannot lift a verdict. Like every rule here, this one only
+  lowers.
+
+The abstraction stage still runs the textual comparison, but only records it:
+`audit.contractHints` lists each check whose plan never mentioned a test id the
+parser read. It is a reading aid for a human reviewing a plan, not a verdict.
 
 ## The coverage floor
 

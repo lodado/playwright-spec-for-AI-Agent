@@ -100,7 +100,7 @@ describe("normalizeAbstractAiResult", () => {
     expect(result.spec.abstraction.stage).toBe("rules");
   });
 
-  it("to cap a check at manual_review when the plan never mentions what the parser read", () => {
+  it("records an unmentioned contract point as a hint, not a cap", () => {
     const withLocator = {
       ...baseSpec,
       scenarios: [
@@ -128,20 +128,14 @@ describe("normalizeAbstractAiResult", () => {
       livePlan: validPlan,
     });
 
-    expect(result.audit.repairs).toEqual([
-      {
-        kind: "plan-parser-disagreement",
-        checkId: "t1",
-        title: "shows score",
-        detail:
-          "the plan never mentions health-score, which this test asserts on; capped at manual_review",
-      },
+    // The plan describes the check in its own words; a missing English
+    // identifier is not evidence that it describes a different check. The judge
+    // settles it against the live page instead.
+    expect(result.audit.contractHints).toEqual([
+      { checkId: "t1", title: "shows score", unmentioned: ["health-score"] },
     ]);
-    expect(result.livePlan).toContain("health-score");
-    expect(result.livePlan).toContain("manual_review");
-    // The caution goes inside the existing block: a second heading for the same
-    // test would inflate the planned count and report the check twice.
-    expect(result.livePlan!.match(/^###\s/gm)).toHaveLength(1);
+    expect(result.audit.repairs).toEqual([]);
+    expect(result.livePlan).toBe(validPlan);
     expect(result.audit.coverage).toMatchObject({ planned: 1, addressed: 1 });
   });
 
