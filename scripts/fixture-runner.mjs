@@ -56,23 +56,43 @@ export function specFromQuery(query) {
   }
 }
 
+/** The test ids the quoted source asserts on, in source order. */
+function testIdsIn(source) {
+  const ids = [];
+  for (const [, id] of String(source ?? "").matchAll(
+    /getByTestId\(\s*["'`]([^"'`]+)["'`]\s*\)/g
+  )) {
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
 /**
  * A plan that invents test titles is rejected by the abstract stage's validator
  * — correctly. So the offline fixture writes one block per real test it was
  * given, which is what lets `QA_AI_ADAPTER=fixture` drive any project's
  * pipeline and not just the bundled demo.
+ *
+ * It also names the test ids the quoted source asserts on. A plan that names
+ * nothing concrete disagrees with every such test under the plan/parser
+ * cross-check, so the offline pipeline reported a repair per check and could
+ * never be quiet enough to show a real signal.
  */
 function fixtureLivePlan(spec) {
   const blocks = [];
   for (const scenario of spec?.scenarios ?? []) {
     for (const test of scenario?.tests ?? []) {
       const readonly = test?.qaLivePolicy === "readonly";
+      const ids = testIdsIn(test?.source);
+      const named = ids.length
+        ? ` (${ids.map(id => `\`${id}\``).join(", ")})`
+        : "";
       blocks.push(
         [
           `### ${scenario.scenarioId} — ${test.title}`,
           `Given: the ${scenario.scenarioId} account state on staging${scenario.alwaysRun ? " (always-run)" : ""}`,
           `When: the page is inspected under \`${test.qaLivePolicy ?? "readonly"}\``,
-          "Then: the behaviour this test describes is observable to the user",
+          `Then: the behaviour this test describes is observable to the user${named}`,
           `Never: the page shows an error state, or the described behaviour is absent after the page settles${readonly ? "\nmutations: 0" : ""}`,
         ].join("\n")
       );

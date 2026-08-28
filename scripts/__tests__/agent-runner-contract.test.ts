@@ -256,6 +256,38 @@ describe("fixture adapter", () => {
 
     expect(spawnSyncMock).not.toHaveBeenCalled();
   });
+
+  /**
+   * The offline plan is cross-checked against the parser like any other. A plan
+   * that names nothing concrete disagrees with every test that asserts on a
+   * test id, so `abstract-ai --force` reported a repair per check and the
+   * offline pipeline could never be quiet enough to show a real signal.
+   */
+  it("to name the test ids the quoted source asserts on, so the plan survives its own cross-check", () => {
+    const payload = {
+      specDefinition: {
+        scenarios: [
+          {
+            scenarioId: "ACTIVE",
+            tests: [
+              {
+                title: "shows the credit total",
+                qaLivePolicy: "readonly",
+                source:
+                  'await expect(page.getByTestId("credit-total")).toBeVisible();',
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const query = `## Payload\n${JSON.stringify(payload)}`;
+
+    const { livePlan } = runFixture(query, 5, { requiredKeys: ["livePlan"] });
+
+    expect(livePlan).toContain("credit-total");
+    expect(livePlan).toContain("mutations: 0");
+  });
 });
 
 describe("runAgent metadata", () => {

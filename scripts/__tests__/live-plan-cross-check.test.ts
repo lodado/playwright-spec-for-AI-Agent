@@ -109,3 +109,61 @@ describe("crossCheckLivePlan as an oracle over the agent plan", () => {
     });
   });
 });
+
+/**
+ * The abstraction prompt tells the agent to generalize literals, counts, labels
+ * and dates, because live staging data is not the mock data the test pins. A
+ * cross-check that then demands those same literals contradicts the instruction
+ * it is checking, and fires on every well-written plan.
+ */
+describe("crossCheckLivePlan as an oracle over a deliberately generalized plan", () => {
+  const specWith = (locator: object) => ({
+    scenarios: [
+      {
+        scenarioId: "ACTIVE",
+        sourceFile: "dash.spec.ts",
+        tests: [
+          {
+            title: "shows plan",
+            liveRunPolicy: "executable-readonly",
+            parserIntegrity: "complete",
+            expectations: [{ type: "visible", locator }],
+          },
+        ],
+      },
+    ],
+  });
+
+  const generalizedPlan = [
+    "### ACTIVE — shows plan",
+    "Given: the dashboard is open",
+    "When: the header is read",
+    "Then: the account's plan name is displayed",
+    "Never: the header is empty or shows an error; mutations: 0",
+  ].join("\n");
+
+  it.each([
+    ["text", { kind: "text", value: "dev-user님은 Basic 플랜을 사용하고 있습니다" }],
+    ["role", { kind: "role", value: "columnheader" }],
+    ["label", { kind: "label", value: "플랜 이름" }],
+  ])(
+    "to stay silent for a getBy%s locator, whose value is content the plan was told to generalize",
+    (_kind, locator) => {
+      const result = crossCheckLivePlan(specWith(locator), generalizedPlan);
+
+      expect(result.disagreements).toEqual([]);
+      expect(result.checked).toBe(0);
+    },
+  );
+
+  it("to still flag a test id, which is a stable contract the plan must name", () => {
+    const result = crossCheckLivePlan(
+      specWith({ kind: "testId", value: "plan-name" }),
+      generalizedPlan,
+    );
+
+    expect(result.checked).toBe(1);
+    expect(result.disagreements).toHaveLength(1);
+    expect(result.disagreements[0].missing).toEqual(["plan-name"]);
+  });
+});

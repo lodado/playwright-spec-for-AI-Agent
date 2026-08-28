@@ -17,9 +17,20 @@ import { isLiveSkippedTest } from "./spec-live-filter.mjs";
 
 const HEADING_LINE = /^#{1,6}\s+(.+?)\s*$/;
 
+/**
+ * Only a `data-testid` is a stable contract between the spec and the page. Every
+ * other locator kind identifies an element by its rendered content — visible
+ * text, an accessible name, a label, a placeholder — and that content is exactly
+ * what the abstraction prompt tells the agent to generalize, because live
+ * staging does not serve the mock data the test pins. Demanding those literals
+ * back would contradict the instruction this oracle is checking and fire on
+ * every well-written plan.
+ */
+const STABLE_LOCATOR_KINDS = new Set(["testId"]);
+
 /** The observable name a reader would have to write down to check this. */
 function locatorNeedle(locator) {
-  if (!locator) return null;
+  if (!locator || !STABLE_LOCATOR_KINDS.has(locator.kind)) return null;
   const value = typeof locator.value === "string" ? locator.value.trim() : "";
   return value || null;
 }
