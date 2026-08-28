@@ -1,5 +1,12 @@
 # Playwright Spec Parser Coverage Improvement Plan
 
+> **Status: closed.** Tasks 1, 4, 5, 6, 7, 8 shipped. Tasks 2 and 3 are
+> **cancelled** — see [Outcome](#outcome-parsing-is-no-longer-the-authority) at
+> the end of this document. The premise below (that the parser is the only
+> reader of the spec source, so its coverage bounds what the judge can verify)
+> was disproved while executing the plan, which changes what the remaining tasks
+> would have bought. Read the outcome section before reviving anything here.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace silent, regex-based partial parsing with an explicit, measurable Playwright-spec extraction contract that supports the high-value locator and assertion APIs and reports every unsupported construct.
@@ -104,6 +111,15 @@ Commit: `git commit -m "docs: define playwright parser support contract"`
 
 ### Task 2: Introduce a source-located parser IR
 
+> **CANCELLED.** The source-located diagnostic half of this task shipped inside
+> Task 1 (`unsupportedConstructs` with `{ api, category, reason, severity,
+> location }`), which is the part that stops silent loss. The remaining half — a
+> formal `ParsedTestIR` module the whole parser lowers through — was justified by
+> the expectations being the artifact the judge reasons over. They are not; see
+> [Outcome](#outcome-parsing-is-no-longer-the-authority). Building it would add a
+> module and a schema to maintain in exchange for a tidier representation of a
+> cross-check oracle.
+
 **Files:**
 - Create: `scripts/spec-parser-ir.mjs`
 - Create: `scripts/__tests__/spec-parser-ir.test.ts`
@@ -136,6 +152,21 @@ Commit: `git commit -m "feat: add source-located spec parser IR"`
 ---
 
 ### Task 3: Replace test-block regex parsing with a TypeScript AST
+
+> **CANCELLED.** This task buys two things, and both got cheaper than the task.
+> Declaration robustness: the concrete gap found in practice was test details
+> objects (`test("t", { tag }, fn)`), fixed in `d67eb83` for a regex change, and
+> `countUnparsedTests()` already reports a declaration the parser cannot read
+> rather than dropping it. Assertion-extraction accuracy: an AST would raise it,
+> but the extracted assertions are now a cross-check oracle, not the judge's
+> input — see [Outcome](#outcome-parsing-is-no-longer-the-authority). Against
+> that, it adds a compiler dependency to a package whose only runtime dependency
+> today is Node itself, on the ingest path of every run.
+>
+> **Revive this if** unparsed declarations show up in real projects
+> (`countUnparsedTests()` is the tripwire, and `--strict-parser` already fails
+> the build on it). A declaration the parser cannot see is a test nobody plans,
+> and that failure is not one the cross-check can catch.
 
 **Files:**
 - Create: `scripts/typescript-spec-parser.mjs`
@@ -428,3 +459,65 @@ Start with verdict integrity before broad API support:
 - [ ] Commit as `feat: prevent silent playwright assertion loss`.
 
 Only after this iteration is GREEN should AST migration and broader locator/assertion support begin.
+
+---
+
+## Outcome: parsing is no longer the authority
+
+This plan assumed the parser was the only reader of the spec source, so its API
+coverage bounded what the judge could verify. Tracing the artifacts during
+execution showed that assumption was wrong in the pipeline's normal path:
+
+- `abstract-ai` built its prompt from `buildGwtPromptSpec()`, which passed only
+  `title`, `checkId`, and `qaLivePolicy`. The parsed `expectations` were never
+  in it.
+- `judge` replaced the entire document body with the saved `spec-live.md` when
+  one existed, so the rule-based Given/When/Then built from `expectations` was
+  reached only as a fallback.
+
+So on a `spec -> abstract-ai -> judge` run, the parsed assertions reached no
+agent at all. Every additional matcher the parser learned improved a fallback
+path and a coverage counter, not a verdict.
+
+The response was to move authority to the source and demote the parser to an
+oracle:
+
+| Concern | Before | After |
+| --- | --- | --- |
+| `abstract-ai` input | titles and policies | plus the Playwright test body (`d2ef52f`) |
+| judge document | source quoted for `safe-interaction` only | quoted for every non-blocked policy (`803ed10`) |
+| parsed `expectations` | not reached by any agent | cross-check oracle over the agent's plan (`9ab3f33`) |
+| unsupported API | demoted the test to `judgment-parser-gap`, forbidding `pass` | named with `file:line:column`; the source is quoted; the verdict is untouched (`d11b660`) |
+
+Two bugs surfaced on the way, both only reachable in the production path:
+`buildJudgeBrowseDocument()` dropped the source excerpts and upload fixture
+paths whenever a saved live plan supplied the body, and the excerpt heading was
+`###`, the same level the judge enumerates checks by, so an excerpt counted as
+an extra check (`e7e99a8`).
+
+**What replaced the parser-gap ceiling.** Two readers now derive the plan from
+the same source independently: the agent as prose, the parser mechanically.
+Where the plan never names an element the parser saw the test assert on, the
+readings describe different checks and neither is authoritative, so the block is
+amended in place to cap that check at `manual_review`
+(`scripts/live-plan-cross-check.mjs`). This is strictly better than the old
+ceiling: it fires on a *disagreement about a check* rather than on *this
+package not having learned a matcher yet*, and it makes `parserIntegrity` load
+bearing — an incomplete read stands the cross-check down instead of capping a
+verdict.
+
+**Which acceptance criteria this changes.** "Partial parsing cannot yield an
+unqualified `pass`" no longer holds as written, and should not: partial parsing
+is now normal and safe, because the agent reads the source the parser could not.
+What holds instead is that partial parsing cannot yield a *silent* pass — the
+unread API is named with its location, the source is quoted, and
+`--strict-parser` still exits non-zero for a project that wants the old
+absolutism. The other criteria hold as written.
+
+**Where coverage still matters.** Not for verdicts, but for the cross-check: an
+assertion the parser cannot read is one the oracle cannot second-guess. That
+makes coverage a *sensitivity* knob, worth extending when a matcher is common
+enough that losing the second opinion on it matters. It is no longer a
+correctness gate, so it does not justify an AST migration or an IR module on its
+own. `npm run test:api-drift` reports the current subset (14/27 supported, 13
+diagnostic-only) and fails CI when Playwright's surface moves.
