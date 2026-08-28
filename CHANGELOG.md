@@ -13,6 +13,15 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [6.2.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v6.1.0...v6.2.0) (2026-08-27)
+
+
+### Features
+
+* add repository-pattern AI agent adapter (Hermes + Aside) ([f9b2f24](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/f9b2f24ecb7ea85ee0d74bc9d2b44c57aa76e143))
+* pre-authenticated judge sessions, settle-aware judging, and failed-run quarantine ([b39a0e0](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/b39a0e0e3b399be556a1e9ae9bdf25e1d0300ac9))
+* verdict floor, aside prelogin, runner contract suite, and judge hardening ([058e401](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/058e401c0ff084c6f1348673bcd3002f1347d55d))
+
 ## [6.1.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v6.0.0...v6.1.0) (2026-08-12)
 
 
