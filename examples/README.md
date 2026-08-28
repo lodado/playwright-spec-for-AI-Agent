@@ -32,7 +32,7 @@ outcomes are expected offline and are not bugs:
 
 These are documentation, not a runnable suite. Copy one into your own app and
 run the pipeline there. The annotation rules are in
-[../docs/annotations.md](../docs/annotations.md).
+[../docs/reference/annotations.md](../docs/reference/annotations.md).
 
 ## Where artifacts land
 
@@ -69,7 +69,7 @@ videos/                                 judge runner, with QA_RECORD_VIDEO=1
 
 Plus one `*-query.txt` and one `*-raw-output.txt` per agent stage, with secrets
 redacted. Field-by-field reference:
-[../docs/artifacts.md](../docs/artifacts.md).
+[../docs/reference/artifacts.md](../docs/reference/artifacts.md).
 
 `{slug}-qa-spec-live.md` is created only by `abstract-ai`; `spec` alone does not
 write it.

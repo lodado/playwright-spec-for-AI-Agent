@@ -69,6 +69,7 @@ const COMMANDS = {
       "--credentials-in-prompt",
       "--expected-plan",
       "--expected-subscription-status",
+      "--expected-account-state",
       "--account-notes",
       "--output-dir",
       "--config",
@@ -166,6 +167,10 @@ const FLAG_HELP = {
     "Legacy: embed credentials in the agent prompt instead of the login session",
   ],
   "--expected-plan": ["--expected-plan=<plan>", "Account plan the scenarios assume"],
+  "--expected-account-state": [
+    "--expected-account-state=<state>",
+    "Account state the scenarios assume (legacy alias: --expected-subscription-status=)",
+  ],
   "--expected-subscription-status": [
     "--expected-subscription-status=<status>",
     "ACTIVE | INACTIVE | CANCEL_PENDING",
