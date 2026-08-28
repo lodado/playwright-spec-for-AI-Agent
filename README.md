@@ -81,6 +81,48 @@ mock values are not required; a loading or label-only widget is ambiguous
 
 Out of `fail` because the widget is present; out of `pass` because the plan asked for a score and none was observed.
 
+## Annotations
+
+QA intent lives in the specs you already have, as `//` comments. `spec` reads
+them; nothing else in the pipeline reads your test code.
+
+**File-level** — at the top of the file, before the imports:
+
+| Annotation                | Required | Effect                                                            |
+| ------------------------- | -------- | ------------------------------------------------------------------- |
+| `// @qa-scenario: ACTIVE` | yes      | Scenario id. A file without it is invisible to `spec`.            |
+| `// @qa-page: billing`    | no       | Page id override for a file outside the page's spec dir.          |
+| `// @qa-live-skip: true`  | no       | Exclude the file from live QA; its tests report `skip`.           |
+| `// @qa-always-run: true` | no       | Judge this scenario even when another one was selected.           |
+
+**Test-level** — `// @qa-live-policy` is required on every test or an enclosing
+`test.describe`, and decides how far the judge may go on the live site:
+
+| Value                         | Judge behaviour                                                                 |
+| ----------------------------- | --------------------------------------------------------------------------------- |
+| `readonly`                    | Inspect the page. No mutating clicks.                                           |
+| `safe-interaction`            | Follow the steps in the plan; dismiss risky dialogs with Esc. Must be executed. |
+| `safe-interaction-no-confirm` | Open the flow, stop before the confirm or destructive submit.                   |
+| `mock-judgment`               | The CI test used `page.route` mocks. Judge by intent, not by mock literals.     |
+| `subscription-mutation`       | Blocked on live: reported as `skip`.                                            |
+| `auth-mock`                   | Blocked on live: reported as `skip`.                                            |
+| `skip`                        | Blocked on live: reported as `skip`.                                            |
+
+`// @qa-fixture: avatar=tests/fixtures/qa-avatar.png` names an upload file, at
+file, describe, or test level.
+
+Three rules account for most annotations that "did not work":
+
+1. An annotation must be the **whole comment line**. Prose that quotes one — as
+   this README does — is documentation, not an annotation.
+2. `@qa-live-skip` and `@qa-always-run` require the line to end after `true`.
+   `@qa-live-policy` tolerates a trailing `// note`; `@qa-fixture` does not.
+3. A test with no `@qa-live-policy`, and no policy on an enclosing describe,
+   makes `spec` exit 2 rather than guess.
+
+Full reference, including what each verb means to the harness:
+[docs/reference/annotations.md](docs/reference/annotations.md).
+
 ## Commands
 
 Twelve commands. The pipeline is `spec`, `abstract-ai`, `judge`, `review`, `slack`;
