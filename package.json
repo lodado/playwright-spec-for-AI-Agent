@@ -1,7 +1,7 @@
 {
   "name": "playwright-spec-for-ai-agent",
   "version": "6.1.0",
-  "description": "AI-assisted live staging QA layer for Playwright test suites. Parses @qa-scenario annotations from *.spec.ts into structured QA scenarios, then uses Hermes Agent to log into staging, visit target pages, and judge live DOM against test intent — returning pass, fail, manual_review, or skip without running Playwright against staging or mutating billing state.",
+  "description": "AI-assisted live staging QA layer for Playwright test suites. Parses @qa-scenario annotations from *.spec.ts into structured QA scenarios, then uses Hermes Agent to log into staging, visit target pages, and judge live DOM against test intent — returning pass, fail, manual_review, or skip without running Playwright against staging or mutating persistent state.",
   "type": "module",
   "license": "MIT",
   "author": "lodado <ycp998@naver.com>",
@@ -36,9 +36,18 @@
   "bin": {
     "playwright-spec-for-ai-agent": "./bin/playwright-spec-for-ai-agent.mjs"
   },
+  "exports": {
+    "./adapter": "./scripts/ai-agent-adapter.mjs",
+    "./config": "./scripts/hermes-qa-project-config.mjs",
+    "./package.json": "./package.json",
+    "./scripts/*": "./scripts/*",
+    "./*": "./scripts/*"
+  },
   "files": [
     "bin",
     "scripts",
+    "docs",
+    "action.yml",
     "playwright-spec-for-ai-agent.config.example.mjs",
     "examples",
     "README.md"
@@ -50,6 +59,9 @@
     "qa:review": "node bin/playwright-spec-for-ai-agent.mjs review",
     "qa:slack": "node bin/playwright-spec-for-ai-agent.mjs slack",
     "qa:nightly": "node bin/playwright-spec-for-ai-agent.mjs nightly",
+    "qa:doctor": "node bin/playwright-spec-for-ai-agent.mjs doctor",
+    "qa:report": "node bin/playwright-spec-for-ai-agent.mjs report",
+    "qa:show": "node bin/playwright-spec-for-ai-agent.mjs show",
     "test": "vitest run",
     "prepublishOnly": "npm test"
   },

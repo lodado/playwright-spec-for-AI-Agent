@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { UsageError } from "./errors.mjs";
 
 const CONFIG_FILENAMES = [
   "playwright-spec-for-ai-agent.config.mjs",
@@ -23,11 +24,6 @@ export const DEFAULT_PATH_TEMPLATES = {
   outputDir: "src/page/{page}/__QA__",
 };
 
-export const DEFAULT_TARGET_PATHS = {
-  dashboard: "/dashboard",
-  pricing: "/pricing",
-};
-
 export const DEFAULT_STAGING_ACCOUNT = {
   authRequired: true,
   expectedPlan: "",
@@ -36,8 +32,53 @@ export const DEFAULT_STAGING_ACCOUNT = {
   fixtures: {},
 };
 
+/** The live-run verbs a `livePolicies` entry may name. */
+export const LIVE_RUN_POLICIES = [
+  "executable-readonly",
+  "executable-interaction",
+  "judgment-interaction-no-confirm",
+  "judgment-mock-api",
+  "blocked-subscription-mutation",
+  "blocked-auth-mock",
+  "blocked-live-skip",
+];
+
+const TOP_LEVEL_KEYS = [
+  "root",
+  "paths",
+  "pages",
+  "targetPaths",
+  "staging",
+  "fixtures",
+  "livePolicies",
+  "hooks",
+];
+const PATHS_KEYS = ["specDir", "outputDir"];
+const ACCOUNT_KEYS = [
+  "authRequired",
+  "expectedPlan",
+  "expectedSubscriptionStatus",
+  "expectedAccountState",
+  "accountNotes",
+  "fixtures",
+];
+const URL_KEYS = ["baseUrl", "loginPath", "allowedOrigins", "versionUrl"];
+const STAGING_KEYS = [...ACCOUNT_KEYS, ...URL_KEYS, "dashboardPath"];
+const PAGE_KEYS = [
+  ...ACCOUNT_KEYS,
+  ...URL_KEYS,
+  "targetPath",
+  "pageUrl",
+  "specDir",
+  "outputDir",
+];
+const LIVE_POLICY_KEYS = ["liveRunPolicy", "stagingMode"];
+const HOOK_KEYS = ["onJudgment", "onReview"];
+
 /** @type {Record<string, unknown> | null} */
 let activeConfig = null;
+/** @type {string} */
+let activeOverrideSignature = "";
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -68,10 +109,13 @@ function parsePathOverrides(argv) {
     root: "",
     specDir: "",
     outputDir: "",
+    strict: process.env.QA_STRICT_CONFIG === "1",
   };
 
   for (const arg of argv) {
-    if (arg.startsWith("--config=")) {
+    if (arg === "--strict-config") {
+      overrides.strict = true;
+    } else if (arg.startsWith("--config=")) {
       overrides.configPath = arg.slice("--config=".length).trim();
     } else if (arg.startsWith("--project-root=")) {
       overrides.root = arg.slice("--project-root=".length).trim();
@@ -119,10 +163,187 @@ async function importConfigModule(configPath) {
   return module.default ?? module;
 }
 
-function normalizeFileConfig(raw) {
-  if (!raw || typeof raw !== "object") {
-    throw new Error("Config file must export a plain object (default export).");
+function editDistance(a, b) {
+  const previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    let diagonal = previous[0];
+    previous[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const next = Math.min(
+        previous[j] + 1,
+        previous[j - 1] + 1,
+        diagonal + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+      diagonal = previous[j];
+      previous[j] = next;
+    }
   }
+  return previous[b.length];
+}
+
+/** Closest allowlisted key, or "" when nothing is near enough to suggest. */
+function suggestKey(key, allowed) {
+  const lower = key.toLowerCase();
+  let best = "";
+  let bestDistance = Infinity;
+  for (const candidate of allowed) {
+    const distance = editDistance(lower, candidate.toLowerCase());
+    if (distance < bestDistance) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+  return bestDistance <= Math.max(2, Math.floor(key.length / 3)) ? best : "";
+}
+
+/**
+ * Reserved/example hostnames that must never reach a live run. `""` counts as a
+ * placeholder so callers can use one predicate for "unset or fake".
+ *
+ * Subdomains count too: RFC 2606 reserves example.com and everything under it
+ * for documentation, so `https://staging.example.com` — what this project's own
+ * example config ships — can never be someone's real staging origin. Letting it
+ * through turned "you left the placeholder in" into "staging is unreachable".
+ */
+const RESERVED_HOSTS = ["example", "example.com", "example.org", "example.net"];
+
+export function isPlaceholderBaseUrl(url) {
+  const raw = String(url ?? "").trim();
+  if (!raw) return true;
+  let host;
+  try {
+    host = new URL(raw).hostname.toLowerCase();
+  } catch {
+    return true;
+  }
+  if (
+    RESERVED_HOSTS.some(
+      reserved => host === reserved || host.endsWith(`.${reserved}`)
+    )
+  ) {
+    return true;
+  }
+  return ["your-", "yourdomain", "changeme", "todo"].some(token =>
+    host.includes(token)
+  );
+}
+
+function collectKeyIssues(issues, object, allowed, prefix) {
+  if (!isPlainObject(object)) return;
+  for (const key of Object.keys(object)) {
+    if (allowed.includes(key)) continue;
+    const suggestion = suggestKey(key, allowed);
+    issues.push(
+      `unknown config key "${prefix}${key}"${
+        suggestion ? ` — did you mean "${suggestion}"?` : ""
+      }`
+    );
+  }
+}
+
+function collectTypeIssues(issues, object, prefix) {
+  if (!isPlainObject(object)) return;
+  for (const [key, value] of Object.entries(object)) {
+    if (value === undefined) continue;
+    if (
+      ["specDir", "outputDir", "targetPath", "loginPath", "dashboardPath"].includes(key) &&
+      typeof value !== "string"
+    ) {
+      issues.push(`"${prefix}${key}" must be a string, got ${typeof value}`);
+    }
+    if (key === "authRequired" && typeof value !== "boolean") {
+      issues.push(`"${prefix}${key}" must be a boolean, got ${typeof value}`);
+    }
+    if (["pageUrl", "baseUrl", "versionUrl"].includes(key)) {
+      try {
+        new URL(String(value));
+      } catch {
+        issues.push(`"${prefix}${key}" is not a valid URL: ${String(value)}`);
+      }
+    }
+    if (key === "allowedOrigins" && value !== false) {
+      if (!Array.isArray(value) || value.some(o => typeof o !== "string")) {
+        issues.push(
+          `"${prefix}allowedOrigins" must be an array of origin strings, or false to disable origin pinning`
+        );
+      }
+    }
+    if (key === "baseUrl" && isPlaceholderBaseUrl(value)) {
+      issues.push(
+        `"${prefix}baseUrl" is a placeholder (${String(value)}) — set a real staging origin before judging`
+      );
+    }
+  }
+}
+
+function validateFileConfig(raw) {
+  const issues = [];
+
+  collectKeyIssues(issues, raw, TOP_LEVEL_KEYS, "");
+  collectKeyIssues(issues, raw.paths, PATHS_KEYS, "paths.");
+  collectTypeIssues(issues, raw.paths, "paths.");
+  collectKeyIssues(issues, raw.staging, STAGING_KEYS, "staging.");
+  collectTypeIssues(issues, raw.staging, "staging.");
+
+  if (isPlainObject(raw.pages)) {
+    for (const [page, pageConfig] of Object.entries(raw.pages)) {
+      if (!isPlainObject(pageConfig)) {
+        issues.push(`"pages.${page}" must be an object`);
+        continue;
+      }
+      collectKeyIssues(issues, pageConfig, PAGE_KEYS, `pages.${page}.`);
+      collectTypeIssues(issues, pageConfig, `pages.${page}.`);
+    }
+  }
+
+  if (isPlainObject(raw.livePolicies)) {
+    for (const [key, entry] of Object.entries(raw.livePolicies)) {
+      if (!isPlainObject(entry)) {
+        issues.push(`"livePolicies.${key}" must be an object`);
+        continue;
+      }
+      collectKeyIssues(issues, entry, LIVE_POLICY_KEYS, `livePolicies.${key}.`);
+      if (!LIVE_RUN_POLICIES.includes(entry.liveRunPolicy)) {
+        issues.push(
+          `"livePolicies.${key}.liveRunPolicy" must be one of: ${LIVE_RUN_POLICIES.join(", ")}`
+        );
+      }
+    }
+  }
+
+  if (isPlainObject(raw.hooks)) {
+    collectKeyIssues(issues, raw.hooks, HOOK_KEYS, "hooks.");
+    for (const [key, value] of Object.entries(raw.hooks)) {
+      if (HOOK_KEYS.includes(key) && typeof value !== "function") {
+        issues.push(`"hooks.${key}" must be a function, got ${typeof value}`);
+      }
+    }
+  }
+
+  return issues;
+}
+
+function reportConfigIssues(issues, strict) {
+  if (issues.length === 0) return;
+  if (strict) {
+    throw new UsageError(
+      `Invalid project config (${issues.length} problem${issues.length > 1 ? "s" : ""}):\n  ${issues.join("\n  ")}`,
+      { hint: "Fix the keys above, or drop --strict-config / QA_STRICT_CONFIG=1 to downgrade these to warnings." }
+    );
+  }
+  for (const issue of issues) {
+    console.warn(`[qa-config] ${issue}`);
+  }
+}
+
+function normalizeFileConfig(raw, { strict = false } = {}) {
+  if (!raw || typeof raw !== "object") {
+    throw new UsageError(
+      "Config file must export a plain object (default export)."
+    );
+  }
+
+  reportConfigIssues(validateFileConfig(raw), strict);
 
   const paths = {
     ...DEFAULT_PATH_TEMPLATES,
@@ -130,10 +351,7 @@ function normalizeFileConfig(raw) {
   };
 
   const pages = isPlainObject(raw.pages) ? raw.pages : {};
-  const targetPaths = {
-    ...DEFAULT_TARGET_PATHS,
-    ...(raw.targetPaths ?? {}),
-  };
+  const targetPaths = { ...(raw.targetPaths ?? {}) };
 
   for (const [pageKey, pageConfig] of Object.entries(pages)) {
     if (!isPlainObject(pageConfig)) continue;
@@ -160,6 +378,8 @@ function normalizeFileConfig(raw) {
     targetPaths,
     staging,
     fixtures,
+    livePolicies: isPlainObject(raw.livePolicies) ? raw.livePolicies : {},
+    hooks: isPlainObject(raw.hooks) ? raw.hooks : {},
   };
 }
 
@@ -177,9 +397,12 @@ function buildDefaultConfig(cwd, overrides = {}) {
         : {}),
     },
     pages: {},
-    targetPaths: { ...DEFAULT_TARGET_PATHS },
+    targetPaths: {},
     staging: { ...DEFAULT_STAGING_ACCOUNT, fixtures: {} },
     fixtures: {},
+    livePolicies: {},
+    hooks: {},
+    strict: Boolean(overrides.strict),
     cliOverrides: {
       specDir: overrides.specDir || "",
       outputDir: overrides.outputDir || "",
@@ -189,12 +412,24 @@ function buildDefaultConfig(cwd, overrides = {}) {
 
 /**
  * Load and cache project config from cwd, optional config file, and CLI flags.
+ *
+ * A second call with different flags re-resolves instead of silently handing
+ * back the first call's config: a stale root or spec dir writes artifacts to
+ * the wrong place with no error.
+ *
  * @param {string[]} [argv]
  */
 export async function loadProjectConfig(argv = process.argv.slice(2)) {
-  if (activeConfig) return activeConfig;
-
   const overrides = parsePathOverrides(argv);
+  const signature = JSON.stringify([overrides, process.cwd()]);
+
+  if (activeConfig) {
+    if (signature === activeOverrideSignature) return activeConfig;
+    console.warn(
+      "[qa-config] loadProjectConfig() called again with different flags — re-resolving project config. Load it once, in the entry script."
+    );
+  }
+
   const cwd = process.cwd();
   const configPath =
     overrides.configPath || findConfigFile(overrides.root || cwd);
@@ -203,7 +438,8 @@ export async function loadProjectConfig(argv = process.argv.slice(2)) {
 
   if (configPath) {
     const fileConfig = normalizeFileConfig(
-      await importConfigModule(resolve(configPath))
+      await importConfigModule(resolve(configPath)),
+      { strict: overrides.strict }
     );
     config = deepMerge(config, fileConfig);
     config.configPath = resolve(configPath);
@@ -228,19 +464,27 @@ export async function loadProjectConfig(argv = process.argv.slice(2)) {
   }
 
   activeConfig = config;
+  activeOverrideSignature = signature;
   return activeConfig;
 }
 
-/** Synchronous access after {@link loadProjectConfig} was awaited. */
+/**
+ * Synchronous access after {@link loadProjectConfig} was awaited. Throws rather
+ * than fabricating a cwd default: a module-ordering mistake used to silently
+ * ignore the user's config file and judge the wrong URLs.
+ */
 export function getProjectConfig() {
   if (!activeConfig) {
-    activeConfig = buildDefaultConfig(process.cwd());
+    throw new Error(
+      "Project config was read before loadProjectConfig() was awaited. Entry scripts must `await ensureProjectConfig(argv)` before any other QA module runs."
+    );
   }
   return activeConfig;
 }
 
 export function resetProjectConfigForTests() {
   activeConfig = null;
+  activeOverrideSignature = "";
 }
 
 export function resolvePathFromConfig(templateOrPath, page) {
@@ -362,31 +606,40 @@ export function resolveJudgeTarget(argv = [], page) {
   return { targetPath, pageUrl: null };
 }
 
+function pageFromArgv(argv) {
+  const arg = argv.find(item => item.startsWith("--page="));
+  return arg ? arg.slice("--page=".length).trim() : "";
+}
+
 /**
  * Merge staging URL defaults from project config (does not override CLI/env).
+ * Page-level baseUrl/loginPath win over the global `staging` block so a
+ * monorepo can point app B at its own origin and login flow.
+ *
  * @param {Record<string, string>} config
  * @param {string[]} [argv]
+ * @param {string} [page] defaults to `--page=` in argv
  */
-export function applyStagingUrlDefaults(config, argv = []) {
+export function applyStagingUrlDefaults(config, argv = [], page = pageFromArgv(argv)) {
   const project = getProjectConfig();
   const global = project.staging ?? {};
+  const pageConfig = page ? getPageConfig(page) : {};
+  const pick = key => pageConfig[key] ?? global[key];
 
   const hasCli = prefix =>
     argv.some(arg => arg.startsWith(prefix));
 
-  if (
-    !hasCli("--base-url=") &&
-    !process.env.STAGING_QA_BASE_URL &&
-    global.baseUrl
-  ) {
-    config.baseUrl = String(global.baseUrl);
+  const baseUrl = pick("baseUrl");
+  if (!hasCli("--base-url=") && !process.env.STAGING_QA_BASE_URL && baseUrl) {
+    config.baseUrl = String(baseUrl);
   }
+  const loginPath = pick("loginPath");
   if (
     !hasCli("--login-path=") &&
     !process.env.STAGING_QA_LOGIN_PATH &&
-    global.loginPath
+    loginPath
   ) {
-    config.loginPath = String(global.loginPath);
+    config.loginPath = String(loginPath);
   }
   if (
     !hasCli("--dashboard-path=") &&
@@ -395,6 +648,123 @@ export function applyStagingUrlDefaults(config, argv = []) {
   ) {
     config.dashboardPath = String(global.dashboardPath);
   }
+}
+
+/** Effective staging origin for a page: env > page config > global config. */
+export function resolveBaseUrlForPage(page) {
+  if (process.env.STAGING_QA_BASE_URL) return process.env.STAGING_QA_BASE_URL;
+  const project = getProjectConfig();
+  const pageConfig = page ? getPageConfig(page) : {};
+  const baseUrl = pageConfig.baseUrl ?? project.staging?.baseUrl;
+  return baseUrl ? String(baseUrl) : "";
+}
+
+/** Every page named by `pages` or by the legacy `targetPaths` block. */
+export function listConfiguredPages() {
+  const config = getProjectConfig();
+  return [
+    ...new Set([
+      ...Object.keys(config.pages ?? {}),
+      ...Object.keys(config.targetPaths ?? {}),
+    ]),
+  ].sort();
+}
+
+/**
+ * Per-scenario live-run policy overrides from the `livePolicies` config block.
+ * @returns {Record<string, { liveRunPolicy: string, stagingMode?: string }>}
+ */
+export function getLivePolicyOverrides() {
+  const raw = getProjectConfig().livePolicies ?? {};
+  const overrides = {};
+  for (const [key, entry] of Object.entries(raw)) {
+    if (!isPlainObject(entry)) continue;
+    if (!LIVE_RUN_POLICIES.includes(entry.liveRunPolicy)) continue;
+    overrides[key] = entry.stagingMode
+      ? { liveRunPolicy: entry.liveRunPolicy, stagingMode: String(entry.stagingMode) }
+      : { liveRunPolicy: entry.liveRunPolicy };
+  }
+  return overrides;
+}
+
+/** @returns {{ onJudgment?: Function, onReview?: Function }} */
+export function getHooks() {
+  const raw = getProjectConfig().hooks ?? {};
+  const hooks = {};
+  for (const key of HOOK_KEYS) {
+    if (typeof raw[key] === "function") hooks[key] = raw[key];
+  }
+  return hooks;
+}
+
+/**
+ * Origins the browser layer may navigate to. Defaults to the resolved staging
+ * origin so a run cannot wander off-site; `allowedOrigins: false` opts out.
+ * @returns {string[]} empty = no restriction
+ */
+export function getAllowedOrigins(page) {
+  const project = getProjectConfig();
+  const pageConfig = page ? getPageConfig(page) : {};
+  // A page with its own baseUrl must not inherit the global allowlist — that
+  // would pin app B to app A's origin and block every navigation.
+  const configured =
+    pageConfig.allowedOrigins ??
+    (pageConfig.baseUrl ? undefined : project.staging?.allowedOrigins);
+  if (configured === false) return [];
+  if (Array.isArray(configured)) return configured.map(String);
+
+  const baseUrl = resolveBaseUrlForPage(page);
+  if (!baseUrl || isPlaceholderBaseUrl(baseUrl)) return [];
+  try {
+    return [new URL(baseUrl).origin];
+  } catch {
+    return [];
+  }
+}
+
+/** Deploy-version endpoint used to skip judging an unchanged staging build. */
+export function getStagingVersionUrl(page) {
+  const project = getProjectConfig();
+  const pageConfig = page ? getPageConfig(page) : {};
+  const versionUrl = pageConfig.versionUrl ?? project.staging?.versionUrl;
+  return versionUrl ? String(versionUrl) : null;
+}
+
+/**
+ * Identity helper so editors type-check and autocomplete the config file with
+ * no build step.
+ *
+ * @typedef {Object} QaPageConfig
+ * @property {string} [targetPath] Path appended to the staging base URL
+ * @property {string} [pageUrl] Absolute URL; wins over targetPath
+ * @property {string} [baseUrl] Per-page staging origin (monorepos)
+ * @property {string} [loginPath] Per-page login path
+ * @property {boolean} [authRequired]
+ * @property {string} [expectedPlan]
+ * @property {string} [expectedAccountState] Expected @qa-scenario account state
+ * @property {string} [expectedSubscriptionStatus] Legacy alias of expectedAccountState
+ * @property {string} [accountNotes]
+ * @property {string} [specDir] Overrides paths.specDir for this page
+ * @property {string} [outputDir] Overrides paths.outputDir for this page
+ * @property {Record<string, string>} [fixtures] Upload fixtures, repo-relative
+ * @property {string[]|false} [allowedOrigins] Origin allowlist; false disables pinning
+ * @property {string} [versionUrl] Deploy-version endpoint for cost gating
+ *
+ * @typedef {Object} QaProjectConfig
+ * @property {string} [root]
+ * @property {{ specDir?: string, outputDir?: string }} [paths] Templates with {page} and {root}
+ * @property {Record<string, QaPageConfig>} [pages]
+ * @property {Record<string, string>} [targetPaths] Legacy alias of pages.{page}.targetPath
+ * @property {QaPageConfig & { dashboardPath?: string }} [staging] Defaults for every page
+ * @property {Record<string, string>} [fixtures]
+ * @property {Record<string, { liveRunPolicy: string, stagingMode?: string }>} [livePolicies]
+ * @property {{ onJudgment?: Function, onReview?: Function }} [hooks]
+ *
+ * @param {QaProjectConfig} config
+ * @returns {QaProjectConfig}
+ */
+export function defineConfig(config) {
+  return config;
 }
 
 /**
@@ -418,8 +788,13 @@ export function applyStagingAccountDefaults(config, page) {
       pageConfig.expectedPlan ?? global.expectedPlan ?? "";
   }
   if (!config.expectedSubscriptionStatus) {
+    // expectedAccountState is the de-branded name; expectedSubscriptionStatus
+    // stays a supported legacy alias, like targetPaths.
     config.expectedSubscriptionStatus =
+      config.expectedAccountState ??
+      pageConfig.expectedAccountState ??
       pageConfig.expectedSubscriptionStatus ??
+      global.expectedAccountState ??
       global.expectedSubscriptionStatus ??
       "";
   }
@@ -435,6 +810,7 @@ export function applyStagingAccountDefaults(config, page) {
       .trim()
       .toUpperCase();
   }
+  config.expectedAccountState = config.expectedSubscriptionStatus;
 }
 
 export function getPackageScriptsDir() {
@@ -448,6 +824,8 @@ export function printProjectConfigHelp() {
   --project-root=<path>     Project root (default: config file dir or cwd)
   --spec-dir=<template>     Spec directory template or path ({page}, {root})
   --output-dir=<template>   Output directory template or path ({page}, {root})
+  --strict-config           Turn config warnings into errors (recommended in CI;
+                            same as QA_STRICT_CONFIG=1)
 
 Config file names (first match wins):
   playwright-spec-for-ai-agent.config.mjs | .js | .cjs | .json
@@ -455,16 +833,19 @@ Config file names (first match wins):
   playwright-spec-qa.config.mjs | .js | .cjs | .json  (legacy)
 
 Example playwright-spec-for-ai-agent.config.mjs:
-  export default {
+  import { defineConfig } from "playwright-spec-for-ai-agent/scripts/hermes-qa-project-config.mjs";
+
+  export default defineConfig({
     root: process.cwd(),
     paths: {
       specDir: "e2e/{page}",
       outputDir: "qa-output/{page}",
     },
+    staging: { baseUrl: "https://staging.acme.dev", loginPath: "/login" },
     pages: {
-      dashboard: { targetPath: "/app/dashboard" },
-      pricing: { targetPath: "/pricing" },
+      search: { targetPath: "/search", authRequired: false },
+      settings: { targetPath: "/settings" },
     },
-  };
+  });
 `);
 }

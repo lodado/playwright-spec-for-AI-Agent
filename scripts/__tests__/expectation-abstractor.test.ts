@@ -125,6 +125,18 @@ describe("abstractSpec", () => {
       kind: "semantic",
     });
   });
+
+  it("stamps no timestamp, so identical sources abstract to identical bytes", () => {
+    const input = {
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      scenarios: [{ scenarioId: "ACTIVE", tests: [] }],
+    };
+
+    expect(abstractSpec(input).abstraction).not.toHaveProperty("appliedAt");
+    expect(JSON.stringify(abstractSpec(input))).toBe(
+      JSON.stringify(abstractSpec(input)),
+    );
+  });
 });
 
 describe("abstractExpectation", () => {

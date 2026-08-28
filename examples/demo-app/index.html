@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acme Demo — Dashboard</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f6f7f9;
+        --panel: #ffffff;
+        --ink: #14171f;
+        --muted: #5b6472;
+        --line: #dfe3ea;
+        --accent: #2f6feb;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #101319;
+          --panel: #171b23;
+          --ink: #eef1f6;
+          --muted: #9aa4b4;
+          --line: #262c38;
+          --accent: #6f9dff;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 32px 20px;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      main { max-width: 720px; margin: 0 auto; display: grid; gap: 20px; }
+      header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+      h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+      .plan {
+        font-size: 13px;
+        font-weight: 600;
+        padding: 4px 10px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+      }
+      section {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 20px;
+      }
+      h2 { font-size: 13px; margin: 0 0 12px; color: var(--muted); font-weight: 600; }
+      .score { font-size: 40px; font-weight: 650; letter-spacing: -0.02em; }
+      .meter { height: 6px; border-radius: 3px; background: var(--line); margin-top: 12px; }
+      .meter > div { height: 100%; border-radius: 3px; background: var(--accent); }
+      button {
+        font: inherit;
+        padding: 8px 14px;
+        border-radius: 7px;
+        border: 1px solid var(--line);
+        background: transparent;
+        color: var(--ink);
+        cursor: pointer;
+      }
+      button[type="submit"] { background: var(--accent); border-color: transparent; color: #fff; }
+      [hidden] { display: none !important; }
+      form { display: grid; gap: 10px; max-width: 320px; }
+      input {
+        font: inherit;
+        padding: 8px 10px;
+        border-radius: 7px;
+        border: 1px solid var(--line);
+        background: transparent;
+        color: var(--ink);
+      }
+      .error { color: #c0362c; font-size: 13px; margin: 0; }
+      dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0; font-size: 14px; }
+      dt { color: var(--muted); }
+      dd { margin: 0; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Acme Demo</h1>
+        <span class="plan" data-testid="plan-name">Growth</span>
+      </header>
+
+      <section>
+        <h2>Account health</h2>
+        <div class="score" data-testid="health-score">82</div>
+        <div class="meter"><div style="width: 82%"></div></div>
+        <p style="margin: 12px 0 0; color: var(--muted); font-size: 13px">
+          Based on usage over the last 30 days.
+        </p>
+        <button data-testid="plan-details-btn" aria-expanded="false" style="margin-top: 16px">
+          Plan details
+        </button>
+        <dl data-testid="plan-details" hidden style="margin-top: 16px">
+          <dt>Seats</dt><dd>12 of 20</dd>
+          <dt>Renews</dt><dd>in 23 days</dd>
+          <dt>Support</dt><dd>Business hours</dd>
+        </dl>
+      </section>
+
+      <section>
+        <h2>Sign in</h2>
+        <form data-testid="login-form">
+          <input data-testid="email" type="email" placeholder="you@acme.test" autocomplete="off" />
+          <input data-testid="password" type="password" placeholder="Password" autocomplete="off" />
+          <button type="submit">Sign in</button>
+          <p class="error" data-testid="login-error" hidden>Email or password is incorrect.</p>
+        </form>
+      </section>
+    </main>
+
+    <script>
+      const details = document.querySelector('[data-testid="plan-details"]');
+      const toggle = document.querySelector('[data-testid="plan-details-btn"]');
+      toggle.addEventListener("click", () => {
+        const open = details.hidden;
+        details.hidden = !open;
+        toggle.setAttribute("aria-expanded", String(open));
+      });
+
+      // Every credential is wrong on purpose: the demo app has no accounts, and
+      // a "successful" login would be a lie the QA judge could report as a pass.
+      document.querySelector('[data-testid="login-form"]').addEventListener("submit", event => {
+        event.preventDefault();
+        document.querySelector('[data-testid="login-error"]').hidden = false;
+      });
+    </script>
+  </body>
+</html>

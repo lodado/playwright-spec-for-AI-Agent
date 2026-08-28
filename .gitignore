@@ -1,8 +1,15 @@
 node_modules/
 .env
+.env.*
+!.env.example
 *.png
 .qa/
 **/__QA__/
 .serena/
 # Authenticated QA browser session (owner-only, never committed)
 .private/
+# Runner-captured evidence, for when outputDir is pointed outside __QA__:
+# a HAR holds full staging request/response bodies, a video holds the session.
+*.har
+*.webm
+*-trace.zip

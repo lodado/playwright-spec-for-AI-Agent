@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   adaptExpectationForLive,
   classifyLiveRunPolicy,
+  countUnparsedTests,
   describeLiveRunPolicy,
   detectApiMock,
   detectSubscriptionMutation,
+  extractTestBlocks,
   liveRegexFromLiteral,
   literalExpectedForLive,
   mapLivePolicyAnnotation,
@@ -17,6 +21,17 @@ import {
   resolveTestFixtures,
   resolveTestLivePolicy,
 } from "../dashboard-spec-parser.mjs";
+import { getLivePolicyOverrides } from "../hermes-qa-project-config.mjs";
+
+vi.mock("../hermes-qa-project-config.mjs", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../hermes-qa-project-config.mjs")>();
+  return { ...actual, getLivePolicyOverrides: vi.fn(() => ({})) };
+});
+
+afterEach(() => {
+  vi.mocked(getLivePolicyOverrides).mockReturnValue({});
+});
 
 describe("parseAnnotations", () => {
   it("extracts all three annotations", () => {
@@ -283,5 +298,161 @@ describe("classifyLiveRunPolicy", () => {
     expect(describeLiveRunPolicy("judgment-mock-api")).toMatch(
       /reasonably matches intent/i,
     );
+  });
+});
+
+describe("annotation line anchoring", () => {
+  it("ignores prose that merely mentions @qa-live-skip", () => {
+    const source = [
+      "// @qa-scenario: ACTIVE",
+      "/* @qa-live-skip: true on a file means Hermes skips it entirely. */",
+      "// The annotation @qa-live-skip: true only counts on its own line.",
+      "// @qa-live-policy: readonly",
+      'test("shows plan", async ({ page }) => {',
+      '  await expect(page.getByTestId("plan-name")).toBeVisible();',
+      "});",
+    ].join("\n");
+
+    expect(parseAnnotations(source).liveSkip).toBe(false);
+    expect(parseDashboardSpecFile("prose.spec.ts", source)?.tests).toHaveLength(
+      1,
+    );
+  });
+
+  it("still honours a real whole-line annotation, CRLF included", () => {
+    expect(
+      parseAnnotations("// @qa-scenario: ACTIVE\r\n// @qa-live-skip: true\r\n"),
+    ).toMatchObject({ scenario: "ACTIVE", liveSkip: true });
+  });
+});
+
+describe("extractTestBlocks", () => {
+  it("extracts modifier, quote-style, and signature variants", () => {
+    const source = [
+      "test.only('only test', async () => {});",
+      'test.skip("skip test", async ({ page }) => {});',
+      "test(`template title`, async ({",
+      "  page,",
+      "}, testInfo) => {});",
+      'test.beforeEach("hook", async ({ page }) => {});',
+    ].join("\n");
+
+    expect(extractTestBlocks(source).map(block => block.title)).toEqual([
+      "only test",
+      "skip test",
+      "template title",
+    ]);
+    expect(countUnparsedTests(source)).toBe(0);
+  });
+
+  it("does not truncate a body containing a brace inside a string", () => {
+    const source = [
+      'test("keeps the whole body", async ({ page }) => {',
+      '  await page.getByText("}").click();',
+      "  await page.route(/\\/api\\/{x}/, r => r.fulfill({ status: 200 }));",
+      "  // a trailing } in a comment",
+      '  await expect(page.getByTestId("done")).toBeVisible();',
+      "});",
+    ].join("\n");
+
+    const [block] = extractTestBlocks(source);
+    expect(block.body).toContain('getByTestId("done")');
+    expect(countUnparsedTests(source)).toBe(0);
+  });
+
+  it("warns about and counts a test it cannot parse", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const source = [
+      "// @qa-scenario: ACTIVE",
+      "// @qa-live-policy: readonly",
+      'test("parsed", async ({ page }) => {});',
+      'test("unparsed", { tag: "@slow" }, async ({ page }) => {});',
+    ].join("\n");
+
+    const parsed = parseDashboardSpecFile("drops.spec.ts", source);
+
+    expect(parsed?.tests).toHaveLength(1);
+    expect(parsed?.unparsedTestCount).toBe(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("drops.spec.ts: 1 test(s) could not be parsed"),
+    );
+    warn.mockRestore();
+  });
+});
+
+describe("@qa-live-policy vocabulary", () => {
+  it("accepts a trailing comment after the policy", () => {
+    const source = [
+      "// @qa-live-policy: readonly // DOM-only, safe on live  ",
+      'test("reads", async ({ page }) => {});',
+    ].join("\n");
+    const testIndex = source.indexOf('test("reads"');
+
+    expect(parseLivePolicyBeforeIndex(source, testIndex)).toBe("readonly");
+  });
+
+  it("resolves a project-configured custom policy name", () => {
+    vi.mocked(getLivePolicyOverrides).mockReturnValue({
+      "payments-mutation": { liveRunPolicy: "blocked-subscription-mutation" },
+    });
+
+    expect(mapLivePolicyAnnotation("payments-mutation")).toEqual({
+      liveRunPolicy: "blocked-subscription-mutation",
+      stagingMode: "interaction",
+    });
+  });
+
+  it("rejects a custom policy pointing at an unknown verb", () => {
+    vi.mocked(getLivePolicyOverrides).mockReturnValue({
+      bogus: { liveRunPolicy: "not-a-verb" },
+    });
+
+    expect(() => mapLivePolicyAnnotation("bogus")).toThrow(
+      /unknown liveRunPolicy "not-a-verb"/,
+    );
+  });
+
+  it("lists configured custom names when an annotation is unknown", () => {
+    vi.mocked(getLivePolicyOverrides).mockReturnValue({
+      "payments-mutation": { liveRunPolicy: "blocked-subscription-mutation" },
+    });
+
+    expect(() => mapLivePolicyAnnotation("typo")).toThrow(
+      /payments-mutation/,
+    );
+  });
+
+  it("names file and line when a test has no policy", () => {
+    expect(() =>
+      parseDashboardSpecFile(
+        "bad.spec.ts",
+        `// @qa-scenario: ACTIVE\n\ntest("no policy", async ({ page }) => {});`,
+      ),
+    ).toThrow(/bad\.spec\.ts:3/);
+  });
+});
+
+describe("shipped examples", () => {
+  it("parses examples/sample-spec.ts with live-runnable tests", () => {
+    const path = fileURLToPath(
+      new URL("../../examples/sample-spec.ts", import.meta.url),
+    );
+    const parsed = parseDashboardSpecFile(
+      "sample-spec.ts",
+      readFileSync(path, "utf8"),
+    );
+
+    expect(parsed?.liveSkip).toBe(false);
+    expect(parsed?.unparsedTestCount).toBeUndefined();
+    expect(parsed?.tests).toHaveLength(4);
+
+    const includedTests = parsed!.tests.filter(
+      test => !test.liveRunPolicy.startsWith("blocked-"),
+    );
+    expect(includedTests.map(test => test.liveRunPolicy)).toEqual([
+      "executable-readonly",
+      "executable-interaction",
+      "executable-interaction",
+    ]);
   });
 });

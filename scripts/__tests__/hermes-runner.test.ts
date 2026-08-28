@@ -2,6 +2,8 @@ import { existsSync, readdirSync } from "node:fs";
 import { basename } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { extractAgentJson } from "../agent-output.mjs";
+import { AgentOutputError } from "../errors.mjs";
 import {
   buildHermesAgentArgs,
   extractHermesFinalResponseText,
@@ -97,6 +99,56 @@ describe("extractJsonFromHermesOutput", () => {
     expect(
       extractJsonFromHermesOutput(wrapped, { requiredKeys: ["status"] }),
     ).toEqual(inner);
+  });
+
+  it("prefers the final-response verdict over an HTTP status dumped on stderr", () => {
+    const stdout = [
+      "🎯 FINAL RESPONSE:",
+      "------------------------------",
+      '{"status":"fail","summary":"button missing","checks":[]}',
+      "==============================",
+    ].join("\n");
+    const stderr =
+      'RetryError: {"status":429,"error":{"message":"rate limited"}}';
+
+    expect(
+      extractAgentJson(stdout, { stderr, requiredKeys: ["status"] }),
+    ).toMatchObject({ status: "fail" });
+  });
+
+  it("prefers the outermost object over a nested one at a later position", () => {
+    const output =
+      '{"status":"pass","checks":[],"raw":{"status":500,"body":"x"}}';
+    expect(extractAgentJson(output, { requiredKeys: ["status"] })).toMatchObject(
+      { status: "pass" },
+    );
+  });
+
+  it("rejects a numeric status even when it is the only candidate", () => {
+    expect(() =>
+      extractAgentJson('{"status":429,"error":"rate limited"}', {
+        requiredKeys: ["status"],
+      }),
+    ).toThrow(AgentOutputError);
+  });
+
+  it("honors a caller-supplied validate callback", () => {
+    const output = '{"livePlan":"short"}\n{"livePlan":"### long enough plan"}';
+    expect(
+      extractAgentJson(output, {
+        requiredKeys: ["livePlan"],
+        validate: parsed => parsed.livePlan.startsWith("###"),
+      }),
+    ).toMatchObject({ livePlan: "### long enough plan" });
+  });
+
+  it("names the adapter and the raw artifact when nothing parses", () => {
+    expect(() =>
+      extractAgentJson("no json here", {
+        adapterLabel: "aside",
+        rawOutputPath: "/tmp/raw.txt",
+      }),
+    ).toThrow(/aside did not return valid JSON.*\/tmp\/raw\.txt/s);
   });
 });
 

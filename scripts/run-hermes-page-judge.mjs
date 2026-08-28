@@ -5,19 +5,50 @@
  * Usage:
  *   npx playwright-spec-for-ai-agent judge --page=pricing --target-path=/pricing
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveAdapterName, runAgent } from "./ai-agent-adapter.mjs";
-import { preloginAside } from "./aside-prelogin.mjs";
+import { prepareAdapter, runAgent } from "./ai-agent-adapter.mjs";
+import { writeAgentQueryArtifact } from "./agent-output.mjs";
+import { withSchema } from "./artifact-schema.mjs";
+import {
+  AgentOutputError,
+  EnvironmentError,
+  EXIT_ENVIRONMENT,
+  EXIT_OK,
+  EXIT_VERDICT_FAIL,
+  UsageError,
+  runMain,
+} from "./errors.mjs";
+import {
+  getAllowedOrigins,
+  getHooks,
+  isPlaceholderBaseUrl,
+} from "./hermes-qa-project-config.mjs";
+import {
+  analyzeHarViolations,
+  buildEvidenceManifest,
+  isReadOnlyPlan,
+  normalizeBrowseDecision,
+  resolveJudgeTurnBudget,
+} from "./judge-verdict.mjs";
 import { resolveSpecForJudge } from "./resolve-spec-for-judge.mjs";
+import { appendRunEvent, newRunId } from "./qa-run-ledger.mjs";
+import { writeCtrf } from "./qa-ctrf.mjs";
+import { appendVerdict } from "./qa-verdict-history.mjs";
+import { appendStepSummary, renderJudgmentSummary } from "./github-summary.mjs";
+import { describeHashMismatch, hashSpecDefinition } from "./spec-hash.mjs";
 import {
   buildHermesStagingLogin,
   assertStagingQaCredentials,
   buildJudgeTargetUrl,
   displayPathForJudgeTarget,
   isAuthRequired,
-  redactEmail,
 } from "./staging-qa-config.mjs";
 import {
   hasSessionProfile,
@@ -25,7 +56,10 @@ import {
 } from "./qa-browser-session.mjs";
 import { clearRunInvalid, markRunInvalid } from "./qa-run-invalid.mjs";
 import { resolveStagingQaConfig } from "./staging-qa-prompt.mjs";
-import { listAlwaysRunScenarios } from "./dashboard-spec-parser.mjs";
+import {
+  buildBrowseChecklist,
+  listAlwaysRunScenarios,
+} from "./dashboard-spec-parser.mjs";
 import { buildJudgeBrowseDocument } from "./qa-spec-judge-document.mjs";
 import {
   buildUploadFixturesPayload,
@@ -39,7 +73,8 @@ import {
   resolveSpecDir,
 } from "./page-qa-paths.mjs";
 
-const HERMES_MAX_TURNS_BROWSE = 150;
+const PREFLIGHT_TIMEOUT_MS = 10_000;
+const FAIL_ON_VALUES = ["fail", "manual_review", "never"];
 
 export function buildBrowseHermesQuery({
   judgeDocument,
@@ -83,6 +118,7 @@ export function buildBrowseHermesQuery({
     "## Your task",
     accessInstruction,
     "The test plan uses **Given / When / Then** — not JSON. Use the exact test **titles** from the plan in your verdict `checks[].item` field.",
+    "Report one check per test in the plan. A test you did not execute is still a check — report it with `skip` and say why.",
     "",
     "## Rules",
     "- After every navigation or interaction, wait until the page settles before judging: content stops changing and no skeleton, spinner, or placeholder is still loading (give it up to ~5 seconds).",
@@ -103,6 +139,19 @@ export function buildBrowseHermesQuery({
     "- For other semantic / abstracted expectations: same rule — reasonable for intent → pass; ambiguous → manual_review.",
     "- If blocked on live → **skip**.",
     "",
+    "## Evidence rules (enforced after you answer)",
+    "- Every `pass` must quote something you actually observed in its `detail`: exact on-screen text in quotes, a URL/path, or a number with its unit.",
+    "- A `pass` whose `detail` cites nothing concrete, or whose `confidence` is `low`, is downgraded to `manual_review` automatically. Do not pad — report what you saw.",
+    "- `evidenceRefs` may name captured artifact files (screenshots, aria snapshots) when you have them; leave it `[]` otherwise.",
+    "",
+    "## Cause classification",
+    "Every non-pass check, and the top-level verdict, needs a `cause` from exactly these:",
+    "- `PRODUCT_DEFECT` — the application under test is wrong.",
+    "- `SPEC_GAP` — the test plan does not cover what the page actually does.",
+    "- `ENVIRONMENT_DEFECT` — login, staging deployment, or network is broken, so the product was never really tested.",
+    "- `HARNESS_DEFECT` — you or your tooling failed (could not follow the plan, lost the session, ran out of turns).",
+    "- `NONE` — only for a `pass`.",
+    "",
     "## Annotation guide",
     "These fields come from Playwright comments parsed during `spec`.",
     "- File-level: `@qa-scenario`, `@qa-live-skip`, `@qa-always-run`, `@qa-fixture`.",
@@ -120,8 +169,9 @@ export function buildBrowseHermesQuery({
     "- If `blocked-*`, mark `skip`.",
     "",
     "## Response format (JSON only for your final message)",
-    "After browsing, reply with **only** one raw JSON object (no markdown fences):",
-    '{ "status": "pass"|"fail"|"manual_review", "summary": "...", "checks": [{ "item": "<exact test title>", "result": "pass"|"fail"|"skip"|"manual_review", "detail": "..." }], "evidence": ["..."], "recommendedAction": "...", "source": "hermes-agent" }',
+    "After browsing, reply with **only** one raw JSON object (no markdown fences).",
+    "`detail` comes before `result` on purpose: write down what you observed, then decide.",
+    '{ "status": "pass"|"fail"|"manual_review", "cause": "PRODUCT_DEFECT"|"SPEC_GAP"|"ENVIRONMENT_DEFECT"|"HARNESS_DEFECT"|"NONE", "summary": "...", "checks": [{ "item": "<exact test title>", "detail": "what you observed, quoting exact values", "result": "pass"|"fail"|"skip"|"manual_review", "confidence": "high"|"medium"|"low", "cause": "PRODUCT_DEFECT"|"SPEC_GAP"|"ENVIRONMENT_DEFECT"|"HARNESS_DEFECT"|"NONE", "evidenceRefs": ["..."] }], "evidence": ["..."], "recommendedAction": "...", "source": "hermes-agent" }',
     "",
     "---",
     "",
@@ -133,117 +183,126 @@ export function buildBrowseHermesQuery({
   ].join("\n");
 }
 
-export function normalizeBrowseDecision(raw) {
-  const allowedStatuses = new Set(["pass", "fail", "manual_review"]);
-  const allowedCheckResults = new Set([
-    "pass",
-    "fail",
-    "skip",
-    "manual_review",
-  ]);
-  const checks = Array.isArray(raw.checks)
-    ? raw.checks.map(check => ({
-        item: String(check?.item ?? "Untitled check"),
-        result: allowedCheckResults.has(check?.result)
-          ? check.result
-          : "manual_review",
-        detail: String(check?.detail ?? ""),
-      }))
-    : [];
-
-  // A run where nothing was actually executed (all skip, e.g. login failure)
-  // must never report green — same principle as pytest exit code 5 / Playwright
-  // "no tests found".
-  const executed = checks.filter(check => check.result !== "skip");
-  const derivedStatus = checks.some(check => check.result === "fail")
-    ? "fail"
-    : checks.some(check => check.result === "manual_review") ||
-        executed.length === 0
-      ? "manual_review"
-      : "pass";
-
-  // Normalization may only downgrade the agent's own verdict, never upgrade
-  // it: if the agent said manual_review/fail, checks cannot turn that into pass.
-  const severity = { pass: 0, manual_review: 1, fail: 2 };
-  const agentStatus = allowedStatuses.has(raw.status) ? raw.status : null;
-  const status =
-    agentStatus && severity[agentStatus] > severity[derivedStatus]
-      ? agentStatus
-      : derivedStatus;
-
-  return {
-    status,
-    summary: raw.summary ?? "Hermes QA judgment completed.",
-    checks,
-    evidence: Array.isArray(raw.evidence) ? raw.evidence : [],
-    recommendedAction: raw.recommendedAction ?? "",
-    source: raw.source ?? "hermes-agent",
-    ...(raw.agentMeta ? { agentMeta: raw.agentMeta } : {}),
-  };
-}
-
-function renderMarkdown(decision, page, targetPath) {
-  const checkRows = decision.checks?.length
-    ? decision.checks.map(c => {
-        const icon =
-          c.result === "pass"
-            ? "pass"
-            : c.result === "fail"
-              ? "fail"
-              : c.result === "skip"
-                ? "skip"
-                : "manual_review";
-        return `| ${icon} | ${c.item} | ${c.detail ?? ""} |`;
+function renderMarkdown(judgment) {
+  const checkRows = judgment.checks?.length
+    ? judgment.checks.map(check => {
+        const demoted = check.demotedFrom ? ` (was ${check.demotedFrom})` : "";
+        return `| ${check.result}${demoted} | ${check.cause ?? ""} | ${check.item} | ${(check.detail ?? "").replace(/\|/g, "\\|")} |`;
       })
     : [];
 
   return [
-    `# Hermes QA Judgment — ${page}`,
+    `# Hermes QA Judgment — ${judgment.page}`,
     "",
-    `- Status: **${decision.status}**`,
+    `- Status: **${judgment.status}**`,
+    `- Cause: \`${judgment.cause}\``,
+    `- Run: \`${judgment.runId}\` at ${judgment.judgedAt}`,
     `- Mode: \`browse\``,
-    `- Page: \`${targetPath}\``,
-    `- Source: ${decision.source}`,
-    ...(decision.agentMeta
+    `- Page: \`${judgment.targetPath}\``,
+    `- Plan source: ${judgment.planSource}`,
+    `- Coverage: ${judgment.coverage.addressed}/${judgment.coverage.planned} planned checks addressed`,
+    `- Source: ${judgment.source}`,
+    ...(judgment.agentMeta
       ? [
-          `- Adapter: ${decision.agentMeta.adapter}${decision.agentMeta.model ? ` (${decision.agentMeta.model})` : ""}, ${Math.round(decision.agentMeta.durationMs / 1000)}s`,
+          `- Adapter: ${judgment.agentMeta.adapter}${judgment.agentMeta.model ? ` (${judgment.agentMeta.model})` : ""}, ${Math.round(judgment.agentMeta.durationMs / 1000)}s`,
         ]
       : []),
     "",
     "## Summary",
     "",
-    decision.summary,
+    judgment.summary,
     "",
+    ...(judgment.coverage.missing.length
+      ? [
+          "## Unaddressed planned checks",
+          "",
+          ...judgment.coverage.missing.map(item => `- ${item}`),
+          "",
+        ]
+      : []),
     ...(checkRows.length
       ? [
           "## Checks",
           "",
-          "| Result | Item | Detail |",
-          "|--------|------|--------|",
+          "| Result | Cause | Item | Detail |",
+          "|--------|-------|------|--------|",
           ...checkRows,
           "",
         ]
       : []),
     "## Evidence",
     "",
-    ...(decision.evidence?.length
-      ? decision.evidence.map(item => `- ${item}`)
+    ...(judgment.evidence?.length
+      ? judgment.evidence.map(item => `- ${item}`)
       : ["- none"]),
+    ...(judgment.runnerEvidence
+      ? [
+          "",
+          "## Runner-captured evidence",
+          "",
+          ...[
+            judgment.runnerEvidence.tracePath &&
+              `- trace: \`${judgment.runnerEvidence.tracePath}\``,
+            judgment.runnerEvidence.harPath &&
+              `- har: \`${judgment.runnerEvidence.harPath}\``,
+            judgment.runnerEvidence.videoPath &&
+              `- video: \`${judgment.runnerEvidence.videoPath}\``,
+            `- screenshots: ${judgment.runnerEvidence.screenshots?.length ?? 0}`,
+            `- aria snapshots: ${judgment.runnerEvidence.ariaSnapshots?.length ?? 0}`,
+            ...(judgment.runnerEvidence.violations ?? []).map(
+              violation => `- violation: ${violation.kind} — ${violation.detail}`
+            ),
+          ].filter(Boolean),
+        ]
+      : []),
     "",
     "## Recommended action",
     "",
-    decision.recommendedAction || "none",
+    judgment.recommendedAction || "none",
     "",
   ].join("\n");
 }
 
-async function runBrowseJudge(page, target, paths, config, { preauthenticated = false } = {}) {
+/**
+ * Everything needed to run (or dry-run) the judge: resolved plan, prompt, turn
+ * budget, and the planned-check list the verdict floor is measured against.
+ */
+export function prepareJudgePlan({
+  page,
+  target,
+  targetUrl,
+  paths,
+  config,
+  adapter,
+  preauthenticated,
+}) {
   const resolved = resolveSpecForJudge(paths);
   if (!resolved) {
-    throw new Error(
-      `Missing qa spec JSON. Run \`npx playwright-spec-for-ai-agent spec --page=${page}\` first.`
+    throw new UsageError(`Missing qa spec JSON for page "${page}".`, {
+      hint: `Run: npx playwright-spec-for-ai-agent spec --page=${page}`,
+    });
+  }
+  if (resolved.staleness && resolved.staleness.ok === false) {
+    throw new UsageError(
+      describeHashMismatch({
+        expected: resolved.staleness.expected,
+        actual: resolved.staleness.actual,
+        producer: "abstract-ai",
+        consumer: "judge",
+      }),
+      {
+        hint: `Re-run: npx playwright-spec-for-ai-agent abstract-ai --page=${page}`,
+      }
     );
   }
+
+  const specDefinition = resolved.definition;
+  // Provenance, not identity: record the hash of the raw `spec` artifact this
+  // plan descends from (what `resolveSpecForJudge` compares against), so
+  // `show`/`report`/`review` can re-derive it. Hashing the resolved plan
+  // instead would make every later staleness check read as a mismatch.
+  const specHash =
+    resolved.staleness.actual ?? hashSpecDefinition(specDefinition);
 
   const stagingLogin = buildHermesStagingLogin(config);
   if (preauthenticated) {
@@ -252,28 +311,30 @@ async function runBrowseJudge(page, target, paths, config, { preauthenticated = 
     stagingLogin.email = "";
     stagingLogin.password = "";
   }
-  stagingLogin.targetUrl = buildJudgeTargetUrl(target, config.baseUrl);
-  const targetPath = displayPathForJudgeTarget(target);
+  stagingLogin.targetUrl = targetUrl;
 
-  const specDir = resolveSpecDir(page);
-  const specSourceFiles = loadSpecSourceFiles(specDir);
-
-  const specDefinition = resolved.definition;
+  const specSourceFiles = loadSpecSourceFiles(resolveSpecDir(page));
   const uploadFixtures = buildUploadFixturesPayload(specDefinition, page);
-  const alwaysRunScenarioIds = listAlwaysRunScenarios(specDefinition).map(
-    scenario => scenario.scenarioId
-  );
+  const hasScenarios = Array.isArray(specDefinition?.scenarios);
+  const alwaysRunScenarioIds = hasScenarios
+    ? listAlwaysRunScenarios(specDefinition).map(scenario => scenario.scenarioId)
+    : [];
+  const checklist = hasScenarios ? buildBrowseChecklist(specDefinition) : [];
+  // One planned entry per plan block, duplicates included: the same title is
+  // planned once per scenario and the agent reports one check per block, so
+  // deduplicating here made `coverage.planned` disagree with the very document
+  // the agent was handed — which the review stage then flags, correctly.
+  const plannedChecks = checklist.map(test => test.title);
 
   const savedPlanMarkdown = existsSync(paths.specLiveMd)
     ? readFileSync(paths.specLiveMd, "utf8")
     : null;
-  const savedPlanSource = savedPlanMarkdown ? "spec-live.md" : null;
 
   const { document: judgeDocument, planSource } = buildJudgeBrowseDocument({
     page,
     spec: specDefinition,
     specLiveMarkdown: savedPlanMarkdown,
-    planSource: savedPlanSource,
+    planSource: savedPlanMarkdown ? "spec-live.md" : null,
     stagingLogin: {
       loginUrl: stagingLogin.loginUrl,
       email: stagingLogin.email,
@@ -284,66 +345,203 @@ async function runBrowseJudge(page, target, paths, config, { preauthenticated = 
     specSourceFiles,
   });
 
-  writeFileSync(paths.specJudgePlanMd, judgeDocument);
+  // `review` re-checks this stamp against the judgment's `specHash` before it
+  // critiques anything. Stamping the value the judgment will carry is what
+  // makes that check real: the plan's own front matter records `sourceHash`
+  // (a different key, absent entirely when abstract-ai never ran), so the
+  // reviewer found nothing to compare and silently reviewed any revision.
+  writeFileSync(
+    paths.specJudgePlanMd,
+    `<!-- specHash: ${specHash} -->\n${judgeDocument}`
+  );
 
-  if (planSource === "generated-from-json") {
-    console.warn(
-      `No ${paths.slug}-qa-spec-live.md — generated judge plan from JSON. Run abstract-ai --page=${page} for a stable live spec markdown.`
-    );
-  } else {
-    console.log(`Judge test plan source: ${planSource} (+ session header)`);
-  }
-
-  const query = buildBrowseHermesQuery({
-    judgeDocument,
+  return {
+    query: buildBrowseHermesQuery({
+      judgeDocument,
+      stagingLogin,
+      preauthenticated,
+    }),
+    secrets: [config.email, config.password].filter(Boolean),
     stagingLogin,
-    preauthenticated,
-  });
-  const secrets = [config.email, config.password].filter(Boolean);
+    specPath: resolved.path,
+    specHash,
+    planSource,
+    plannedChecks,
+    readOnly: isReadOnlyPlan(checklist),
+    // An adapter that cannot cap its turns ignores the budget entirely.
+    maxTurns: adapter.capabilities.supportsMaxTurns
+      ? resolveJudgeTurnBudget(plannedChecks.length)
+      : null,
+  };
+}
 
-  const adapterName = resolveAdapterName();
+function inspectRecordedHar(harPath, { allowedOrigins, readOnly }) {
+  try {
+    return analyzeHarViolations(JSON.parse(readFileSync(harPath, "utf8")), {
+      allowedOrigins,
+      readOnly,
+    });
+  } catch (error) {
+    return [
+      { kind: "capture-failed", detail: `har inspect: ${error.message}` },
+    ];
+  }
+}
 
-  // Preauthenticated mode, per adapter:
-  // - hermes: relaunch the operator-authenticated profile with a CDP endpoint;
-  //   hermes-runner forwards process.env, so BROWSER_CDP_URL makes the agent's
-  //   browser tools attach to that session instead of a fresh one.
-  // - aside: drive Aside Browser's own persistent profile — log in via a repl
-  //   script over stdin (credentials never in argv or prompt), then the exec
-  //   agent reuses that session.
-  if (preauthenticated && adapterName === "aside") {
-    preloginAside({
-      loginUrl: stagingLogin.loginUrl,
+async function executeJudge({
+  paths,
+  plan,
+  adapter,
+  config,
+  preauthenticated,
+  allowedOrigins,
+  runId,
+}) {
+  if (preauthenticated && adapter.capabilities.auth === "self-prelogin") {
+    // The adapter drives its own persistent browser profile: log it in over its
+    // own channel so credentials stay out of argv and out of the prompt.
+    adapter.prelogin?.({
+      loginUrl: plan.stagingLogin.loginUrl,
       email: config.email,
       password: config.password,
     });
   }
-  const recordVideoDir = process.env.QA_RECORD_VIDEO
-    ? resolve(paths.outputDir, "videos")
-    : null;
+
+  // Live `context.route` interception needs this process's event loop, and a
+  // blocking adapter (spawnSync) freezes it for the whole run — enabling the
+  // guards there deadlocks the browser. Blocking adapters get the same coverage
+  // from the recorded HAR, inspected after the run.
+  const liveInterception = adapter.capabilities.blocksEventLoop === false;
   const session =
-    preauthenticated && adapterName !== "aside"
-      ? await launchAuthenticatedBrowser({ recordVideoDir })
+    preauthenticated && adapter.capabilities.auth === "cdp-attach"
+      ? await launchAuthenticatedBrowser({
+          recordVideoDir: process.env.QA_RECORD_VIDEO ? paths.videosDir : null,
+          evidenceDir: paths.evidenceDir,
+          label: `${paths.slug}-${runId}`,
+          allowedOrigins: liveInterception ? allowedOrigins : [],
+          blockMutations: liveInterception && plan.readOnly,
+        })
       : null;
   if (session) process.env.BROWSER_CDP_URL = session.cdpUrl;
+
+  let raw;
+  let runnerEvidence = null;
   try {
-    const raw = runAgent(query, HERMES_MAX_TURNS_BROWSE, {
+    raw = runAgent(plan.query, plan.maxTurns, {
       paths,
-      secrets,
+      secrets: plan.secrets,
       requiredKeys: ["status"],
       mode: "browse",
     });
-    return normalizeBrowseDecision(raw);
   } finally {
     if (session) {
       delete process.env.BROWSER_CDP_URL;
-      await session.close();
+      runnerEvidence = await session.close();
+    }
+  }
+
+  const violations = [...(runnerEvidence?.violations ?? [])];
+  if (!liveInterception && runnerEvidence?.harPath) {
+    violations.push(
+      ...inspectRecordedHar(runnerEvidence.harPath, {
+        allowedOrigins,
+        readOnly: plan.readOnly,
+      })
+    );
+  }
+
+  return { raw, runnerEvidence, violations };
+}
+
+/**
+ * Bounded retries with cause routing. A flapping login or an unparseable answer
+ * is worth one more attempt; scenario checks are never silently re-judged, so a
+ * completed judgment is returned as-is however bad it is.
+ */
+async function executeWithRetries(options) {
+  const budget = { environment: 2, agentOutput: 1 };
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await executeJudge(options);
+    } catch (error) {
+      const kind =
+        error instanceof EnvironmentError
+          ? "environment"
+          : error instanceof AgentOutputError
+            ? "agentOutput"
+            : null;
+      // On exhaustion the last real failure is what propagates — never a
+      // synthesised "final attempt" verdict.
+      if (!kind || budget[kind] <= 0) throw error;
+      budget[kind] -= 1;
+      appendRunEvent(options.paths.runsLedger, {
+        runId: options.runId,
+        kind: "judge-retry",
+        attempt,
+        reason: kind,
+        error: error.message,
+      });
+      console.warn(
+        `Judge attempt ${attempt} failed (${kind}): ${error.message}\nRetrying.`
+      );
     }
   }
 }
 
-async function main() {
-  const argv = process.argv.slice(2);
+/** Zero-LLM reachability check: an outage must not be judged as a product bug. */
+async function preflightTarget(targetUrl) {
+  let response;
+  try {
+    response = await fetch(targetUrl, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(PREFLIGHT_TIMEOUT_MS),
+    });
+  } catch (cause) {
+    throw new EnvironmentError(
+      `Target ${targetUrl} is unreachable: ${cause.message}`,
+      {
+        hint: "Check the staging deployment and STAGING_QA_BASE_URL before spending an agent run.",
+        cause,
+      }
+    );
+  }
+  if (response.status >= 500) {
+    throw new EnvironmentError(
+      `Target ${targetUrl} returned HTTP ${response.status} before the run started.`,
+      {
+        hint: "Staging is failing; judging it now would report an outage as a product defect.",
+      }
+    );
+  }
+  return response.status;
+}
+
+function parseFailOn(argv) {
+  const flag = argv.find(arg => arg.startsWith("--fail-on="));
+  if (!flag) return "fail";
+  const value = flag.slice("--fail-on=".length).trim();
+  if (!FAIL_ON_VALUES.includes(value)) {
+    throw new UsageError(`Unknown --fail-on value: ${JSON.stringify(value)}.`, {
+      hint: `Use one of: ${FAIL_ON_VALUES.join(", ")}.`,
+    });
+  }
+  return value;
+}
+
+function verdictExitCode(status, failOn) {
+  if (failOn === "never") return EXIT_OK;
+  if (status === "fail") return EXIT_VERDICT_FAIL;
+  if (status === "manual_review" && failOn === "manual_review") {
+    return EXIT_VERDICT_FAIL;
+  }
+  return EXIT_OK;
+}
+
+export async function main(argv = process.argv.slice(2)) {
   await ensureProjectConfig(argv);
+  const adapter = await prepareAdapter();
+  const failOn = parseFailOn(argv);
+  const dryRun = argv.includes("--dry-run");
   const page = parsePageArg(argv);
   const paths = artifactPaths(page);
 
@@ -351,26 +549,24 @@ async function main() {
 
   const judgeTarget = resolveJudgeTarget(argv, page);
   if (!judgeTarget.pageUrl && !judgeTarget.targetPath) {
-    console.error(
-      [
-        `Missing target for page "${page}".`,
-        `Set pages.${page}.pageUrl, pages.${page}.targetPath, or targetPaths.${page} in playwright-spec-for-ai-agent.config.*,`,
-        `or pass --target-path=/${page}`,
-      ].join(" ")
-    );
-    process.exit(1);
+    throw new UsageError(`Missing target for page "${page}".`, {
+      hint: [
+        `Set pages.${page}.pageUrl, pages.${page}.targetPath, or targetPaths.${page}`,
+        `in playwright-spec-for-ai-agent.config.*, or pass --target-path=/${page}`,
+      ].join(" "),
+    });
   }
 
-  // Session-first: with an operator-authenticated browser profile the run
-  // needs no credentials anywhere. --credentials-in-prompt forces the legacy
-  // flow (plaintext credentials inside the Hermes prompt).
-  // Aside preauths differently: it always needs credentials (for the repl
-  // prelogin script), but they stay out of the prompt and argv.
+  // Session-first: with an operator-authenticated browser profile the run needs
+  // no credentials anywhere. --credentials-in-prompt forces the legacy flow
+  // (plaintext credentials inside the prompt). The matrix reads from the
+  // adapter's declared capabilities, never from its name.
   const credentialsInPrompt = argv.includes("--credentials-in-prompt");
-  const sessionAvailable = hasSessionProfile();
-  const asideAdapter = resolveAdapterName() === "aside";
+  const selfPrelogin = adapter.capabilities.auth === "self-prelogin";
+  const cdpAttach = adapter.capabilities.auth === "cdp-attach";
+  const attachable = cdpAttach && hasSessionProfile();
   const requireCredentials =
-    credentialsInPrompt || asideAdapter || !sessionAvailable;
+    credentialsInPrompt || selfPrelogin || !attachable;
 
   const { config, target } = await resolveStagingQaConfig(argv, {
     stepLabel: `${page} Hermes judge`,
@@ -381,7 +577,7 @@ async function main() {
   const preauthenticated =
     isAuthRequired(config) &&
     !credentialsInPrompt &&
-    (asideAdapter || sessionAvailable);
+    (selfPrelogin || attachable);
   if (isAuthRequired(config) && !preauthenticated) {
     assertStagingQaCredentials(config);
     console.warn(
@@ -391,30 +587,206 @@ async function main() {
   }
 
   const targetPath = displayPathForJudgeTarget(target);
-  let decision;
-  try {
-    decision = await runBrowseJudge(page, target, paths, config, {
+  const targetUrl = buildJudgeTargetUrl(target, config.baseUrl);
+  if (isPlaceholderBaseUrl(targetUrl)) {
+    throw new UsageError(
+      `Refusing to judge a placeholder target URL: ${targetUrl}`,
+      {
+        hint: "Set staging.baseUrl in playwright-spec-for-ai-agent.config.*, or STAGING_QA_BASE_URL.",
+      }
+    );
+  }
+  const allowedOrigins = getAllowedOrigins(page);
+  const runId = newRunId();
+
+  if (dryRun) {
+    const plan = prepareJudgePlan({
+      page,
+      target,
+      targetUrl,
+      paths,
+      config,
+      adapter,
       preauthenticated,
+    });
+    writeAgentQueryArtifact(paths, plan.query, plan.secrets);
+    console.log(
+      [
+        `Dry run — no agent was called.`,
+        `  target:        ${targetUrl}`,
+        `  adapter:       ${adapter.name}`,
+        `  auth mode:     ${preauthenticated ? `preauthenticated (${adapter.capabilities.auth})` : "credentials-in-prompt"}`,
+        `  plan source:   ${plan.planSource}`,
+        `  planned checks:${String(plan.plannedChecks.length).padStart(4)}`,
+        `  turn budget:   ${plan.maxTurns ?? "n/a (adapter ignores max turns)"}`,
+        `  judge plan:    ${paths.specJudgePlanMd}`,
+      ].join("\n")
+    );
+    return EXIT_OK;
+  }
+
+  let plan;
+  let result;
+  try {
+    plan = prepareJudgePlan({
+      page,
+      target,
+      targetUrl,
+      paths,
+      config,
+      adapter,
+      preauthenticated,
+    });
+    appendRunEvent(paths.runsLedger, {
+      runId,
+      kind: "judge-start",
+      page,
+      target: targetUrl,
+      adapter: adapter.name,
+      specHash: plan.specHash,
+      spec: plan.specPath,
+    });
+    console.log(
+      `Preflight ${targetUrl} -> HTTP ${await preflightTarget(targetUrl)}`
+    );
+    if (preauthenticated) {
+      // Honest about the gap: the preflight fetch is unauthenticated, so it
+      // cannot tell a live session from an expired one. The prompt instructs
+      // the agent to stop with manual_review if the page looks logged out.
+      console.log(
+        "Using the pre-authenticated browser session (session validity is not verified before the run)."
+      );
+    }
+    result = await executeWithRetries({
+      paths,
+      plan,
+      adapter,
+      config,
+      preauthenticated,
+      allowedOrigins,
+      runId,
     });
   } catch (error) {
     // Quarantine the run: partial artifacts (judge plan, raw output) may have
     // been written already; downstream commands must not report on them.
+    appendRunEvent(paths.runsLedger, {
+      runId,
+      kind: "judge",
+      status: "error",
+      cause:
+        error instanceof EnvironmentError
+          ? "ENVIRONMENT_DEFECT"
+          : "HARNESS_DEFECT",
+      coverage: null,
+      artifact: null,
+      error: error.message,
+    });
     markRunInvalid(paths, error?.message ?? error);
     throw error;
   }
 
+  const decision = normalizeBrowseDecision(result.raw, {
+    plannedChecks: plan.plannedChecks,
+    runnerEvidence: result.runnerEvidence,
+    violations: result.violations,
+  });
+
+  const judgment = withSchema(
+    {
+      runId,
+      page,
+      judgedAt: new Date().toISOString(),
+      targetUrl,
+      targetPath,
+      planSource: plan.planSource,
+      specHash: plan.specHash,
+      status: decision.status,
+      cause: decision.cause,
+      summary: decision.summary,
+      recommendedAction: decision.recommendedAction,
+      source: decision.source,
+      ...(decision.agentMeta ? { agentMeta: decision.agentMeta } : {}),
+      checks: decision.checks,
+      coverage: decision.coverage,
+      evidence: decision.evidence,
+      runnerEvidence: result.runnerEvidence ?? null,
+    },
+    "judgment"
+  );
+
+  const markdown = renderMarkdown(judgment);
   writeFileSync(
     paths.hermesJudgmentJson,
-    `${JSON.stringify(decision, null, 2)}\n`
+    `${JSON.stringify(judgment, null, 2)}\n`
   );
+  writeFileSync(paths.hermesJudgmentMd, markdown);
   writeFileSync(
-    paths.hermesJudgmentMd,
-    renderMarkdown(decision, page, targetPath)
+    paths.evidenceManifestJson,
+    `${JSON.stringify(
+      withSchema(
+        {
+          runId,
+          page,
+          generatedAt: judgment.judgedAt,
+          ...buildEvidenceManifest({
+            plannedChecks: plan.plannedChecks,
+            checks: decision.checks,
+            runnerEvidence: result.runnerEvidence,
+          }),
+        },
+        "evidence-manifest"
+      ),
+      null,
+      2
+    )}\n`
   );
-  clearRunInvalid(paths);
+  writeCtrf(paths.judgmentCtrfJson, judgment, { page });
+  appendVerdict(paths.verdictHistoryJson, {
+    runId,
+    judgedAt: judgment.judgedAt,
+    status: judgment.status,
+    specHash: judgment.specHash,
+    checks: judgment.checks,
+  });
+  appendRunEvent(paths.runsLedger, {
+    runId,
+    kind: "judge",
+    status: judgment.status,
+    cause: judgment.cause,
+    coverage: judgment.coverage,
+    artifact: paths.hermesJudgmentJson,
+  });
 
-  console.log(`Hermes ${page} QA judgment (browse): ${decision.status}`);
-  if (decision.status === "fail") process.exitCode = 1;
+  appendStepSummary(renderJudgmentSummary(judgment, { page }));
+
+  // A hook is the consumer's code: it may log, notify, or throw, but it must
+  // never change what this run decided.
+  try {
+    await getHooks().onJudgment?.({ page, judgment, paths, target });
+  } catch (error) {
+    console.warn(`[hooks] onJudgment failed: ${error.message}`);
+  }
+
+  console.log(
+    `Hermes ${page} QA judgment (browse): ${judgment.status} [${judgment.cause}] ` +
+      `— ${judgment.coverage.addressed}/${judgment.coverage.planned} planned checks addressed (run ${runId})`
+  );
+
+  if (judgment.cause === "ENVIRONMENT_DEFECT") {
+    // The environment, not the product, is what failed: quarantine so `review`
+    // and `slack` cannot report this as a verdict on the app.
+    markRunInvalid(
+      paths,
+      `judge run ${runId}: ENVIRONMENT_DEFECT — ${judgment.summary.split("\n")[0]}`
+    );
+    console.error(
+      "Environment defect: the product was never really tested. Not reporting this as a product failure."
+    );
+    return EXIT_ENVIRONMENT;
+  }
+
+  clearRunInvalid(paths);
+  return verdictExitCode(judgment.status, failOn);
 }
 
 const isDirectRun =
@@ -422,8 +794,5 @@ const isDirectRun =
   fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 
 if (isDirectRun) {
-  main().catch(error => {
-    console.error(error.stack ?? error.message);
-    process.exitCode = 1;
-  });
+  runMain(main);
 }

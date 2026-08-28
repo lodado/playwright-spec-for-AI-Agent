@@ -7,6 +7,7 @@
  * on stale or half-written judgments. A successful judge clears the marker.
  */
 import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { UsageError } from "./errors.mjs";
 
 export function markRunInvalid(paths, reason) {
   const body = {
@@ -22,7 +23,9 @@ export function clearRunInvalid(paths) {
 
 export function assertRunNotInvalid(paths, command) {
   if (!existsSync(paths.runInvalidMarker)) return;
-  throw new Error(
+  // UsageError, not Error: a refusal an operator can act on must exit 2 with a
+  // message, not exit 2 with a stack trace that reads like a harness crash.
+  throw new UsageError(
     [
       `Refusing to run ${command}: the last judge run for this page failed and its artifacts are quarantined.`,
       `Marker: ${paths.runInvalidMarker}`,

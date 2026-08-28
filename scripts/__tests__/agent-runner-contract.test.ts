@@ -1,9 +1,10 @@
 /**
  * Adapter contract: every agent runner must honor the same
  * (query, maxTurns, options) -> JSON seam. A new backend is done when it
- * passes this suite.
+ * passes this suite — third-party adapters can import
+ * {@link runAdapterContractSuite} and run it against their own `run`.
  */
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,13 +15,20 @@ vi.mock("node:child_process", async importOriginal => {
   return { ...actual, spawnSync: spawnSyncMock };
 });
 
-import { runHermes } from "../hermes-runner.mjs";
+import {
+  HERMES_QA_DEFAULT_TIMEOUT_MS,
+  resolveHermesTimeoutMs,
+  runHermes,
+} from "../hermes-runner.mjs";
 import {
   ASIDE_QA_DEFAULT_TIMEOUT_MS,
   resolveAsideTimeoutMs,
   runAside,
 } from "../aside-runner.mjs";
+import { runExecAgent } from "../exec-runner.mjs";
+import { runFixture } from "../fixture-runner.mjs";
 import { runAgent } from "../ai-agent-adapter.mjs";
+import { EnvironmentError } from "../errors.mjs";
 import {
   buildAsidePreloginScript,
   preloginAside,
@@ -51,61 +59,147 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe.each([
-  ["hermes", runHermes],
-  ["aside", runAside],
-] as const)("agent runner contract: %s", (_name, run) => {
-  const paths = () => ({
-    hermesQuery: join(dir, "query.txt"),
-    hermesRawOutput: join(dir, "raw.txt"),
-  });
+type RunFn = (
+  query: string,
+  maxTurns: number,
+  options?: Record<string, unknown>
+) => Record<string, unknown>;
 
-  it("returns parsed JSON when required keys are present", () => {
-    spawnSyncMock.mockReturnValue(spawnResult());
-    const result = run("do the thing", 5, { paths: paths() });
-    expect(result.status).toBe("pass");
-  });
+/**
+ * @param options.spawns false for adapters that never start a process
+ *   (fixture) — the process-failure cases do not apply to them.
+ */
+export function runAdapterContractSuite(
+  name: string,
+  run: RunFn,
+  options: { spawns?: boolean; setup?: () => void } = {}
+) {
+  const { spawns = true, setup } = options;
 
-  it("writes the query artifact with secrets redacted", () => {
-    spawnSyncMock.mockReturnValue(spawnResult());
-    run(`login with password ${SECRET}`, 5, {
-      paths: paths(),
-      secrets: [SECRET],
+  describe(`agent runner contract: ${name}`, () => {
+    beforeEach(() => {
+      setup?.();
     });
-    const written = readFileSync(join(dir, "query.txt"), "utf8");
-    expect(written).not.toContain(SECRET);
-    expect(written).toContain("[redacted]");
-  });
 
-  it("writes the raw output artifact with secrets redacted", () => {
-    spawnSyncMock.mockReturnValue(spawnResult());
-    run("q", 5, { paths: paths(), secrets: [SECRET] });
-    const written = readFileSync(join(dir, "raw.txt"), "utf8");
-    expect(written).not.toContain(SECRET);
-  });
+    const paths = () => ({
+      hermesQuery: join(dir, "query.txt"),
+      hermesRawOutput: join(dir, "raw.txt"),
+    });
 
-  it("throws on non-zero exit without leaking secrets", () => {
-    spawnSyncMock.mockReturnValue(
-      spawnResult({ status: 1, stdout: "", stderr: `boom ${SECRET}` })
-    );
-    expect(() => run("q", 5, { paths: paths(), secrets: [SECRET] })).toThrow(
-      /failed \(exit 1\)/
-    );
-    try {
+    it("returns parsed JSON when required keys are present", () => {
+      spawnSyncMock.mockReturnValue(spawnResult());
+      const result = run("do the thing", 5, { paths: paths() });
+      expect(typeof result.status).toBe("string");
+    });
+
+    it("writes the query artifact with secrets redacted", () => {
+      spawnSyncMock.mockReturnValue(spawnResult());
+      run(`login with password ${SECRET}`, 5, {
+        paths: paths(),
+        secrets: [SECRET],
+      });
+      const written = readFileSync(join(dir, "query.txt"), "utf8");
+      expect(written).not.toContain(SECRET);
+      expect(written).toContain("[redacted]");
+    });
+
+    it("writes the raw output artifact with secrets redacted", () => {
+      spawnSyncMock.mockReturnValue(spawnResult());
       run("q", 5, { paths: paths(), secrets: [SECRET] });
-    } catch (error) {
-      expect(String(error)).not.toContain(SECRET);
-    }
-  });
+      const written = readFileSync(join(dir, "raw.txt"), "utf8");
+      expect(written).not.toContain(SECRET);
+    });
 
-  it("throws when required keys are missing from the output", () => {
-    spawnSyncMock.mockReturnValue(spawnResult({ stdout: '{"other":1}' }));
-    expect(() => run("q", 5, { paths: paths() })).toThrow(/valid JSON/);
+    it("throws when required keys are missing from the output", () => {
+      spawnSyncMock.mockReturnValue(spawnResult());
+      expect(() =>
+        run("q", 5, { paths: paths(), requiredKeys: ["definitelyNotAKey"] })
+      ).toThrow(/valid JSON/);
+    });
+
+    if (!spawns) return;
+
+    it("throws on non-zero exit without leaking secrets", () => {
+      spawnSyncMock.mockReturnValue(
+        spawnResult({ status: 1, stdout: "", stderr: `boom ${SECRET}` })
+      );
+      expect(() => run("q", 5, { paths: paths(), secrets: [SECRET] })).toThrow(
+        /failed \(exit 1\)/
+      );
+      try {
+        run("q", 5, { paths: paths(), secrets: [SECRET] });
+      } catch (error) {
+        expect(String(error)).not.toContain(SECRET);
+      }
+    });
+
+    it("keeps the captured output when the run times out", () => {
+      spawnSyncMock.mockReturnValue(
+        spawnResult({
+          status: null,
+          stdout: `ten minutes of work, saw ${SECRET}`,
+          error: Object.assign(new Error("t"), { code: "ETIMEDOUT" }),
+        })
+      );
+      expect(() =>
+        run("q", 5, { paths: paths(), secrets: [SECRET] })
+      ).toThrow(EnvironmentError);
+
+      expect(existsSync(join(dir, "raw.txt"))).toBe(true);
+      const written = readFileSync(join(dir, "raw.txt"), "utf8");
+      expect(written).toContain("ten minutes of work");
+      expect(written).not.toContain(SECRET);
+    });
+
+    it("names the missing binary instead of throwing a bare ENOENT", () => {
+      spawnSyncMock.mockReturnValue(
+        spawnResult({
+          status: null,
+          stdout: "",
+          error: Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }),
+        })
+      );
+      expect(() => run("q", 5, { paths: paths() })).toThrow(
+        /command not found/
+      );
+      expect(existsSync(join(dir, "raw.txt"))).toBe(true);
+    });
   });
+}
+
+runAdapterContractSuite("hermes", runHermes);
+runAdapterContractSuite("aside", runAside);
+runAdapterContractSuite("exec", runExecAgent, {
+  setup: () => vi.stubEnv("QA_AGENT_CMD", "my-agent --json"),
 });
+runAdapterContractSuite("fixture", runFixture, { spawns: false });
 
-describe("aside timeout guard", () => {
-  it("defaults to 10 minutes and forwards to spawnSync", () => {
+describe("wall-clock timeout guards", () => {
+  it("hermes defaults to 10 minutes and forwards to spawnSync", () => {
+    spawnSyncMock.mockReturnValue(spawnResult());
+    runHermes("q", 5, {});
+    expect(spawnSyncMock.mock.calls[0][2].timeout).toBe(
+      HERMES_QA_DEFAULT_TIMEOUT_MS
+    );
+  });
+
+  it("hermes honors HERMES_QA_TIMEOUT_MS", () => {
+    vi.stubEnv("HERMES_QA_TIMEOUT_MS", "4321");
+    expect(resolveHermesTimeoutMs()).toBe(4321);
+  });
+
+  it("hermes reports a stalled turn as an environment failure", () => {
+    spawnSyncMock.mockReturnValue(
+      spawnResult({
+        status: null,
+        error: Object.assign(new Error("t"), { code: "ETIMEDOUT" }),
+      })
+    );
+    expect(() => runHermes("q", 5, {})).toThrow(EnvironmentError);
+    expect(() => runHermes("q", 5, {})).toThrow(/timed out after/);
+  });
+
+  it("aside defaults to 10 minutes and forwards to spawnSync", () => {
     spawnSyncMock.mockReturnValue(spawnResult());
     runAside("q", 5, {});
     expect(spawnSyncMock.mock.calls[0][2].timeout).toBe(
@@ -123,6 +217,44 @@ describe("aside timeout guard", () => {
       spawnResult({ error: Object.assign(new Error("t"), { code: "ETIMEDOUT" }) })
     );
     expect(() => runAside("q", 5, {})).toThrow(/timed out after/);
+  });
+});
+
+describe("exec adapter", () => {
+  it("passes the prompt on stdin, never in argv", () => {
+    vi.stubEnv("QA_AGENT_CMD", "claude -p --output-format json");
+    spawnSyncMock.mockReturnValue(spawnResult());
+    runExecAgent(`judge this page, password ${SECRET}`, 5, {});
+
+    const [cmd, args, spawnOptions] = spawnSyncMock.mock.calls[0];
+    expect(cmd).toBe("claude");
+    expect(args).toEqual(["-p", "--output-format", "json"]);
+    expect(JSON.stringify(args)).not.toContain("judge this page");
+    expect(JSON.stringify(args)).not.toContain(SECRET);
+    expect(spawnOptions.input).toContain("judge this page");
+  });
+
+  it("fails with a named env var when QA_AGENT_CMD is unset", () => {
+    vi.stubEnv("QA_AGENT_CMD", "");
+    expect(() => runExecAgent("q", 5, {})).toThrow(/QA_AGENT_CMD/);
+    expect(() => runExecAgent("q", 5, {})).toThrow(EnvironmentError);
+  });
+});
+
+describe("fixture adapter", () => {
+  it("serves a stage-shaped payload per pipeline stage, offline", () => {
+    const judge = runFixture("q", 5, { requiredKeys: ["status"] });
+    expect(judge.status).toBe("manual_review");
+
+    const abstract = runFixture("q", 5, { requiredKeys: ["livePlan"] });
+    expect(abstract.livePlan).toContain("Given");
+
+    const review = runFixture("q", 5, {
+      requiredKeys: ["criteria", "overallReview"],
+    });
+    expect(review.overallReview).toBe("flagged");
+
+    expect(spawnSyncMock).not.toHaveBeenCalled();
   });
 });
 

@@ -16,6 +16,7 @@ import {
 } from "./hermes-qa-project-config.mjs";
 import { parseStagingQaArgs } from "./staging-qa-config.mjs";
 import { SESSION_PROFILE_DIR } from "./qa-browser-session.mjs";
+import { EnvironmentError, runMain } from "./errors.mjs";
 
 async function main() {
   const argv = process.argv.slice(2);
@@ -30,16 +31,26 @@ async function main() {
   );
 
   const { runOperatorLogin } = await import("./qa-browser-session.mjs");
-  await runOperatorLogin({ loginUrl });
-  console.log("Session saved. `judge` will now run with the pre-authenticated browser.");
+  const { authenticated, cookieCount } = await runOperatorLogin({ loginUrl });
+  if (!authenticated) {
+    // Announcing a saved session that does not exist is worse than failing:
+    // every later judge run would browse staging logged out believing it is
+    // signed in.
+    throw new EnvironmentError(
+      "No session was stored: the browser window closed without any new session cookie.",
+      {
+        hint: `Run \`npx playwright-spec-for-ai-agent login\` again and complete the sign-in at ${loginUrl} before closing the window.`,
+      }
+    );
+  }
+  console.log(
+    `Session saved (${cookieCount} cookies). \`judge\` will now run with the pre-authenticated browser.`
+  );
 }
 
 const isDirectRun =
   process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 
 if (isDirectRun) {
-  main().catch(error => {
-    console.error(error.stack ?? error.message);
-    process.exitCode = 1;
-  });
+  runMain(main);
 }

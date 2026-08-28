@@ -4,15 +4,46 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
-  writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import {
+  AGENT_DEFAULT_TIMEOUT_MS,
+  extractAgentJson,
+  extractFinalResponseText,
+  finalizeAgentRun,
+  prepareJsonParseSurface,
+  redactSensitiveText,
+  resolveTimeoutMs,
+  unwrapAgentEnvelope,
+  writeAgentQueryArtifact,
+} from "./agent-output.mjs";
+import { EnvironmentError, UsageError } from "./errors.mjs";
+
+// Adapter-neutral helpers now live in agent-output.mjs; re-exported under their
+// original names because callers and tests still import them from here.
+export { redactSensitiveText };
+export const extractHermesFinalResponseText = extractFinalResponseText;
+export const unwrapHermesEnvelope = unwrapAgentEnvelope;
+export const prepareHermesJsonParseSurface = prepareJsonParseSurface;
+export function extractJsonFromHermesOutput(output, options = {}) {
+  return extractAgentJson(output, { adapterLabel: "hermes", ...options });
+}
 
 export const REQUIRED_HERMES_AGENT_BIN = "hermes-agent";
 export const HERMES_QA_COMMAND =
   process.env.HERMES_QA_COMMAND?.trim() || REQUIRED_HERMES_AGENT_BIN;
+
+/**
+ * --max_turns caps conversation length, not wall clock: a single turn that
+ * stalls (API hang, CDP deadlock) would block a nightly forever without this.
+ */
+export const HERMES_QA_DEFAULT_TIMEOUT_MS = AGENT_DEFAULT_TIMEOUT_MS;
+
+export function resolveHermesTimeoutMs() {
+  return resolveTimeoutMs("HERMES_QA_TIMEOUT_MS", HERMES_QA_DEFAULT_TIMEOUT_MS);
+}
 
 /** Disable browsing/terminal for abstract-ai and review (JSON-in, JSON-out). */
 export const HERMES_QA_TEXT_ONLY_DISABLED_TOOLSETS =
@@ -107,7 +138,7 @@ export function buildHermesAgentArgs(
 ) {
   const { model, baseUrl } = readHermesModelConfig();
   if (!model) {
-    throw new Error(
+    throw new EnvironmentError(
       "Hermes model is not configured. Set model.default in ~/.hermes/config.yaml or export HERMES_INFERENCE_MODEL."
     );
   }
@@ -127,167 +158,29 @@ export function buildHermesAgentArgs(
 }
 
 /**
- * Prefer the model's final answer block over Hermes startup banners.
+ * An agent that never started is an environment failure, not unusable output.
+ * Hermes prints its own diagnosis and exits 0, so without this the run surfaces
+ * as "did not return valid JSON" (exit 4) and sends the operator hunting for a
+ * parser bug instead of an unset API key.
  */
-export function extractHermesFinalResponseText(output) {
-  const text = output ?? "";
-  const finalBlock = text.match(
-    /🎯\s*FINAL RESPONSE:\s*\n-+\s*\n([\s\S]*?)(?:\n={3,}|\n📋 CONVERSATION SUMMARY|\n--- stderr ---|$)/i
-  );
-  if (finalBlock?.[1]?.trim()) {
-    return finalBlock[1].trim();
-  }
-
-  const altBlock = text.match(
-    /FINAL RESPONSE:\s*\n-+\s*\n([\s\S]*?)(?:\n={3,}|\n📋 CONVERSATION SUMMARY|$)/i
-  );
-  if (altBlock?.[1]?.trim()) {
-    return altBlock[1].trim();
-  }
-
-  return text;
-}
-
-export function unwrapHermesEnvelope(parsed) {
-  if (!parsed || typeof parsed !== "object") return parsed;
-
-  if (typeof parsed.result === "string") {
-    const trimmed = parsed.result.trim();
-    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-      try {
-        return JSON.parse(trimmed);
-      } catch {
-        return parsed;
-      }
-    }
-  }
-
-  if (parsed.result && typeof parsed.result === "object") {
-    return parsed.result;
-  }
-
-  return parsed;
-}
-
-export function prepareHermesJsonParseSurface(stdout, stderr = "") {
-  const combined = [stdout, stderr].filter(Boolean).join("\n");
-  const final = extractHermesFinalResponseText(combined);
-  return final !== combined ? `${final}\n\n${combined}` : combined;
-}
-
-function matchesRequiredKeys(parsed, keys) {
-  return keys.every(key => key in parsed);
-}
-
-export function extractJsonFromHermesOutput(
-  output,
-  {
-    requiredKeys = ["status"],
-    /** If set, any group that matches wins (e.g. [["livePlan","testUpdates"],["livePlan","spec"]]). */
-    requiredKeyGroups = null,
-    rawOutputPath = null,
-  } = {}
-) {
-  const surface = extractHermesFinalResponseText(output);
-  const candidates = [];
-
-  for (const match of surface.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
-    candidates.push(match[1]);
-  }
-
-  for (const source of [surface, output]) {
-    for (let start = 0; start < source.length; start += 1) {
-      if (source[start] !== "{") continue;
-      let depth = 0;
-      let inString = false;
-      let escaped = false;
-      for (let index = start; index < source.length; index += 1) {
-        const char = source[index];
-        if (inString) {
-          if (escaped) escaped = false;
-          else if (char === "\\") escaped = true;
-          else if (char === '"') inString = false;
-          continue;
-        }
-        if (char === '"') inString = true;
-        else if (char === "{") depth += 1;
-        else if (char === "}") {
-          depth -= 1;
-          if (depth === 0) {
-            candidates.push(source.slice(start, index + 1));
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  const keys = Array.isArray(requiredKeys) ? requiredKeys : [requiredKeys];
-  const groups = Array.isArray(requiredKeyGroups) ? requiredKeyGroups : null;
-
-  for (const candidate of candidates.reverse()) {
-    try {
-      const parsed = unwrapHermesEnvelope(JSON.parse(candidate));
-      if (!parsed || typeof parsed !== "object") continue;
-
-      const ok = groups
-        ? groups.some(group => matchesRequiredKeys(parsed, group))
-        : matchesRequiredKeys(parsed, keys);
-
-      if (ok) return parsed;
-    } catch {
-      // Keep scanning.
-    }
-  }
-
-  const keyHint = groups
-    ? groups.map(g => g.join("+")).join(" OR ")
-    : keys.join(", ");
+function throwIfHermesDidNotStart(output, rawOutputPath = null) {
   const artifactHint = rawOutputPath ? ` See raw output: ${rawOutputPath}` : "";
-  throw new Error(
-    `Hermes did not return valid JSON (required: ${keyHint}).${artifactHint} Preview: ${surface.slice(0, 2_000)}`
-  );
-}
 
-function redactHermesOutput(output) {
-  return output
-    .replace(/Using API key: .*/g, "Using API key: [redacted]")
-    .replace(/(Authorization:\s*Bearer\s+)[^\s"']+/gi, "$1[redacted]")
-    .replace(
-      /((?:api[_-]?key|access[_-]?token|auth[_-]?token)=)[^\s&"']+/gi,
-      "$1[redacted]"
-    )
-    .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, "sk-[redacted]")
-    .replace(
-      /API key was rejected by the provider\.[\s\S]*$/m,
-      "API key was rejected. [redacted]"
+  if (/API key was rejected|PermissionDeniedError|HTTP 403/i.test(output)) {
+    throw new EnvironmentError(
+      `Hermes API key was rejected or permission denied.${artifactHint}`
     );
-}
-
-export function redactSensitiveText(text, secrets = []) {
-  let redacted = redactHermesOutput(text ?? "");
-  for (const secret of secrets) {
-    if (!secret) continue;
-    redacted = redacted.split(secret).join("[redacted]");
-    redacted = redacted.split(encodeURIComponent(secret)).join("[redacted]");
   }
-  return redacted
-    .replace(/([?&](?:email|password)=)[^\s&"']*/gi, "$1[redacted]")
-    .replace(/("--password=)(?:\\.|[^"\\\s])+/g, "$1[redacted]")
-    .replace(
-      /("(?:email|password)"\s*:\s*")(?:\\.|[^"\\])*(")/gi,
-      "$1[redacted]$2"
+
+  const failedToInit = output.match(/Failed to initialize agent:\s*(.+)/i);
+  if (failedToInit) {
+    throw new EnvironmentError(
+      `Hermes could not start: ${failedToInit[1].trim()}${artifactHint}`,
+      {
+        hint: "Fix the provider/model in ~/.hermes/config.yaml (or `hermes model`), then re-run. `doctor` checks this before a run.",
+      }
     );
-}
-
-function throwIfHermesAuthRejected(output, rawOutputPath = null) {
-  if (!/API key was rejected|PermissionDeniedError|HTTP 403/i.test(output)) {
-    return;
   }
-  const artifactHint = rawOutputPath ? ` See raw output: ${rawOutputPath}` : "";
-  throw new Error(
-    `Hermes API key was rejected or permission denied.${artifactHint}`
-  );
 }
 
 /**
@@ -307,7 +200,7 @@ export function runHermes(
   } = {}
 ) {
   if (HERMES_QA_COMMAND !== REQUIRED_HERMES_AGENT_BIN) {
-    throw new Error(
+    throw new UsageError(
       `Hermes command must be exactly ${REQUIRED_HERMES_AGENT_BIN}. Got: ${JSON.stringify(HERMES_QA_COMMAND)}`
     );
   }
@@ -320,17 +213,12 @@ export function runHermes(
     .join(",");
 
   const invocation = resolveHermesAgentInvocation();
-  const queryPath =
-    paths?.hermesQuery ??
-    paths?.hermesAbstractQuery ??
-    paths?.hermesReviewQuery;
-  if (queryPath) {
-    writeFileSync(queryPath, redactSensitiveText(query, secrets));
-  }
+  writeAgentQueryArtifact(paths, query, secrets);
 
   // Fresh HERMES_HOME per run: empty memories/ and sessions/ so nothing learned
   // in one QA run carries into the next. Torn down as soon as Hermes exits.
   const hermesHome = prepareEphemeralHermesHome();
+  const timeout = resolveHermesTimeoutMs();
   let result;
   try {
     result = spawnSync(
@@ -344,49 +232,23 @@ export function runHermes(
         encoding: "utf8",
         maxBuffer: 1024 * 1024 * 10,
         env: { ...process.env, HERMES_HOME: hermesHome.path },
+        timeout,
       }
     );
   } finally {
     hermesHome.cleanup();
   }
 
-  if (result.error) throw result.error;
-
-  const combinedOutput = [
-    result.stdout ? `--- stdout ---\n${result.stdout}` : "",
-    result.stderr ? `--- stderr ---\n${result.stderr}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-  const redactedCombinedOutput = redactSensitiveText(
-    combinedOutput || "no output",
-    secrets
-  );
-
-  const rawPath =
-    paths?.hermesRawOutput ??
-    paths?.hermesAbstractRawOutput ??
-    paths?.hermesReviewRawOutput;
-  if (rawPath) {
-    writeFileSync(rawPath, redactedCombinedOutput);
-  }
-
-  throwIfHermesAuthRejected(redactedCombinedOutput, rawPath);
-
-  if (result.status !== 0) {
-    throw new Error(
-      `Hermes failed (exit ${result.status}): ${redactSensitiveText(result.stderr || result.stdout || "no output", secrets)}`
-    );
-  }
-
-  const parseSurface = redactSensitiveText(
-    prepareHermesJsonParseSurface(result.stdout, result.stderr),
-    secrets
-  );
-
-  return extractJsonFromHermesOutput(parseSurface, {
+  return finalizeAgentRun(result, {
+    adapterLabel: "Hermes",
+    command: invocation.command,
+    paths,
+    secrets,
     requiredKeys,
     requiredKeyGroups,
-    rawOutputPath: rawPath,
+    timeoutMs: timeout,
+    timeoutHint:
+      "Raise HERMES_QA_TIMEOUT_MS if Hermes legitimately needs longer.",
+    inspect: throwIfHermesDidNotStart,
   });
 }

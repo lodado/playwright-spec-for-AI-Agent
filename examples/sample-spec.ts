@@ -1,8 +1,14 @@
 // @qa-scenario: ACTIVE
-// File-level annotation: this spec targets the ACTIVE subscription state.
 // @qa-fixture: avatar=tests/fixtures/qa-avatar.png
-// @qa-live-skip: true on a file means Hermes skips it entirely on live staging.
-// @qa-always-run: true means Hermes runs this file regardless of plan/status.
+
+/*
+ * This spec targets the ACTIVE subscription state.
+ *
+ * Two more file-level annotations exist, documented here in a block comment on
+ * purpose: any `// @qa-...` line would be read as a real annotation, not prose.
+ *   @qa-live-skip: true   Hermes skips the whole file on live staging
+ *   @qa-always-run: true  Hermes runs the file regardless of plan/status
+ */
 
 import { expect, test } from "@playwright/test";
 
@@ -12,7 +18,7 @@ test.describe("Dashboard - Active subscription", () => {
     await expect(page.getByTestId("plan-name")).toBeVisible();
   });
 
-  // @qa-live-policy: safe-interaction — safe UI action; Hermes replays steps and verifies on live staging
+  // @qa-live-policy: safe-interaction // safe UI action: Hermes replays the steps and verifies on live staging
   test.describe("when 'View full subscription history' button is clicked", () => {
     test("opens the subscription history dialog", async ({ page }) => {
       await page.getByTestId("subscription-history-btn").click();

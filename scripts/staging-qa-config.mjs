@@ -1,3 +1,6 @@
+import { EnvironmentError, UsageError } from "./errors.mjs";
+import { isPlaceholderBaseUrl } from "./hermes-qa-project-config.mjs";
+
 const DEFAULT_BASE_URL = "https://your-staging-url.example.com";
 const DEFAULT_LOGIN_PATH = "/login";
 const DEFAULT_DASHBOARD_PATH = "/dashboard";
@@ -19,9 +22,14 @@ const CLI_FLAGS = [
     "Optional override: expected plan label for Hermes (default: infer from evidence)",
   ],
   [
+    "--expected-account-state=",
+    "STAGING_QA_EXPECTED_ACCOUNT_STATE",
+    "Optional override: expected @qa-scenario account state (default: infer from evidence)",
+  ],
+  [
     "--expected-subscription-status=",
     "STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS",
-    "Optional override: expected subscription status (default: infer from evidence)",
+    "Legacy alias of --expected-account-state=",
   ],
   [
     "--account-notes=",
@@ -29,10 +37,6 @@ const CLI_FLAGS = [
     "Free-form QA account notes for Hermes",
   ],
 ];
-
-function envKeyForFlag(flagPrefix) {
-  return CLI_FLAGS.find(([flag]) => flag === flagPrefix)?.[1];
-}
 
 export function parseBooleanFlag(value) {
   if (value === undefined || value === null || value === "") return undefined;
@@ -61,8 +65,12 @@ export function parseStagingQaArgs(argv = process.argv.slice(2)) {
     dashboardPath:
       process.env.STAGING_QA_DASHBOARD_PATH ?? DEFAULT_DASHBOARD_PATH,
     expectedPlan: process.env.STAGING_QA_EXPECTED_PLAN ?? "",
+    // `expectedSubscriptionStatus` stays the internal key other stages read;
+    // `expectedAccountState` is the de-branded name users see.
     expectedSubscriptionStatus:
-      process.env.STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS ?? "",
+      process.env.STAGING_QA_EXPECTED_ACCOUNT_STATE ??
+      process.env.STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS ??
+      "",
     accountNotes: process.env.STAGING_QA_ACCOUNT_NOTES ?? "",
   };
 
@@ -99,6 +107,7 @@ export function parseStagingQaArgs(argv = process.argv.slice(2)) {
       case "STAGING_QA_EXPECTED_PLAN":
         config.expectedPlan = value;
         break;
+      case "STAGING_QA_EXPECTED_ACCOUNT_STATE":
       case "STAGING_QA_EXPECTED_SUBSCRIPTION_STATUS":
         config.expectedSubscriptionStatus = value;
         break;
@@ -110,19 +119,37 @@ export function parseStagingQaArgs(argv = process.argv.slice(2)) {
     }
   }
 
+  // Left unset when empty: `applyStagingAccountDefaults` uses `??`, so an empty
+  // string here would out-rank the project config's account state.
+  if (config.expectedSubscriptionStatus) {
+    config.expectedAccountState = config.expectedSubscriptionStatus;
+  }
   return config;
+}
+
+/**
+ * A run against the packaged placeholder origin would judge nothing real, so it
+ * is a setup mistake rather than a failed test.
+ */
+export function assertRealBaseUrl(config) {
+  if (!isPlaceholderBaseUrl(config?.baseUrl)) return;
+  throw new UsageError(
+    `Staging base URL is still the placeholder (${config?.baseUrl || "empty"}).`,
+    {
+      hint: "Set staging.baseUrl in playwright-spec-for-ai-agent.config.mjs, or pass --base-url=https://staging.your-app.com (env: STAGING_QA_BASE_URL).",
+    }
+  );
 }
 
 export function assertStagingQaCredentials(config) {
   if (!isAuthRequired(config)) return;
   if (!config.email || !config.password) {
-    throw new Error(
-      [
-        "Missing staging QA credentials.",
+    throw new EnvironmentError("Missing staging QA credentials.", {
+      hint: [
         "Set STAGING_QA_EMAIL and STAGING_QA_PASSWORD, or pass:",
         "  --email=you@example.com --password='your-password'",
-      ].join(" ")
-    );
+      ].join("\n"),
+    });
   }
 }
 
@@ -193,59 +220,6 @@ export function resolveFinalJudgeTarget(
   return parseTargetInput(customInput, baseUrl);
 }
 
-export function buildPersistedAccountContext(config) {
-  const urls = buildStagingUrls(config);
-  return {
-    authRequired: isAuthRequired(config),
-    email: redactEmail(config.email),
-    loginUrl: urls.loginUrl,
-    dashboardUrl: urls.dashboardUrl,
-    expectedPlan: config.expectedPlan || null,
-    expectedSubscriptionStatus: config.expectedSubscriptionStatus || null,
-    accountNotes: config.accountNotes || null,
-    passwordIncludedInArtifacts: false,
-  };
-}
-
-export function hasExplicitAccountExpectations(config) {
-  return Boolean(config.expectedPlan || config.expectedSubscriptionStatus);
-}
-
-export function buildHermesJudgeInstructions(config) {
-  const instructions = [
-    "You are Hermes QA judge for a live staging dashboard.",
-    "Return strict JSON with status: pass | fail | manual_review.",
-    "Never downgrade deterministic Playwright failures to pass.",
-    "Treat ambiguous visual concerns as manual_review.",
-    "Do not suggest or perform state-changing actions.",
-  ];
-
-  if (isAuthRequired(config)) {
-    instructions.push(
-      "Use stagingLogin credentials only if your tools require staging authentication."
-    );
-  } else {
-    instructions.push(
-      "This target does not require login. Open stagingLogin.targetUrl directly and do not look for credentials."
-    );
-  }
-
-  if (hasExplicitAccountExpectations(config)) {
-    instructions.push(
-      "accountContext.expectedPlan / expectedSubscriptionStatus were provided explicitly. Treat them as authoritative expectations."
-    );
-  } else {
-    instructions.push(
-      "No explicit plan/status expectation was provided.",
-      "Infer the matching @qa-scenario from the live page DOM, copy, and UI state.",
-      "Use specMarkdown only for the scenario that best matches what you observe on staging.",
-      "If live evidence conflicts with the chosen scenario, return fail or manual_review with concrete evidence."
-    );
-  }
-
-  return instructions;
-}
-
 export function buildHermesStagingLogin(config) {
   const urls = buildStagingUrls(config);
   const authRequired = isAuthRequired(config);
@@ -256,7 +230,7 @@ export function buildHermesStagingLogin(config) {
     loginUrl: urls.loginUrl,
     dashboardUrl: urls.dashboardUrl,
     expectedPlan: config.expectedPlan || null,
-    expectedSubscriptionStatus: config.expectedSubscriptionStatus || null,
+    expectedAccountState: config.expectedSubscriptionStatus || null,
     accountNotes: config.accountNotes || null,
     usage: authRequired
       ? "Use only for staging authentication context or diagnosing login failures. Do not mutate subscription or billing state."
@@ -280,7 +254,7 @@ ${flagLines.join("\n")}
 
 Interactive mode:
   When stdin is a TTY and CI is not set, run/judge prompt for credentials,
-  target confirmation, and inferred dashboard scenario before assertions.
+  target confirmation, and the expected account state before assertions.
 
 Examples:
   STAGING_QA_EMAIL='qa@example.com' STAGING_QA_PASSWORD='secret!' npx playwright-spec-for-ai-agent judge --page=dashboard
@@ -289,9 +263,4 @@ Examples:
 `);
 }
 
-export {
-  DEFAULT_BASE_URL,
-  DEFAULT_DASHBOARD_PATH,
-  DEFAULT_LOGIN_PATH,
-  envKeyForFlag,
-};
+export { DEFAULT_BASE_URL, DEFAULT_DASHBOARD_PATH, DEFAULT_LOGIN_PATH };

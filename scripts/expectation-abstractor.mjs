@@ -308,9 +308,10 @@ export function abstractSpec(spec) {
   return {
     ...spec,
     scenarios,
+    // No timestamp here on purpose: abstract-ai's reuse check hashes this
+    // artifact's content, and a per-run stamp would make it differ every night.
     abstraction: {
       rulesVersion: ABSTRACTION_RULES_VERSION,
-      appliedAt: new Date().toISOString(),
       stage: "rules",
     },
   };

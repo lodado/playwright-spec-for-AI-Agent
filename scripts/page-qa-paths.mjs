@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { EXIT_USAGE } from "./errors.mjs";
 import {
   getProjectConfig,
   loadProjectConfig,
@@ -31,7 +32,7 @@ export function parsePageArg(argv, { required = true } = {}) {
         "  npx playwright-spec-for-ai-agent judge --page=pricing --target-path=/pricing",
       ].join("\n")
     );
-    process.exit(1);
+    process.exit(EXIT_USAGE);
   }
   return pageArg.slice("--page=".length).trim();
 }
@@ -58,7 +59,7 @@ export function parseTargetPathArg(argv, page) {
       `or pass --target-path=/${page}`,
     ].join(" ")
   );
-  process.exit(1);
+  process.exit(EXIT_USAGE);
 }
 
 export { resolveJudgeTarget };
@@ -81,14 +82,17 @@ export function formatSpecDirLabel(page) {
   return relative(config.root, specDir) || specDir;
 }
 
+// Anchored to a whole comment line: prose that merely mentions an annotation
+// ("// @qa-live-skip: true means Hermes skips it") must not activate it.
+const SCENARIO_LINE = /^[ \t]*\/\/[ \t]*@qa-scenario:[ \t]*\S/m;
+const LIVE_SKIP_LINE = /^[ \t]*\/\/[ \t]*@qa-live-skip:[ \t]*true[ \t]*$/m;
+
 export function listAnnotatedSpecFiles(specDir) {
   return readdirSync(specDir)
     .filter(file => file.endsWith(".spec.ts"))
     .filter(file => {
       const source = readFileSync(join(specDir, file), "utf8");
-      const hasScenario = /\/\/\s*@qa-scenario:/.test(source);
-      const isLiveSkip = /\/\/\s*@qa-live-skip:\s*true/.test(source);
-      return hasScenario && !isLiveSkip;
+      return SCENARIO_LINE.test(source) && !LIVE_SKIP_LINE.test(source);
     })
     .sort();
 }
@@ -114,6 +118,13 @@ export function artifactPaths(page, outputDir = resolveOutputDir(page)) {
       `${slug}-hermes-abstract-raw-output.txt`
     ),
     runInvalidMarker: join(outputDir, `${slug}-qa-run.invalid`),
+    runsLedger: join(outputDir, `${slug}-qa-runs.jsonl`),
+    evidenceManifestJson: join(outputDir, `${slug}-qa-evidence-manifest.json`),
+    verdictHistoryJson: join(outputDir, `${slug}-qa-verdict-history.json`),
+    judgmentCtrfJson: join(outputDir, `${slug}-qa-report.ctrf.json`),
+    ackJson: join(outputDir, `${slug}-qa-ack.json`),
+    evidenceDir: join(outputDir, "evidence"),
+    videosDir: join(outputDir, "videos"),
     hermesReviewJson: join(outputDir, `${slug}-hermes-judge-review.json`),
     hermesReviewMd: join(outputDir, `${slug}-hermes-judge-review.md`),
     hermesReviewQuery: join(outputDir, `${slug}-hermes-judge-review-query.txt`),

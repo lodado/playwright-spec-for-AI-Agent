@@ -5,13 +5,17 @@
  * Usage:
  *   npx playwright-spec-for-ai-agent abstract-ai --page=dashboard
  *   npx playwright-spec-for-ai-agent abstract-ai --page=dashboard --dry-run
+ *   npx playwright-spec-for-ai-agent abstract-ai --page=dashboard --force
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readArtifact, withSchema } from "./artifact-schema.mjs";
+import { runMain, UsageError } from "./errors.mjs";
+import { hashSpecDefinition } from "./spec-hash.mjs";
 import { ABSTRACTION_RULES_VERSION } from "./expectation-abstractor.mjs";
 import { buildGwtPromptSpec } from "./abstract-ai-payload.mjs";
-import { runAgent } from "./ai-agent-adapter.mjs";
+import { prepareAdapter, runAgent } from "./ai-agent-adapter.mjs";
 import { normalizeAbstractAiResult } from "./normalize-abstracted-spec.mjs";
 import { renderLiveSpecMarkdown } from "./qa-spec-live-artifact.mjs";
 import {
@@ -22,17 +26,24 @@ import {
 
 const HERMES_MAX_TURNS_ABSTRACT = 2;
 
+/**
+ * Bump whenever {@link buildAbstractHermesQuery} changes what it asks for. It is
+ * stamped next to the input hash so a prompt change re-runs the agent even
+ * though the specs are untouched.
+ */
+export const ABSTRACT_PROMPT_REV = "2.0.0";
+
 function hasFlag(argv, flag) {
   return argv.includes(flag);
 }
 
-function buildAbstractHermesQuery(payload) {
+export function buildAbstractHermesQuery(payload) {
   return [
     "You are a QA spec writer for live staging. CRITICAL: do not use any tools.",
     "Your final message must be ONLY one raw JSON object — no markdown fences, no prose.",
     "",
     "## Task",
-    "Write livePlan as explicit Given/When/Then markdown — one block per test in specDefinition.",
+    "Write livePlan as explicit Given/When/Then/Never markdown — one block per test in specDefinition.",
     "Each test includes only `qaLivePolicy` from Playwright `@qa-live-policy`; use that value in When/Then behavior.",
     "Do not explain what policies mean. Just apply them.",
     "Scenario/Test options you must apply:",
@@ -43,14 +54,25 @@ function buildAbstractHermesQuery(payload) {
     "Use semantic intent for non-deterministic live data: generalize literals/counts/labels/dates.",
     "Example: prefer '문서를 확인한다' over exact mock literal like '세금계산서를 확인한다'.",
     "Given must state scenario + context, When must state action/review mode, Then must state pass condition.",
-    "Include every test title exactly once.",
+    "Include every test title exactly once, verbatim, in its heading. Never invent a test.",
+    "",
+    "## Never (mandatory, one per block)",
+    "Every block MUST end with a `Never:` line naming the concrete observation that",
+    "makes this check FAIL — the falsifiable half. A block that only says what should",
+    "happen is confirmable by anything and will be rejected.",
+    "Bad: `Never: anything unexpected happens`.",
+    "Good: `Never: the score area renders an error state or stays empty after load`.",
+    "For `qaLivePolicy: readonly`, the block must also state the literal text",
+    "`mutations: 0` — the run must write nothing (no POST/PUT/PATCH/DELETE, no",
+    "create/delete/save/purchase action).",
     "",
     "## livePlan format",
     "Plain markdown. Per test, e.g.:",
     "### {scenarioId} — {title}",
-    "Given ...",
-    "When ...",
-    "Then ...",
+    "Given: ...",
+    "When: ...",
+    "Then: ...",
+    "Never: ...",
     "",
     "## Response",
     '{ "livePlan": "<markdown string>" }',
@@ -60,24 +82,35 @@ function buildAbstractHermesQuery(payload) {
   ].join("\n");
 }
 
-function writeLiveArtifacts({ paths, spec, page, gwtBody }) {
-  writeFileSync(paths.specLiveJson, `${JSON.stringify(spec, null, 2)}\n`);
-  writeFileSync(
-    paths.specLiveMd,
-    renderLiveSpecMarkdown({
-      spec,
-      page,
-      audit: null,
-      gwtBody,
-    })
-  );
+function writeAudit(paths, audit) {
+  writeFileSync(paths.abstractAuditJson, `${JSON.stringify(audit, null, 2)}\n`);
 }
 
-async function main() {
-  const argv = process.argv.slice(2);
+function readExistingAudit(paths) {
+  if (!existsSync(paths.abstractAuditJson)) return {};
+  try {
+    return readArtifact(paths.abstractAuditJson);
+  } catch {
+    return {};
+  }
+}
+
+/** Reuse is only safe when both halves of the plan's provenance still match. */
+function reusableLiveSpec(paths, inputHash) {
+  if (!existsSync(paths.specLiveJson) || !existsSync(paths.specLiveMd)) {
+    return null;
+  }
+  const existing = readArtifact(paths.specLiveJson, { kind: "qa-spec" });
+  if (existing.sourceHash !== inputHash) return null;
+  if (existing.promptRev !== ABSTRACT_PROMPT_REV) return null;
+  return existing;
+}
+
+export async function run(argv) {
   await ensureProjectConfig(argv);
   const page = parsePageArg(argv);
   const dryRun = hasFlag(argv, "--dry-run");
+  const force = hasFlag(argv, "--force");
   const paths = artifactPaths(page);
 
   mkdirSync(paths.outputDir, { recursive: true });
@@ -87,12 +120,37 @@ async function main() {
     : paths.specJson;
 
   if (!existsSync(inputPath)) {
-    throw new Error(
-      `Missing qa spec. Run \`npx playwright-spec-for-ai-agent spec --page=${page}\` first.`
-    );
+    throw new UsageError(`Missing QA spec: ${inputPath}`, {
+      hint: `Run \`npx playwright-spec-for-ai-agent spec --page=${page}\` first.`,
+    });
   }
 
-  const inputSpec = JSON.parse(readFileSync(inputPath, "utf8"));
+  const inputSpec = readArtifact(inputPath, { kind: "qa-spec" });
+  // Provenance is always measured against the raw `spec` artifact, never
+  // against whichever derived artifact happened to feed the agent: `judge`
+  // re-derives the same hash from spec.json, and hashing spec-abstracted.json
+  // here would make every plan look stale to it.
+  const provenanceSpec = existsSync(paths.specJson)
+    ? readArtifact(paths.specJson, { kind: "qa-spec" })
+    : inputSpec;
+  const inputHash = hashSpecDefinition(provenanceSpec);
+
+  if (!dryRun && !force) {
+    const reused = reusableLiveSpec(paths, inputHash);
+    if (reused) {
+      writeAudit(paths, {
+        ...readExistingAudit(paths),
+        reused: true,
+        reusedAt: new Date().toISOString(),
+        promptRev: ABSTRACT_PROMPT_REV,
+        sourceHash: inputHash,
+      });
+      console.log(
+        `Live spec reused (input unchanged): ${paths.specLiveJson} — no agent call. Use --force to regenerate.`
+      );
+      return;
+    }
+  }
 
   const payload = {
     task: "abstract-qa-spec-gwt",
@@ -110,6 +168,8 @@ async function main() {
     return;
   }
 
+  const adapter = await prepareAdapter();
+
   const raw = runAgent(query, HERMES_MAX_TURNS_ABSTRACT, {
     paths: {
       hermesAbstractQuery: paths.hermesAbstractQuery,
@@ -121,23 +181,40 @@ async function main() {
 
   const normalized = normalizeAbstractAiResult(inputSpec, raw);
 
-  writeFileSync(
-    paths.abstractAuditJson,
-    `${JSON.stringify(normalized.audit, null, 2)}\n`
+  writeAudit(paths, {
+    ...normalized.audit,
+    reused: false,
+    promptRev: ABSTRACT_PROMPT_REV,
+    sourceHash: inputHash,
+    adapter: adapter.name,
+    agentMeta: raw?.agentMeta ?? null,
+  });
+
+  const spec = withSchema(
+    {
+      ...normalized.spec,
+      sourceHash: inputHash,
+      promptRev: ABSTRACT_PROMPT_REV,
+    },
+    "qa-spec"
   );
 
-  writeLiveArtifacts({
-    paths,
-    spec: normalized.spec,
-    page,
-    gwtBody: normalized.livePlan,
-  });
+  writeFileSync(paths.specLiveJson, `${JSON.stringify(spec, null, 2)}\n`);
+  writeFileSync(
+    paths.specLiveMd,
+    renderLiveSpecMarkdown({ spec, page, audit: null, gwtBody: normalized.livePlan })
+  );
 
   console.log(`Live spec: ${paths.specLiveJson}`);
   console.log(`Live plan (GWT): ${paths.specLiveMd}`);
-  if (normalized.livePlan) {
-    console.log(`GWT length: ${normalized.livePlan.length} chars`);
-  } else {
+  const { coverage, repairs } = normalized.audit;
+  console.log(
+    `Coverage: ${coverage.addressed}/${coverage.planned} planned tests addressed`
+  );
+  for (const repair of repairs) {
+    console.warn(`  ! repaired: ${repair.title} — ${repair.detail}`);
+  }
+  if (!normalized.livePlan) {
     console.warn("No livePlan in response — qa-spec-live.md uses rule-based GWT");
   }
 }
@@ -146,9 +223,4 @@ const isDirectRun =
   process.argv[1] &&
   fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 
-if (isDirectRun) {
-  main().catch(error => {
-    console.error(error.stack ?? error.message);
-    process.exit(1);
-  });
-}
+if (isDirectRun) runMain(() => run(process.argv.slice(2)));

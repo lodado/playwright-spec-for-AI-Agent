@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetProjectConfigForTests } from "../hermes-qa-project-config.mjs";
+import { run as runSpec } from "../extract-page-e2e-spec.mjs";
 import {
   collectLiveSkippedEntries,
   countLiveSpecTests,
+  countUnparsedSpecTests,
   filterSpecForLiveJson,
   isLiveSkippedTest,
   liveSkipReason,
@@ -101,7 +107,9 @@ describe("collectLiveSkippedEntries", () => {
     expect(entries[0]).toMatchObject({
       sourceFile: "mixed.spec.ts",
       reason: "@qa-live-policy: skip",
+      policy: "skip",
     });
+    expect(entries[1].policy).toBe("blocked-live-skip");
     expect(entries[1]).toMatchObject({
       sourceFile: "msw.spec.ts",
       reason: "@qa-live-skip",
@@ -128,5 +136,137 @@ describe("countLiveSpecTests", () => {
   it("counts tests across scenarios", () => {
     expect(countLiveSpecTests(sampleSpec)).toBe(4);
     expect(countLiveSpecTests(filterSpecForLiveJson(sampleSpec))).toBe(1);
+  });
+});
+
+describe("countUnparsedSpecTests", () => {
+  it("sums the parser's per-file unparsed counts", () => {
+    expect(countUnparsedSpecTests(sampleSpec)).toBe(0);
+    expect(
+      countUnparsedSpecTests({
+        scenarios: [{ unparsedTestCount: 2 }, {}, { unparsedTestCount: 1 }],
+      }),
+    ).toBe(3);
+  });
+});
+
+const SPEC_SOURCE = `// @qa-page: dashboard
+// @qa-scenario: ACTIVE
+import { expect, test } from "@playwright/test";
+
+test.describe("Dashboard", () => {
+  // @qa-live-policy: readonly
+  test("shows score", async ({ page }) => {
+    await expect(page.getByTestId("score")).toContainText("98점");
+  });
+
+  // @qa-live-policy: skip
+  test("changes the subscription plan", async ({ page }) => {
+    await page.getByRole("button", { name: "Upgrade" }).click();
+  });
+});
+`;
+
+describe("spec stage artifact", () => {
+  let root = "";
+  let specDir = "";
+  let outputDir = "";
+
+  const argv = (...extra: string[]) => [
+    "--page=dashboard",
+    `--project-root=${root}`,
+    "--spec-dir=specs/{page}",
+    "--output-dir=out/{page}",
+    ...extra,
+  ];
+
+  beforeEach(() => {
+    resetProjectConfigForTests();
+    root = mkdtempSync(join(tmpdir(), "qa-spec-stage-"));
+    specDir = join(root, "specs", "dashboard");
+    outputDir = join(root, "out", "dashboard");
+    mkdirSync(specDir, { recursive: true });
+    writeFileSync(join(specDir, "dashboard.spec.ts"), SPEC_SOURCE);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "table").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetProjectConfigForTests();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const read = (file: string) =>
+    JSON.parse(readFileSync(join(outputDir, file), "utf8"));
+
+  it("records excluded tests, their reasons, and the spec-sources hash", async () => {
+    await runSpec(argv());
+
+    const spec = read("dashboard-qa-spec.json");
+    expect(spec.artifactKind).toBe("qa-spec");
+    expect(spec.specSourcesHash).toMatch(/^sha256:/);
+    expect(spec.parserVersion).toBe("1.0.0");
+    expect(spec.unparsedTestCount).toBe(0);
+    expect(spec.excluded).toEqual([
+      {
+        sourceFile: "dashboard.spec.ts",
+        scenarioId: "ACTIVE",
+        title: "changes the subscription plan",
+        reason: "@qa-live-policy: skip",
+        policy: "skip",
+      },
+    ]);
+    expect(countLiveSpecTests(spec)).toBe(1);
+
+    // Same stamps on the rule-abstracted artifact abstract-ai actually reads.
+    const abstracted = read("dashboard-qa-spec-abstracted.json");
+    expect(abstracted.specSourcesHash).toBe(spec.specSourcesHash);
+    expect(abstracted.excluded).toEqual(spec.excluded);
+  });
+
+  it("changes the spec-sources hash when a spec file changes", async () => {
+    await runSpec(argv());
+    const first = read("dashboard-qa-spec.json").specSourcesHash;
+
+    resetProjectConfigForTests();
+    writeFileSync(
+      join(specDir, "dashboard.spec.ts"),
+      SPEC_SOURCE.replace("shows score", "shows the score"),
+    );
+    await runSpec(argv());
+
+    expect(read("dashboard-qa-spec.json").specSourcesHash).not.toBe(first);
+  });
+
+  it("records tests the parser could not read", async () => {
+    writeFileSync(
+      join(specDir, "dashboard.spec.ts"),
+      `${SPEC_SOURCE}\ntest("delegated to a shared handler", sharedHandler);\n`,
+    );
+    await runSpec(argv());
+
+    expect(read("dashboard-qa-spec.json").unparsedTestCount).toBe(1);
+  });
+
+  it("fails with the absolute path when a fixture is missing", async () => {
+    writeFileSync(
+      join(specDir, "dashboard.spec.ts"),
+      SPEC_SOURCE.replace(
+        "  // @qa-live-policy: readonly",
+        `// @qa-fixture: invoice=fixtures/invoice.pdf\n  // @qa-live-policy: readonly`,
+      ),
+    );
+
+    await expect(runSpec(argv())).rejects.toThrow(
+      join(root, "fixtures", "invoice.pdf"),
+    );
+
+    resetProjectConfigForTests();
+    await runSpec(argv("--allow-missing-fixtures"));
+    expect(read("dashboard-qa-spec.json").scenarios[0].tests[0]).toMatchObject({
+      fixtures: { invoice: "fixtures/invoice.pdf" },
+    });
   });
 });

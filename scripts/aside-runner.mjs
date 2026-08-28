@@ -1,10 +1,11 @@
-import { writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import {
-  extractJsonFromHermesOutput,
-  prepareHermesJsonParseSurface,
-  redactSensitiveText,
-} from "./hermes-runner.mjs";
+  AGENT_DEFAULT_TIMEOUT_MS,
+  finalizeAgentRun,
+  resolveTimeoutMs,
+  writeAgentQueryArtifact,
+} from "./agent-output.mjs";
+import { UsageError } from "./errors.mjs";
 
 export const REQUIRED_ASIDE_BIN = "aside";
 export const ASIDE_QA_COMMAND =
@@ -12,15 +13,12 @@ export const ASIDE_QA_COMMAND =
 
 /**
  * Aside has no max-turns flag, so a wall-clock timeout is the only runaway
- * guard (Hermes caps at --max_turns instead).
+ * guard (Hermes caps at --max_turns as well as this timeout).
  */
-export const ASIDE_QA_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+export const ASIDE_QA_DEFAULT_TIMEOUT_MS = AGENT_DEFAULT_TIMEOUT_MS;
 
 export function resolveAsideTimeoutMs() {
-  const parsed = Number(process.env.ASIDE_QA_TIMEOUT_MS);
-  return Number.isFinite(parsed) && parsed > 0
-    ? parsed
-    : ASIDE_QA_DEFAULT_TIMEOUT_MS;
+  return resolveTimeoutMs("ASIDE_QA_TIMEOUT_MS", ASIDE_QA_DEFAULT_TIMEOUT_MS);
 }
 
 /**
@@ -42,27 +40,15 @@ export function buildAsideAgentArgs(query) {
 export function runAside(
   query,
   _maxTurns,
-  {
-    paths = null,
-    secrets = [],
-    requiredKeys = ["status"],
-    requiredKeyGroups = null,
-    mode = "browse",
-  } = {}
+  { paths = null, secrets = [], requiredKeys = ["status"], requiredKeyGroups = null } = {}
 ) {
   if (ASIDE_QA_COMMAND !== REQUIRED_ASIDE_BIN) {
-    throw new Error(
+    throw new UsageError(
       `Aside command must be exactly ${REQUIRED_ASIDE_BIN}. Got: ${JSON.stringify(ASIDE_QA_COMMAND)}`
     );
   }
 
-  const queryPath =
-    paths?.hermesQuery ??
-    paths?.hermesAbstractQuery ??
-    paths?.hermesReviewQuery;
-  if (queryPath) {
-    writeFileSync(queryPath, redactSensitiveText(query, secrets));
-  }
+  writeAgentQueryArtifact(paths, query, secrets);
 
   const timeout = resolveAsideTimeoutMs();
   const result = spawnSync(ASIDE_QA_COMMAND, buildAsideAgentArgs(query), {
@@ -73,48 +59,14 @@ export function runAside(
     timeout,
   });
 
-  if (result.error) {
-    if (result.error.code === "ETIMEDOUT") {
-      throw new Error(
-        `Aside timed out after ${timeout}ms (ASIDE_QA_TIMEOUT_MS to adjust).`
-      );
-    }
-    throw result.error;
-  }
-
-  const combinedOutput = [
-    result.stdout ? `--- stdout ---\n${result.stdout}` : "",
-    result.stderr ? `--- stderr ---\n${result.stderr}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-  const redactedCombinedOutput = redactSensitiveText(
-    combinedOutput || "no output",
-    secrets
-  );
-
-  const rawPath =
-    paths?.hermesRawOutput ??
-    paths?.hermesAbstractRawOutput ??
-    paths?.hermesReviewRawOutput;
-  if (rawPath) {
-    writeFileSync(rawPath, redactedCombinedOutput);
-  }
-
-  if (result.status !== 0) {
-    throw new Error(
-      `Aside failed (exit ${result.status}): ${redactSensitiveText(result.stderr || result.stdout || "no output", secrets)}`
-    );
-  }
-
-  const parseSurface = redactSensitiveText(
-    prepareHermesJsonParseSurface(result.stdout, result.stderr),
-    secrets
-  );
-
-  return extractJsonFromHermesOutput(parseSurface, {
+  return finalizeAgentRun(result, {
+    adapterLabel: "Aside",
+    command: ASIDE_QA_COMMAND,
+    paths,
+    secrets,
     requiredKeys,
     requiredKeyGroups,
-    rawOutputPath: rawPath,
+    timeoutMs: timeout,
+    timeoutHint: "Raise ASIDE_QA_TIMEOUT_MS if Aside legitimately needs longer.",
   });
 }

@@ -5,6 +5,7 @@ import {
   applyStagingUrlDefaults,
 } from "./hermes-qa-project-config.mjs";
 import {
+  assertRealBaseUrl,
   assertStagingQaCredentials,
   buildJudgeTargetUrl,
   isAuthRequired,
@@ -14,12 +15,13 @@ import {
 } from "./staging-qa-config.mjs";
 
 const NON_INTERACTIVE_FLAGS = new Set(["--non-interactive", "--yes", "-y"]);
-const VALID_SCENARIO_IDS = new Set(["ACTIVE", "INACTIVE", "CANCEL_PENDING"]);
+
+/** Completions only — `@qa-scenario` is free-form intent text. */
+const SUGGESTED_ACCOUNT_STATES = ["ACTIVE", "INACTIVE", "CANCEL_PENDING"];
 
 export function normalizeScenarioId(value) {
   if (!value) return "";
-  const normalized = String(value).trim().toUpperCase();
-  return VALID_SCENARIO_IDS.has(normalized) ? normalized : "";
+  return String(value).trim().toUpperCase();
 }
 
 export function shouldPromptInteractively(argv = process.argv.slice(2)) {
@@ -43,6 +45,42 @@ async function promptLine(question, defaultValue = "") {
   }
 }
 
+// Raw-mode control codes, by code point: EOT and ETX are not printable here.
+const CHAR_END_OF_TRANSMISSION = 4;
+const CHAR_INTERRUPT = 3;
+const CHAR_DELETE = 127;
+const CHAR_BACKSPACE = 8;
+
+/**
+ * Fold one raw-mode stdin chunk into the buffer. A pasted password arrives as a
+ * single multi-character chunk (often with a trailing newline), so control
+ * characters have to be found inside the chunk, not compared against it.
+ *
+ * @returns {{ value: string, done: boolean, cancelled: boolean }}
+ */
+export function applyHiddenInputChunk(value, chunk) {
+  let next = value;
+
+  for (const char of String(chunk)) {
+    const code = char.charCodeAt(0);
+
+    if (char === "\n" || char === "\r" || code === CHAR_END_OF_TRANSMISSION) {
+      return { value: next, done: true, cancelled: false };
+    }
+    if (code === CHAR_INTERRUPT) {
+      return { value: next, done: true, cancelled: true };
+    }
+    if (code === CHAR_DELETE || code === CHAR_BACKSPACE) {
+      next = next.slice(0, -1);
+      continue;
+    }
+
+    next += char;
+  }
+
+  return { value: next, done: false, cancelled: false };
+}
+
 async function promptHidden(question) {
   if (!input.isTTY) {
     throw new Error("Cannot prompt for password without an interactive TTY.");
@@ -56,31 +94,21 @@ async function promptHidden(question) {
   let value = "";
 
   return new Promise((resolve, reject) => {
-    const onData = char => {
-      if (char === "\n" || char === "\r" || char === "\u0004") {
-        input.setRawMode(false);
-        input.pause();
-        input.removeListener("data", onData);
-        output.write("\n");
-        resolve(value);
-        return;
-      }
+    const onData = chunk => {
+      const result = applyHiddenInputChunk(value, chunk);
+      value = result.value;
+      if (!result.done) return;
 
-      if (char === "\u0003") {
-        input.setRawMode(false);
-        input.pause();
-        input.removeListener("data", onData);
-        output.write("\n");
+      input.setRawMode(false);
+      input.pause();
+      input.removeListener("data", onData);
+      output.write("\n");
+
+      if (result.cancelled) {
         reject(new Error("Prompt cancelled."));
         return;
       }
-
-      if (char === "\u007f" || char === "\b") {
-        value = value.slice(0, -1);
-        return;
-      }
-
-      value += char;
+      resolve(value);
     };
 
     input.on("data", onData);
@@ -140,15 +168,16 @@ export async function promptRunConfig(
 
   if (!config.expectedSubscriptionStatus) {
     const override = await promptLine(
-      "Expected subscription status (ACTIVE/INACTIVE/CANCEL_PENDING, empty=let Hermes infer on live page)"
+      `Expected account state (any @qa-scenario id, e.g. ${SUGGESTED_ACCOUNT_STATES.join("/")}; empty=let the judge infer from the live page)`
     );
     const normalized = normalizeScenarioId(override);
     if (normalized) {
       config.expectedSubscriptionStatus = normalized;
+      config.expectedAccountState = normalized;
     }
   } else {
     output.write(
-      `Using expected subscription status from config/env: ${config.expectedSubscriptionStatus}\n`
+      `Using expected account state from config/env: ${config.expectedSubscriptionStatus}\n`
     );
   }
 
@@ -192,6 +221,8 @@ export async function resolveStagingQaConfig(
     applyStagingAccountDefaults(config, page);
     applyStagingUrlDefaults(config, argv);
   }
+  // Fail before prompting: no answer makes the placeholder origin judgeable.
+  assertRealBaseUrl(config);
   if (!shouldPromptInteractively(argv)) {
     if (requireCredentials) assertStagingQaCredentials(config);
     return { config, target };

@@ -16,7 +16,11 @@ export function liveSkipReason(scenario, test) {
   return test.liveRunPolicy ?? "skip";
 }
 
-/** Flat list of skipped tests (including whole-file @qa-live-skip scenarios). */
+/**
+ * Flat list of skipped tests (including whole-file @qa-live-skip scenarios).
+ * This is what the `spec` artifact persists as `excluded`: a test dropped from
+ * live QA and recorded nowhere is indistinguishable from a test that passed.
+ */
 export function collectLiveSkippedEntries(spec) {
   const entries = [];
 
@@ -28,11 +32,20 @@ export function collectLiveSkippedEntries(spec) {
         scenarioId: scenario.scenarioId,
         title: test.title,
         reason: liveSkipReason(scenario, test),
+        policy: test.livePolicyAnnotation ?? test.liveRunPolicy ?? null,
       });
     }
   }
 
   return entries;
+}
+
+/** Test declarations the parser could not read, summed across scenarios. */
+export function countUnparsedSpecTests(spec) {
+  return (spec?.scenarios ?? []).reduce(
+    (total, scenario) => total + (scenario.unparsedTestCount ?? 0),
+    0
+  );
 }
 
 /** Drop live-skipped scenarios/tests before writing qa-spec JSON. */
