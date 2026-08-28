@@ -6,7 +6,8 @@
       "component": "playwright-spec-for-ai-agent",
       "changelog-path": "CHANGELOG.md",
       "include-component-in-tag": false,
-      "include-v-in-tag": true
+      "include-v-in-tag": true,
+      "skip-github-release": true
     }
   }
 }

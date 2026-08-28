@@ -4,17 +4,22 @@ on:
   push:
     branches:
       - main
+    # Pushing a tag by hand re-runs a publish (e.g. after a transient npm failure).
+    tags:
+      - "v*"
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
+  # Maintains the release PR: version bump, CHANGELOG, manifest.
+  # `skip-github-release` keeps it from publishing a GitHub Release, which is
+  # what shows up in followers' activity feeds. The trade-off is that it also
+  # stops tagging, so the publish job below owns the tag.
   release-please:
+    if: startsWith(github.ref, 'refs/heads/')
     runs-on: ubuntu-latest
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -24,24 +29,76 @@ jobs:
           manifest-file: .release-please-manifest.json
 
   publish-npm:
+    # On main: always runs after release-please, then no-ops unless the version
+    # in package.json has no tag yet. On a tag push: runs directly.
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
+    if: always() && !cancelled() && needs.release-please.result != 'failure'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Need the tag list to tell an already-published version from a new one.
+          fetch-depth: 0
+          # Pick up the release commit release-please just pushed, not the SHA
+          # this run started from.
+          ref: ${{ github.ref }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           registry-url: https://registry.npmjs.org
 
-      - run: npm ci
+      - name: Decide whether to publish
+        id: check
+        run: |
+          set -euo pipefail
+          git fetch --tags --force --quiet
+          version="$(node -p "require('./package.json').version")"
+          tag="v${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            # The tag exists. Only publish if this run *is* that tag being
+            # pushed on purpose and npm does not have the version yet.
+            if [ "${GITHUB_REF}" = "refs/tags/${tag}" ]; then
+              name="$(node -p "require('./package.json').name")"
+              if npm view "${name}@${version}" version >/dev/null 2>&1; then
+                echo "publish=false" >> "$GITHUB_OUTPUT"
+                echo "::notice::${name}@${version} is already on npm; nothing to do."
+              else
+                echo "publish=true" >> "$GITHUB_OUTPUT"
+                echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+              fi
+            else
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::${tag} already tagged; no new release in this push."
+            fi
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - run: npm ci
+        if: steps.check.outputs.publish == 'true'
+
+      # Gate the publish on the same suite CI runs; a tag push skips CI otherwise.
       - run: npm test
+        if: steps.check.outputs.publish == 'true'
+
+      - name: Tag the release
+        if: steps.check.outputs.publish == 'true' && steps.check.outputs.tag_exists == 'false'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.check.outputs.tag }}" -m "${{ steps.check.outputs.tag }}"
+          git push origin "${{ steps.check.outputs.tag }}"
 
       - run: npm publish --provenance --access public
+        if: steps.check.outputs.publish == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
