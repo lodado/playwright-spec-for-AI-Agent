@@ -100,6 +100,51 @@ describe("normalizeAbstractAiResult", () => {
     expect(result.spec.abstraction.stage).toBe("rules");
   });
 
+  it("to cap a check at manual_review when the plan never mentions what the parser read", () => {
+    const withLocator = {
+      ...baseSpec,
+      scenarios: [
+        {
+          scenarioId: "ACTIVE",
+          tests: [
+            {
+              checkId: "t1",
+              title: "shows score",
+              livePolicyAnnotation: "safe-interaction",
+              parserIntegrity: "complete",
+              expectations: [
+                {
+                  type: "visible",
+                  locator: { kind: "testId", value: "health-score" },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = normalizeAbstractAiResult(withLocator, {
+      livePlan: validPlan,
+    });
+
+    expect(result.audit.repairs).toEqual([
+      {
+        kind: "plan-parser-disagreement",
+        checkId: "t1",
+        title: "shows score",
+        detail:
+          "the plan never mentions health-score, which this test asserts on; capped at manual_review",
+      },
+    ]);
+    expect(result.livePlan).toContain("health-score");
+    expect(result.livePlan).toContain("manual_review");
+    // The caution goes inside the existing block: a second heading for the same
+    // test would inflate the planned count and report the check twice.
+    expect(result.livePlan!.match(/^###\s/gm)).toHaveLength(1);
+    expect(result.audit.coverage).toMatchObject({ planned: 1, addressed: 1 });
+  });
+
   it("repairs a plan that misses a planned test", () => {
     const twoTests = {
       ...baseSpec,
