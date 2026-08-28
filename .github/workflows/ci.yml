@@ -25,6 +25,8 @@ jobs:
 
       - run: npm test
 
+      - run: npm run test:api-drift
+
   demo:
     runs-on: ubuntu-latest
     steps:

@@ -63,6 +63,7 @@
     "qa:report": "node bin/playwright-spec-for-ai-agent.mjs report",
     "qa:show": "node bin/playwright-spec-for-ai-agent.mjs show",
     "test": "vitest run",
+    "test:api-drift": "node scripts/check-playwright-api-drift.mjs",
     "prepublishOnly": "npm test"
   },
   "peerDependencies": {
