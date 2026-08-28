@@ -520,7 +520,7 @@ export function describeLiveRunPolicy(liveRunPolicy) {
   }
 }
 
-function parseLocatorExpression(expression) {
+function parseLocatorExpression(expression, aliases = null) {
   const testIdMatch = expression.match(
     /page\.getByTestId\(\s*(["'`])((?:\\.|(?!\1).)*?)\1\s*\)/
   );
@@ -564,6 +564,10 @@ function parseLocatorExpression(expression) {
     if (match) return { kind, value: unescapeString(match[2]) };
   }
 
+  // A bare identifier is only a locator if the test bound one to it earlier.
+  const alias = aliases?.get(expression.trim());
+  if (alias) return alias;
+
   return null;
 }
 
@@ -582,6 +586,83 @@ function parseStringLiteral(value) {
   return { kind: "template", pattern: `^${shape}$` };
 }
 
+/**
+ * Split a call's argument list on top-level commas, respecting nesting and
+ * strings. `toContainText("x", { timeout: 20_000 })` is one of the most common
+ * shapes in a real suite, and treating the whole list as the expected value
+ * dropped the assertion entirely.
+ */
+export function splitCallArguments(argumentList) {
+  const parts = [];
+  let depth = 0;
+  let quote = null;
+  let current = "";
+
+  for (let index = 0; index < argumentList.length; index += 1) {
+    const char = argumentList[index];
+
+    if (quote) {
+      current += char;
+      if (char === "\\") {
+        current += argumentList[index + 1] ?? "";
+        index += 1;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if ("([{".includes(char)) depth += 1;
+    if (")]}".includes(char)) depth -= 1;
+    if (char === "," && depth === 0) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+
+  if (current.trim()) parts.push(current);
+  return parts;
+}
+
+/**
+ * The argument list of the call starting at `openIndex` (the index of its `(`),
+ * matched by brace balance rather than by the first `)`. A lazy regex stopped
+ * at the `)` inside `{ timeout: 20_000 }`… and at the one closing a nested
+ * `getByRole(...)`.
+ */
+function readBalancedArguments(text, openIndex) {
+  let depth = 0;
+  let quote = null;
+
+  for (let index = openIndex; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (quote) {
+      if (char === "\\") index += 1;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") depth += 1;
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) return text.slice(openIndex + 1, index);
+    }
+  }
+
+  return null;
+}
+
 function parseStaticExpected(value) {
   const trimmed = value.trim();
   const stringMatch = trimmed.match(/^(["'`])((?:\\.|(?!\1).)*)\1$/s);
@@ -593,21 +674,51 @@ function parseStaticExpected(value) {
   return null;
 }
 
-export function parseReadOnlyExpectations(body) {
+/**
+ * Locators a test binds to a local name before asserting on them:
+ * `const amount = page.getByTestId("x")` then `expect(amount)`. Only bindings
+ * whose initialiser this parser can already resolve are recorded, so an alias
+ * for an expression it cannot read stays unreadable rather than resolving to
+ * something wrong.
+ */
+function collectLocatorAliases(body) {
+  const aliases = new Map();
+  const pattern =
+    /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]+(?:\n\s*\.[^;\n]+)*)\s*;/g;
+
+  for (const match of body.matchAll(pattern)) {
+    const locator = parseLocatorExpression(match[2].trim(), aliases);
+    if (locator) aliases.set(match[1], locator);
+  }
+
+  return aliases;
+}
+
+export function parseReadOnlyExpectations(body, inheritedAliases = null) {
   const expectations = [];
+  // A caller analysing one statement at a time passes the aliases collected
+  // over the whole test; on its own, this function collects them itself.
+  const aliases = inheritedAliases ?? collectLocatorAliases(body);
   const chunks = body.split(/await expect\(/).slice(1);
 
   for (const chunk of chunks) {
     const statement = `await expect(${chunk}`;
     const targetMatch = statement.match(
-      /expect\(\s*([\s\S]*?)\s*\)\s*\.\s*(not\s*\.\s*)?([A-Za-z_$][\w$]*)\s*\(([\s\S]*?)\)/m
+      /expect\(\s*([\s\S]*?)\s*\)\s*\.\s*(not\s*\.\s*)?([A-Za-z_$][\w$]*)\s*\(/m
     );
     if (!targetMatch) continue;
-    const locator = parseLocatorExpression(targetMatch[1]);
+    const locator = parseLocatorExpression(targetMatch[1], aliases);
     if (!locator) continue;
     const negated = Boolean(targetMatch[2]);
     const matcher = targetMatch[3];
-    const argument = targetMatch[4];
+    // Balanced, so `{ timeout: 20_000 }` and nested calls do not truncate it.
+    const argumentList = readBalancedArguments(
+      statement,
+      targetMatch.index + targetMatch[0].length - 1
+    );
+    if (argumentList === null) continue;
+    // Playwright matchers take the expected value first and options second.
+    const argument = splitCallArguments(argumentList)[0] ?? "";
 
     if (matcher === "toBeHidden" || (matcher === "toBeVisible" && negated)) {
       expectations.push({ type: "notVisible", locator });
@@ -706,20 +817,26 @@ export function analyzeReadOnlyExpectations(
   body,
   { fileName = "<source>", sourceOffset = 0, source = body } = {}
 ) {
-  const expectations = [];
   const unsupportedConstructs = [];
   const candidates = [...body.matchAll(/await\s+expect\s*\(/g)];
+  // Parsed once over the whole body, so a locator bound to a local name earlier
+  // in the test resolves. Slicing each statement out first hid those bindings
+  // and made a readable assertion look like an unsupported construct.
+  const aliases = collectLocatorAliases(body);
+  const expectations = [];
 
   for (const [candidateIndex, candidate] of candidates.entries()) {
     const end = candidates[candidateIndex + 1]?.index ?? body.length;
     const statement = body.slice(candidate.index, end);
-    const parsed = parseReadOnlyExpectations(statement);
+    const parsed = parseReadOnlyExpectations(statement, aliases);
     if (parsed.length > 0) {
       expectations.push(...parsed);
       continue;
     }
 
-    const matcher = statement.match(/\)\s*\.\s*(?:not\s*\.\s*)?([A-Za-z_$][\w$]*)/)?.[1];
+    const matcher = statement.match(
+      /\)\s*\.\s*(?:not\s*\.\s*)?([A-Za-z_$][\w$]*)/
+    )?.[1];
     unsupportedConstructs.push({
       api: matcher ?? "expect",
       category: "assertion",

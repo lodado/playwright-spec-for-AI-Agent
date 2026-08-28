@@ -101,3 +101,24 @@ describe("spec command as a parser integrity boundary", () => {
     expect(() => assertParserIntegrity(spec, { strict: false })).not.toThrow();
   });
 });
+
+describe("analyzeReadOnlyExpectations as a test that binds its locator first", () => {
+  it("to count an aliased assertion as parsed, not as an unsupported construct", () => {
+    const body = [
+      `const amount = page.getByTestId("scheduled-amount");`,
+      `await expect(amount).toContainText("VAT 포함", { timeout: 20_000 });`,
+      `await expect(amount).not.toContainText("₩251,000");`,
+    ].join("\n");
+
+    const analysis = analyzeReadOnlyExpectations(body, {
+      fileName: "payg.spec.ts",
+    });
+
+    expect(analysis.coverage).toEqual({
+      assertionsFound: 2,
+      assertionsParsed: 2,
+      unsupportedCount: 0,
+    });
+    expect(analysis.unsupportedConstructs).toEqual([]);
+  });
+});
