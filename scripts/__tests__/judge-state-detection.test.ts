@@ -8,7 +8,7 @@ import {
   selectableScenarioIds,
   UNKNOWN_STATE,
 } from "../judge-state-detection.mjs";
-import { selectScenariosForLiveRun } from "../dashboard-spec-parser.mjs";
+import { selectScenariosForLiveRun } from "../spec-annotation-reader.mjs";
 
 const SPEC = {
   scenarios: [

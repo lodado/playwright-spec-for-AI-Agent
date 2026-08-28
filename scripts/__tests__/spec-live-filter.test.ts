@@ -207,7 +207,7 @@ describe("spec stage artifact", () => {
     const spec = read("dashboard-qa-spec.json");
     expect(spec.artifactKind).toBe("qa-spec");
     expect(spec.specSourcesHash).toMatch(/^sha256:/);
-    expect(spec.parserVersion).toBe("1.0.0");
+    expect(spec.parserVersion).toBe("2.0.0");
     expect(spec.unparsedTestCount).toBe(0);
     expect(spec.excluded).toEqual([
       {
@@ -219,11 +219,6 @@ describe("spec stage artifact", () => {
       },
     ]);
     expect(countLiveSpecTests(spec)).toBe(1);
-
-    // Same stamps on the rule-abstracted artifact abstract-ai actually reads.
-    const abstracted = read("dashboard-qa-spec-abstracted.json");
-    expect(abstracted.specSourcesHash).toBe(spec.specSourcesHash);
-    expect(abstracted.excluded).toEqual(spec.excluded);
   });
 
   it("changes the spec-sources hash when a spec file changes", async () => {

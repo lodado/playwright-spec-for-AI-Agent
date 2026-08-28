@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseSpecDirectory } from "../dashboard-spec-parser.mjs";
+import { parseSpecDirectory } from "../spec-annotation-reader.mjs";
 import {
   loadProjectConfig,
   resetProjectConfigForTests,

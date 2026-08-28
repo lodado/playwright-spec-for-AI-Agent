@@ -360,7 +360,6 @@ describe("resolveSpecForJudge staleness", () => {
     const root = mkdtempSync(join(tmpdir(), "judge-spec-"));
     const paths: Record<string, string> = {
       specJson: join(root, "spec.json"),
-      specAbstractedJson: join(root, "spec-abstracted.json"),
       specLiveJson: join(root, "spec-live.json"),
     };
     for (const [key, value] of Object.entries(files)) {
@@ -395,10 +394,10 @@ describe("resolveSpecForJudge staleness", () => {
   });
 
   it("treats an unstamped artifact as unverifiable, not stale", () => {
-    const paths = writeSpecs({ specJson: raw, specAbstractedJson: raw });
+    const paths = writeSpecs({ specJson: raw, specLiveJson: raw });
 
     const resolved = resolveSpecForJudge(paths)!;
-    expect(resolved.planSource).toBe("spec-abstracted.json");
+    expect(resolved.planSource).toBe("spec-live.json");
     expect(resolved.staleness).toEqual({
       ok: true,
       expected: null,

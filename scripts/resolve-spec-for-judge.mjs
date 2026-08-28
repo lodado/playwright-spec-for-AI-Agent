@@ -4,7 +4,6 @@ import { hashSpecDefinition, verifySourceHash } from "./spec-hash.mjs";
 /** Preference order: the most processed artifact wins, raw spec is the floor. */
 const CANDIDATES = [
   ["specLiveJson", "spec-live.json"],
-  ["specAbstractedJson", "spec-abstracted.json"],
   ["specJson", "spec.json"],
 ];
 

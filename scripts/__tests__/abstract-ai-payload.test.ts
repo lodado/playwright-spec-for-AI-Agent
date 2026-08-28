@@ -39,49 +39,58 @@ describe("buildGwtPromptSpec", () => {
     expect(compact.scenarios[0]).not.toHaveProperty("fileAnnotations");
   });
 
-  it("to quote the playwright source of each runnable test so the plan is derived from the spec, not from the parser", () => {
-    const compact = buildGwtPromptSpec(
-      {
-        scenarios: [
-          {
-            scenarioId: "ACTIVE",
-            label: "Active",
-            sourceFile: "dash.spec.ts",
-            tests: [
-              {
-                title: "shows plan",
-                checkId: "shows-plan",
-                livePolicyAnnotation: "readonly",
-                liveRunPolicy: "executable-readonly",
-              },
-              {
-                title: "cancels plan",
-                checkId: "cancels-plan",
-                livePolicyAnnotation: "subscription-mutation",
-                liveRunPolicy: "blocked-subscription-mutation",
-              },
-            ],
-          },
-        ],
-      },
-      {
-        specSourceFiles: {
-          "dash.spec.ts": [
-            'test("shows plan", async ({ page }) => {',
-            '  await expect(page.getByTestId("plan")).toHaveScreenshot();',
-            "});",
-            'test("cancels plan", async ({ page }) => {',
-            '  await page.getByTestId("cancel").click();',
-            "});",
-          ].join("\n"),
+  it("to carry every declared annotation so the plan is written against the contract", () => {
+    const compact = buildGwtPromptSpec({
+      scenarios: [
+        {
+          scenarioId: "ACTIVE",
+          page: "dashboard",
+          label: "Active",
+          sourceFile: "dash.spec.ts",
+          fixtures: { logo: "tests/fixtures/logo.png" },
+          tests: [
+            {
+              title: "shows plan",
+              checkId: "shows-plan",
+              livePolicyAnnotation: "readonly",
+              liveRunPolicy: "executable-readonly",
+              fixtures: { avatar: "tests/fixtures/avatar.png" },
+            },
+          ],
         },
-      },
-    );
+      ],
+    });
 
-    // The parser cannot represent toHaveScreenshot, but the agent still sees it.
-    expect(compact.scenarios[0].tests[0].source).toContain("toHaveScreenshot()");
-    // A blocked test is never run: quoting it is prompt weight with no reader.
-    expect(compact.scenarios[0].tests[1]).not.toHaveProperty("source");
+    expect(compact.scenarios[0]).toMatchObject({
+      page: "dashboard",
+      fixtures: { logo: "tests/fixtures/logo.png" },
+    });
+    expect(compact.scenarios[0].tests[0]).toMatchObject({
+      qaLivePolicy: "readonly",
+      fixtures: { avatar: "tests/fixtures/avatar.png" },
+    });
+  });
+
+  it("to withhold the playwright body so the plan describes behaviour, not implementation", () => {
+    const compact = buildGwtPromptSpec({
+      scenarios: [
+        {
+          scenarioId: "ACTIVE",
+          label: "Active",
+          sourceFile: "dash.spec.ts",
+          tests: [
+            {
+              title: "shows plan",
+              checkId: "shows-plan",
+              livePolicyAnnotation: "readonly",
+              liveRunPolicy: "executable-readonly",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(compact.scenarios[0].tests[0]).not.toHaveProperty("source");
   });
 });
 
@@ -95,10 +104,10 @@ describe("buildAbstractHermesQuery", () => {
     expect(query).toContain("Never: ...");
   });
 
-  it("to tell the agent the playwright source outranks the test title", () => {
+  it("to tell the agent it has no code and must not invent implementation detail", () => {
     const query = buildAbstractHermesQuery({ task: "abstract-qa-spec-gwt" });
 
-    expect(query).toContain("`source`");
-    expect(query).toContain("authority on what the check asserts");
+    expect(query).toContain("not its code");
+    expect(query).toContain("Do not invent selectors");
   });
 });

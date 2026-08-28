@@ -4,9 +4,17 @@ import * as projectConfig from "./hermes-qa-project-config.mjs";
 import { UsageError } from "./errors.mjs";
 
 /**
- * Extract QA annotations from spec file source.
- * Every annotation must start its own comment line — prose that merely mentions
- * one is documentation, not an annotation.
+ * Reads QA annotations out of Playwright spec files.
+ *
+ * This module deliberately does NOT interpret assertions. It answers only the
+ * questions the pipeline actually needs to route a test — which page, which
+ * scenario, which live policy, which fixtures — and leaves the meaning of the
+ * test body to the agent that reads the source. An earlier version parsed
+ * `expect(...)` chains into a structured `expectations` array; it was deleted
+ * because it could only name the matchers it happened to support, so every
+ * unsupported assertion silently narrowed the plan, and every Playwright
+ * release threatened to widen that gap.
+ *
  * Supported file-level annotations:
  *   // @qa-page: dashboard
  *   // @qa-scenario: ACTIVE
@@ -26,6 +34,14 @@ import { UsageError } from "./errors.mjs";
  *   safe-interaction — safe UI actions that still require live test replay to verify
  *   safe-interaction-no-confirm — verification would be dangerous on live; mock may click confirm, Hermes must not
  */
+/**
+ * Stamped into the spec artifact's source hash so a change in how annotations
+ * are read invalidates cached plans. Bumped to 2.0.0 when the assertion parser
+ * was removed: artifacts from 1.x carry `expectations` fields that no longer
+ * exist, and must not be reused.
+ */
+export const SPEC_READER_VERSION = "2.0.0";
+
 export const QA_LIVE_POLICY_MAP = {
   readonly: {
     liveRunPolicy: "executable-readonly",
@@ -126,7 +142,7 @@ function skipRegexLiteral(source, index) {
 // A `/` opens a regex only when the previous meaningful character cannot end an
 // expression. Heuristic: `return /re/` reads as division, and a `${...}` hole
 // inside a template literal is skipped whole, so a backtick nested in a hole
-// ends the template early. Both are fine for spec bodies, not for a JS parser.
+// ends the template early. Both are fine for locating block boundaries.
 const REGEX_START_AFTER = /[({[,;=:!&|?+\-*%^~<>]/;
 
 /**
@@ -189,6 +205,10 @@ const LOOSE_TEST_CALL_PATTERN =
   /\btest(?:\s*\.\s*([A-Za-z_$][\w$]*)\s*)?\(\s*["'`]/g;
 const TEST_DECLARATION_MODIFIERS = new Set(["only", "skip", "fixme"]);
 
+/**
+ * Locate each `test(...)` declaration and its body. The body is carried through
+ * verbatim for the agent to read; nothing here interprets it.
+ */
 export function extractTestBlocks(source) {
   const blocks = [];
 
@@ -416,89 +436,18 @@ export function resolveTestLivePolicy(source, testIndex) {
   return null;
 }
 
-export function classifyStagingTest(body) {
-  if (/toHaveURL\(\s*\/\\\/login/.test(body) || /status:\s*401/.test(body)) {
-    return "auth";
-  }
-  if (/\.click\(/.test(body)) return "interaction";
-  if (/open(History|Cancel|Resume)Dialog/.test(body)) return "interaction";
-  if (/route\(\s*(["'`])[^"'`]*plans\/subscription\/resume/.test(body)) {
-    return "interaction";
-  }
-  return "read-only";
-}
-
-/** True when the test body performs or mocks subscription/billing state changes. */
-export function detectSubscriptionMutation(body) {
-  if (
-    /page\.route\([^)]*(?:subscription\/(?:cancel|resume)|checkout|paddle|billing)/i.test(
-      body
-    )
-  ) {
-    return true;
-  }
-
-  if (
-    /route\.fulfill\(\s*\{[^}]*status:\s*204/i.test(body) &&
-    /subscription|resume|cancel|checkout|paddle|billing/i.test(body)
-  ) {
-    return true;
-  }
-
-  // Detect confirm-button click combined with subscription action links.
-  // Adapt the button name patterns to match your application's confirm dialogs.
-  if (
-    /getByRole\(\s*["']button["'][^)]*confirm[^)]*\)\.click\(\)/.test(body) &&
-    /open(Resume|Cancel)Dialog|subscription-(resume|cancel)-link|resumeLink|cancelLink/i.test(
-      body
-    )
-  ) {
-    return true;
-  }
-
-  // Detect clicks on subscription purchase / checkout buttons.
-  // Adapt the button name patterns to match your application's subscription flow.
-  if (
-    /getByRole\(\s*["']button["'][^)]*\)\.click\(\)/.test(body) &&
-    /Subscribe|checkout|paddle/i.test(body)
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-/** True when the test relies on Playwright page.route() or mock setup helpers. */
-export function detectApiMock(body) {
-  return (
-    /page\.route\(/.test(body) ||
-    /setupDashboardWithCredit|setupDashboardWithMocks|setupDashboard/i.test(
-      body
-    )
-  );
-}
-
 /**
  * How a test may run on live staging.
- * - executable-readonly: Hermes verifies parsed expectations on live DOM
- * - executable-interaction: safe actions that need live test replay to verify (no billing mutation)
- * - judgment-mock-api: Playwright skips mocks; Hermes judges live equivalent
- * - blocked-*: Hermes skips or manual_review only
+ * - executable-readonly: agent verifies the test's assertions against live DOM
+ * - executable-interaction: safe actions that need live replay (no billing mutation)
+ * - judgment-mock-api: Playwright mocks are not replayable; agent judges live equivalent
+ * - blocked-*: agent skips or manual_review only
+ *
+ * The value comes from the declared `@qa-live-policy` and nothing else. It used
+ * to be inferred by grepping the body for `.click(` and billing-ish route
+ * patterns; that guessing was removed, because a safety decision that depends
+ * on a regex noticing the right substring fails open on the cases that matter.
  */
-export function classifyLiveRunPolicy(body, stagingMode) {
-  if (stagingMode === "live-skip") return "blocked-live-skip";
-  if (stagingMode === "auth") return "blocked-auth-mock";
-  if (stagingMode === "interaction") {
-    if (detectSubscriptionMutation(body))
-      return "blocked-subscription-mutation";
-    if (detectApiMock(body)) return "judgment-mock-api";
-    return "executable-interaction";
-  }
-  if (detectApiMock(body)) return "judgment-mock-api";
-  if (stagingMode === "read-only") return "executable-readonly";
-  return "blocked-unknown";
-}
-
 export function describeLiveRunPolicy(liveRunPolicy) {
   switch (liveRunPolicy) {
     case "executable-interaction":
@@ -520,416 +469,21 @@ export function describeLiveRunPolicy(liveRunPolicy) {
   }
 }
 
-function parseLocatorExpression(expression, aliases = null) {
-  const testIdMatch = expression.match(
-    /page\.getByTestId\(\s*(["'`])((?:\\.|(?!\1).)*?)\1\s*\)/
-  );
-  if (testIdMatch) {
-    return { kind: "testId", value: unescapeString(testIdMatch[2]) };
-  }
-
-  const textMatch = expression.match(
-    /page\.getByText\(\s*(["'`])((?:\\.|(?!\1).)*?)\1\s*\)/
-  );
-  if (textMatch) {
-    return { kind: "text", value: unescapeString(textMatch[2]) };
-  }
-
-  const roleMatch = expression.match(
-    /page\.getByRole\(\s*(["'`])((?:\\.|(?!\1).)*?)\1\s*(?:,\s*\{([\s\S]*?)\})?\s*\)/
-  );
-  if (roleMatch) {
-    const nameMatch = roleMatch[3]?.match(
-      /\bname\s*:\s*(["'`])((?:\\.|(?!\1).)*?)\1/
-    );
-    return {
-      kind: "role",
-      value: unescapeString(roleMatch[2]),
-      ...(nameMatch
-        ? { name: parseStringLiteral(unescapeString(nameMatch[2])) }
-        : {}),
-    };
-  }
-
-  for (const [method, kind] of [
-    ["getByLabel", "label"],
-    ["getByPlaceholder", "placeholder"],
-    ["getByAltText", "altText"],
-    ["getByTitle", "title"],
-    ["locator", "css"],
-  ]) {
-    const match = expression.match(
-      new RegExp(`page\\.${method}\\(\\s*(["'\\x60])((?:\\\\.|(?!\\1).)*?)\\1\\s*\\)`)
-    );
-    if (match) return { kind, value: unescapeString(match[2]) };
-  }
-
-  // A bare identifier is only a locator if the test bound one to it earlier.
-  const alias = aliases?.get(expression.trim());
-  if (alias) return alias;
-
-  return null;
-}
-
 /**
- * A `${...}` hole is mock-run data, so keep the shape (the static copy around
- * it) and wildcard the interpolation rather than pinning any app's word.
+ * `checkId` keys per-test upload fixtures, so it has to survive a non-Latin
+ * title: stripping to `[a-z0-9]` collapsed every Korean or Japanese title to
+ * the same `unnamed-test`, and two such tests in one file then shared one
+ * fixture entry. Unicode letters and digits are kept as-is.
  */
-function parseStringLiteral(value) {
-  if (!value.includes("${")) return { kind: "literal", value };
-
-  const shape = value
-    .split(/\$\{[^}]*\}/g)
-    .map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-    .join(".+");
-
-  return { kind: "template", pattern: `^${shape}$` };
-}
-
-/**
- * Split a call's argument list on top-level commas, respecting nesting and
- * strings. `toContainText("x", { timeout: 20_000 })` is one of the most common
- * shapes in a real suite, and treating the whole list as the expected value
- * dropped the assertion entirely.
- */
-export function splitCallArguments(argumentList) {
-  const parts = [];
-  let depth = 0;
-  let quote = null;
-  let current = "";
-
-  for (let index = 0; index < argumentList.length; index += 1) {
-    const char = argumentList[index];
-
-    if (quote) {
-      current += char;
-      if (char === "\\") {
-        current += argumentList[index + 1] ?? "";
-        index += 1;
-      } else if (char === quote) {
-        quote = null;
-      }
-      continue;
-    }
-
-    if (char === '"' || char === "'" || char === "`") {
-      quote = char;
-      current += char;
-      continue;
-    }
-    if ("([{".includes(char)) depth += 1;
-    if (")]}".includes(char)) depth -= 1;
-    if (char === "," && depth === 0) {
-      parts.push(current);
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-
-  if (current.trim()) parts.push(current);
-  return parts;
-}
-
-/**
- * The argument list of the call starting at `openIndex` (the index of its `(`),
- * matched by brace balance rather than by the first `)`. A lazy regex stopped
- * at the `)` inside `{ timeout: 20_000 }`… and at the one closing a nested
- * `getByRole(...)`.
- */
-function readBalancedArguments(text, openIndex) {
-  let depth = 0;
-  let quote = null;
-
-  for (let index = openIndex; index < text.length; index += 1) {
-    const char = text[index];
-
-    if (quote) {
-      if (char === "\\") index += 1;
-      else if (char === quote) quote = null;
-      continue;
-    }
-    if (char === '"' || char === "'" || char === "`") {
-      quote = char;
-      continue;
-    }
-    if (char === "(") depth += 1;
-    if (char === ")") {
-      depth -= 1;
-      if (depth === 0) return text.slice(openIndex + 1, index);
-    }
-  }
-
-  return null;
-}
-
-function parseStaticExpected(value) {
-  const trimmed = value.trim();
-  const stringMatch = trimmed.match(/^(["'`])((?:\\.|(?!\1).)*)\1$/s);
-  if (stringMatch) return parseStringLiteral(unescapeString(stringMatch[2]));
-  const regexMatch = trimmed.match(/^\/((?:\\.|[^/])*)\/([dgimsuvy]*)$/s);
-  if (regexMatch) {
-    return { kind: "regex", pattern: regexMatch[1], flags: regexMatch[2] };
-  }
-  return null;
-}
-
-/**
- * Locators a test binds to a local name before asserting on them:
- * `const amount = page.getByTestId("x")` then `expect(amount)`. Only bindings
- * whose initialiser this parser can already resolve are recorded, so an alias
- * for an expression it cannot read stays unreadable rather than resolving to
- * something wrong.
- */
-function collectLocatorAliases(body) {
-  const aliases = new Map();
-  const pattern =
-    /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]+(?:\n\s*\.[^;\n]+)*)\s*;/g;
-
-  for (const match of body.matchAll(pattern)) {
-    const locator = parseLocatorExpression(match[2].trim(), aliases);
-    if (locator) aliases.set(match[1], locator);
-  }
-
-  return aliases;
-}
-
-export function parseReadOnlyExpectations(body, inheritedAliases = null) {
-  const expectations = [];
-  // A caller analysing one statement at a time passes the aliases collected
-  // over the whole test; on its own, this function collects them itself.
-  const aliases = inheritedAliases ?? collectLocatorAliases(body);
-  const chunks = body.split(/await expect\(/).slice(1);
-
-  for (const chunk of chunks) {
-    const statement = `await expect(${chunk}`;
-    const targetMatch = statement.match(
-      /expect\(\s*([\s\S]*?)\s*\)\s*\.\s*(not\s*\.\s*)?([A-Za-z_$][\w$]*)\s*\(/m
-    );
-    if (!targetMatch) continue;
-    const locator = parseLocatorExpression(targetMatch[1], aliases);
-    if (!locator) continue;
-    const negated = Boolean(targetMatch[2]);
-    const matcher = targetMatch[3];
-    // Balanced, so `{ timeout: 20_000 }` and nested calls do not truncate it.
-    const argumentList = readBalancedArguments(
-      statement,
-      targetMatch.index + targetMatch[0].length - 1
-    );
-    if (argumentList === null) continue;
-    // Playwright matchers take the expected value first and options second.
-    const argument = splitCallArguments(argumentList)[0] ?? "";
-
-    if (matcher === "toBeHidden" || (matcher === "toBeVisible" && negated)) {
-      expectations.push({ type: "notVisible", locator });
-      continue;
-    }
-    if (matcher === "toBeVisible") {
-      expectations.push({ type: "visible", locator });
-      continue;
-    }
-    if (matcher === "toContainText" || matcher === "toHaveText") {
-      const expected = parseStaticExpected(argument);
-      if (expected) {
-        expectations.push({
-          type: matcher === "toContainText" ? "containText" : "haveText",
-          locator,
-          expected,
-          ...(negated ? { negated: true } : {}),
-        });
-      }
-      continue;
-    }
-    if (matcher === "toHaveCount") {
-      const expected = Number(argument.trim());
-      if (Number.isInteger(expected)) expectations.push({ type: "count", locator, expected });
-      continue;
-    }
-    if (matcher === "toHaveValue") {
-      const expected = parseStaticExpected(argument);
-      if (expected) expectations.push({ type: "value", locator, expected });
-      continue;
-    }
-    const stateTypes = {
-      toBeEnabled: "enabled",
-      toBeDisabled: "disabled",
-      toBeChecked: "checked",
-      toBeEditable: "editable",
-      toBeEmpty: "empty",
-      toBeFocused: "focused",
-      toBeAttached: "attached",
-      toBeInViewport: "inViewport",
-    };
-    if (stateTypes[matcher]) {
-      expectations.push({ type: stateTypes[matcher], locator, ...(negated ? { negated: true } : {}) });
-      continue;
-    }
-
-    /* Legacy fallbacks below remain during artifact migration. */
-    const notVisibleMatch = statement.match(
-      /expect\(\s*([\s\S]*?)\s*\)\.not\.toBeVisible/m
-    );
-    if (notVisibleMatch) {
-      const locator = parseLocatorExpression(notVisibleMatch[1]);
-      if (locator) expectations.push({ type: "notVisible", locator });
-      continue;
-    }
-
-    const containTextMatch = statement.match(
-      /expect\(\s*([\s\S]*?)\s*\)\.toContainText\(\s*(["'`])((?:\\.|(?!\2).)*?)\2/m
-    );
-    if (containTextMatch) {
-      const locator = parseLocatorExpression(containTextMatch[1]);
-      if (locator) {
-        expectations.push({
-          type: "containText",
-          locator,
-          expected: parseStringLiteral(unescapeString(containTextMatch[3])),
-        });
-      }
-      continue;
-    }
-
-    const visibleMatch = statement.match(
-      /expect\(\s*([\s\S]*?)\s*\)\.toBeVisible/m
-    );
-    if (visibleMatch) {
-      const locator = parseLocatorExpression(visibleMatch[1]);
-      if (locator) expectations.push({ type: "visible", locator });
-    }
-  }
-
-  return expectations;
-}
-
-function sourceLocation(source, index, fileName) {
-  const before = source.slice(0, index);
-  const lines = before.split("\n");
-  return {
-    file: fileName,
-    line: lines.length,
-    column: lines.at(-1).length + 1,
-  };
-}
-
-/** Account for every static `await expect(...)` candidate, including unsupported ones. */
-export function analyzeReadOnlyExpectations(
-  body,
-  { fileName = "<source>", sourceOffset = 0, source = body } = {}
-) {
-  const unsupportedConstructs = [];
-  const candidates = [...body.matchAll(/await\s+expect\s*\(/g)];
-  // Parsed once over the whole body, so a locator bound to a local name earlier
-  // in the test resolves. Slicing each statement out first hid those bindings
-  // and made a readable assertion look like an unsupported construct.
-  const aliases = collectLocatorAliases(body);
-  const expectations = [];
-
-  for (const [candidateIndex, candidate] of candidates.entries()) {
-    const end = candidates[candidateIndex + 1]?.index ?? body.length;
-    const statement = body.slice(candidate.index, end);
-    const parsed = parseReadOnlyExpectations(statement, aliases);
-    if (parsed.length > 0) {
-      expectations.push(...parsed);
-      continue;
-    }
-
-    const matcher = statement.match(
-      /\)\s*\.\s*(?:not\s*\.\s*)?([A-Za-z_$][\w$]*)/
-    )?.[1];
-    unsupportedConstructs.push({
-      api: matcher ?? "expect",
-      category: "assertion",
-      reason: "unsupported assertion or locator expression",
-      severity: "error",
-      location: sourceLocation(source, sourceOffset + candidate.index, fileName),
-    });
-  }
-
-  return {
-    expectations,
-    unsupportedConstructs,
-    coverage: {
-      assertionsFound: candidates.length,
-      assertionsParsed: expectations.length,
-      unsupportedCount: unsupportedConstructs.length,
-    },
-  };
-}
-
-/** Parse statically representable, line-oriented safe actions in source order. */
-export function parseSafeActions(body) {
-  const steps = [];
-  const actionMethods = new Set([
-    "blur",
-    "check",
-    "click",
-    "dblclick",
-    "dragTo",
-    "fill",
-    "focus",
-    "hover",
-    "press",
-    "selectOption",
-    "setInputFiles",
-    "uncheck",
-  ]);
-
-  for (const line of body.split("\n")) {
-    const navigation = line.match(
-      /await\s+page\.(goto|goBack|goForward|reload)\(\s*(.*?)\s*\)\s*;?/
-    );
-    if (navigation) {
-      const expected = parseStaticExpected(navigation[2]);
-      steps.push({
-        type: "navigation",
-        method: navigation[1],
-        ...(expected?.kind === "literal" ? { value: expected.value } : {}),
-      });
-      continue;
-    }
-
-    const action = line.match(
-      /await\s+([\s\S]+)\.([A-Za-z_$][\w$]*)\(\s*(.*?)\s*\)\s*;?$/
-    );
-    if (!action || !actionMethods.has(action[2])) continue;
-    const locator = parseLocatorExpression(action[1]);
-    if (!locator) continue;
-    const expected = parseStaticExpected(action[3]);
-    steps.push({
-      type: "action",
-      method: action[2],
-      locator,
-      ...(expected?.kind === "literal" ? { value: expected.value } : {}),
-    });
-  }
-
-  return steps;
-}
-
-import {
-  adaptExpectationForLive,
-  liveRegexFromLiteral,
-  literalExpectedForLive,
-  liveTextLocatorForLive,
-} from "./expectation-abstractor.mjs";
-
-export {
-  adaptExpectationForLive,
-  liveRegexFromLiteral,
-  literalExpectedForLive,
-  liveTextLocatorForLive,
-};
-
 function slugify(value) {
   return value
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^\p{Letter}\p{Number}]+/gu, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 80);
 }
 
-export function parseDashboardSpecFile(fileName, source) {
+export function parseSpecFile(fileName, source) {
   const annotations = parseAnnotations(source);
   const scenarioId = annotations.scenario;
   if (!scenarioId) return null;
@@ -942,7 +496,7 @@ export function parseDashboardSpecFile(fileName, source) {
   const unparsedTestCount = countUnparsedTests(source, blocks);
   if (unparsedTestCount > 0) {
     console.warn(
-      `[qa-spec] ${fileName}: ${unparsedTestCount} test(s) could not be parsed and are missing from the QA spec.`
+      `[qa-spec] ${fileName}: ${unparsedTestCount} test(s) could not be read and are missing from the QA spec.`
     );
   }
 
@@ -953,7 +507,6 @@ export function parseDashboardSpecFile(fileName, source) {
         title: block.title,
         stagingMode: "live-skip",
         liveRunPolicy: "blocked-live-skip",
-        expectations: [],
         checkId: slugify(block.title) || "unnamed-test",
       };
     }
@@ -974,28 +527,6 @@ export function parseDashboardSpecFile(fileName, source) {
       liveRunPolicy,
       annotation: livePolicyAnnotation,
     } = declared;
-    const analysis =
-      stagingMode === "read-only"
-        ? analyzeReadOnlyExpectations(block.body, {
-            fileName,
-            sourceOffset: block.bodyStart,
-            source,
-          })
-        : {
-            expectations: [],
-            unsupportedConstructs: [],
-            coverage: {
-              assertionsFound: 0,
-              assertionsParsed: 0,
-              unsupportedCount: 0,
-            },
-          };
-    const expectations = analysis.expectations.map(expectation =>
-      adaptExpectationForLive(expectation, block.title, scenarioId)
-    );
-    const parserIntegrity =
-      analysis.unsupportedConstructs.length > 0 ? "incomplete" : "complete";
-    const steps = parseSafeActions(block.body);
 
     const fixtures = resolveTestFixtures(source, block.index, fileFixtures);
 
@@ -1004,33 +535,10 @@ export function parseDashboardSpecFile(fileName, source) {
       stagingMode,
       liveRunPolicy,
       livePolicyAnnotation,
-      expectations,
-      ...(steps.length > 0 ? { steps } : {}),
-      parserIntegrity,
-      parserCoverage: analysis.coverage,
-      ...(analysis.unsupportedConstructs.length > 0
-        ? { unsupportedConstructs: analysis.unsupportedConstructs }
-        : {}),
       ...(Object.keys(fixtures).length > 0 ? { fixtures } : {}),
       checkId: slugify(block.title) || "unnamed-test",
     };
   });
-
-  const parserCoverage = tests.reduce(
-    (coverage, test) => {
-      coverage.assertionsFound += test.parserCoverage?.assertionsFound ?? 0;
-      coverage.assertionsParsed += test.parserCoverage?.assertionsParsed ?? 0;
-      coverage.unsupportedCount += test.parserCoverage?.unsupportedCount ?? 0;
-      return coverage;
-    },
-    {
-      testsFound: blocks.length + unparsedTestCount,
-      testsParsed: blocks.length,
-      assertionsFound: 0,
-      assertionsParsed: 0,
-      unsupportedCount: unparsedTestCount,
-    }
-  );
 
   return {
     scenarioId,
@@ -1041,12 +549,11 @@ export function parseDashboardSpecFile(fileName, source) {
     label,
     ...(Object.keys(fileFixtures).length > 0 ? { fixtures: fileFixtures } : {}),
     ...(unparsedTestCount > 0 ? { unparsedTestCount } : {}),
-    parserCoverage,
     tests,
   };
 }
 
-/** Parse all annotated spec files in a directory. Requires @qa-scenario. */
+/** Read all annotated spec files in a directory. Requires @qa-scenario. */
 export function parseSpecDirectory(specDir) {
   const files = readdirSync(specDir)
     .filter(file => file.endsWith(".spec.ts"))
@@ -1055,7 +562,7 @@ export function parseSpecDirectory(specDir) {
   const scenarios = files
     .map(file => {
       const source = readFileSync(join(specDir, file), "utf8");
-      return parseDashboardSpecFile(file, source);
+      return parseSpecFile(file, source);
     })
     .filter(Boolean);
 
@@ -1100,57 +607,13 @@ export function buildBrowseChecklist(spec) {
     );
 }
 
-export function flattenExecutableTests(scenarios, scenarioId) {
-  const executable = [];
-
-  for (const scenario of scenarios) {
-    for (const test of scenario.tests) {
-      if (
-        test.liveRunPolicy !== "executable-readonly" ||
-        test.stagingMode !== "read-only" ||
-        test.expectations.length === 0
-      ) {
-        continue;
-      }
-
-      for (const [index, expectation] of test.expectations.entries()) {
-        if (expectation.liveSkip) continue;
-        if (
-          Array.isArray(expectation.runWhenScenario) &&
-          !expectation.runWhenScenario.includes(scenarioId)
-        ) {
-          continue;
-        }
-
-        executable.push({
-          scenarioId: scenario.scenarioId,
-          sourceFile: scenario.sourceFile,
-          testTitle: test.title,
-          checkId: `${scenario.scenarioId}:${test.checkId}:${index}`,
-          expectation,
-        });
-      }
-    }
-  }
-
-  return executable;
-}
-
 /** Per-scenario counts for qa:spec console summary and tooling. */
 export function summarizeScenarioCoverage(spec, scenarioId) {
   const scenario = spec.scenarios.find(item => item.scenarioId === scenarioId);
   if (!scenario) {
-    return {
-      testCount: 0,
-      playwrightExpectations: 0,
-      testsByPolicy: {},
-    };
+    return { testCount: 0, testsByPolicy: {} };
   }
 
-  const playwrightExpectations = flattenExecutableTests(
-    [scenario],
-    scenarioId
-  ).length;
   const testsByPolicy = {};
 
   for (const test of scenario.tests) {
@@ -1160,7 +623,6 @@ export function summarizeScenarioCoverage(spec, scenarioId) {
 
   return {
     testCount: scenario.tests.length,
-    playwrightExpectations,
     testsByPolicy,
   };
 }
@@ -1171,16 +633,13 @@ export function formatScenarioCoverageSummary(spec, scenarioId) {
     return `${scenarioId}: skipped (@qa-live-skip)`;
   }
 
-  const { testCount, playwrightExpectations, testsByPolicy } =
-    summarizeScenarioCoverage(spec, scenarioId);
+  const { testCount, testsByPolicy } = summarizeScenarioCoverage(
+    spec,
+    scenarioId
+  );
   const parts = [`${testCount} test(s)`];
 
-  if (playwrightExpectations > 0) {
-    parts.push(`playwright: ${playwrightExpectations} expectation(s)`);
-  }
-
   for (const [policy, count] of Object.entries(testsByPolicy).sort()) {
-    if (policy === "executable-readonly") continue;
     parts.push(`${policy}: ${count}`);
   }
 

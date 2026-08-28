@@ -102,11 +102,11 @@ execute — and a staging mode.
 | `auth-mock`                   | `blocked-auth-mock`               | auth         | Blocked on live: reported as `skip`.                                                             |
 | `skip`                        | `blocked-live-skip`               | live-skip    | Blocked on live: reported as `skip`.                                                              |
 
-Every annotation maps to exactly one verb; there are no derived verbs. What the
-parser cannot read does not change a test's policy, because the parser is not
-the only reader of the spec: the abstraction agent and the judge are both handed
-the Playwright source. An assertion the parser cannot name is still named in the
-plan, with its source location, and quoted verbatim under `## Playwright source`.
+Every annotation maps to exactly one verb; there are no derived verbs, and
+nothing about a test's body can change its policy. The tool does not interpret
+your assertions at all: it reads annotations, and hands the Playwright source to
+the judge, quoted verbatim under `## Playwright source`. Any assertion Playwright
+can express is therefore supported, including ones this tool has never heard of.
 
 
 The two `executable-*` verbs are the ones the harness treats as **mutating**: a
@@ -145,7 +145,7 @@ shares the same verb. Key details and validation messages are in
 | `Unknown @qa-live-policy: <name>. Use one of: …`                            | 2    | Annotation name is neither built in nor configured. The message lists your configured custom names too. |
 | `Configured @qa-live-policy "<name>" maps to unknown liveRunPolicy "<verb>".` | 2  | A `livePolicies` entry names a verb that is not one of the seven.        |
 | `N upload fixture(s) referenced by the QA spec do not exist:`               | 2    | A `@qa-fixture` path does not resolve to a file. Use `--allow-missing-fixtures` to downgrade. |
-| `[qa-spec] <file>: N test(s) could not be parsed and are missing from the QA spec.` | — | Warning, not an error. See [Unparsed tests](#unparsed-tests).       |
+| `[qa-spec] <file>: N test(s) could not be read and are missing from the QA spec.` | — | Warning, not an error. See [Unparsed tests](#unparsed-tests).       |
 
 ## What `spec` discovers
 
@@ -154,11 +154,12 @@ that carry a `@qa-scenario` line, and drops the files that carry
 `@qa-live-skip: true`.
 
 It recognises `test`, `test.only`, `test.skip`, and `test.fixme` declarations,
-with any quote style and any argument list.
+with any quote style and any argument list. Only the declaration is read; the
+body is passed through untouched.
 
 ### Unparsed tests
 
-A test declaration the parser could not extract is counted, warned about, and
+A test declaration that could not be located is counted, warned about, and
 recorded in the artifact as `unparsedTestCount`. It is **absent** from the QA
 spec rather than silently assumed to pass. Hooks such as `test.beforeEach` and
 in-body modifiers such as `test.skip(condition)` are not counted.
@@ -193,9 +194,6 @@ staging.
 ## Limits and cautions
 
 - Only `.spec.ts` files are read. Other extensions are ignored.
-- Static expectations are extracted only for `read-only` tests. Tests in an
-  `interaction`, `auth`, or `live-skip` staging mode contribute no parsed
-  expectations; the judge works from the plan text instead.
 - A file-level `@qa-live-skip: true` overrides every test-level policy in that
   file: all of its tests become `blocked-live-skip`.
 - If one comment block above a test contains two `@qa-live-policy` lines, the

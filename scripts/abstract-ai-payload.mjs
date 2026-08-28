@@ -1,58 +1,34 @@
 /**
- * Compact Hermes payload for abstract-ai (GWT livePlan + @qa-live-policy only).
+ * Compact payload for abstract-ai (GWT livePlan + @qa-live-policy only).
  *
- * The agent is given the Playwright source of each runnable test rather than
- * the parsed `expectations`. The parser only names the assertions it happens to
- * support, so a plan derived from its output describes a narrower check than
- * the spec actually makes — silently. The source is the authority; the parsed
- * expectations are kept downstream only as an oracle to cross-check the plan.
+ * The agent is given the test titles and every QA annotation the spec declares,
+ * but not the Playwright body. A title is a claim about behaviour; asking the
+ * agent to restate a body it was just shown produces a plan that paraphrases
+ * the implementation instead of describing the user-visible outcome the check
+ * is supposed to defend. The source is still quoted for the judge, which needs
+ * to verify against what the test actually does.
+ *
+ * The annotations travel with it: they are the declared contract (which page,
+ * which scenario, which policy, which upload fixtures), and the plan has to be
+ * written against that contract rather than against a guess at it.
  */
-import { extractTestBlocks } from "./dashboard-spec-parser.mjs";
 
-const MAX_SOURCE_CHARS = 1200;
-
-function isBlockedPolicy(liveRunPolicy) {
-  return liveRunPolicy?.startsWith("blocked-") ?? false;
-}
-
-function clip(body) {
-  const trimmed = body.trim();
-  if (trimmed.length <= MAX_SOURCE_CHARS) return trimmed;
-  return `${trimmed.slice(0, MAX_SOURCE_CHARS).trimEnd()}\n// … excerpt truncated`;
-}
-
-export function buildGwtPromptSpec(spec, { specSourceFiles = {} } = {}) {
-  const blocksByFile = new Map();
-  const blocksFor = fileName => {
-    if (!blocksByFile.has(fileName)) {
-      const source = specSourceFiles[fileName];
-      blocksByFile.set(fileName, source ? extractTestBlocks(source) : []);
-    }
-    return blocksByFile.get(fileName);
-  };
-
+export function buildGwtPromptSpec(spec) {
   return {
     scenarios: (spec?.scenarios ?? []).map(scenario => ({
       scenarioId: scenario.scenarioId,
       label: scenario.label,
       sourceFile: scenario.sourceFile,
+      ...(scenario.page ? { page: scenario.page } : {}),
       ...(scenario.alwaysRun ? { alwaysRun: true } : {}),
       ...(scenario.liveSkip ? { liveSkip: true } : {}),
-      tests: (scenario.tests ?? []).map(test => {
-        const block =
-          scenario.liveSkip || isBlockedPolicy(test.liveRunPolicy)
-            ? null
-            : blocksFor(scenario.sourceFile).find(
-                candidate => candidate.title === test.title
-              );
-
-        return {
-          title: test.title,
-          checkId: test.checkId,
-          qaLivePolicy: test.livePolicyAnnotation ?? null,
-          ...(block ? { source: clip(block.body) } : {}),
-        };
-      }),
+      ...(scenario.fixtures ? { fixtures: scenario.fixtures } : {}),
+      tests: (scenario.tests ?? []).map(test => ({
+        title: test.title,
+        checkId: test.checkId,
+        qaLivePolicy: test.livePolicyAnnotation ?? null,
+        ...(test.fixtures ? { fixtures: test.fixtures } : {}),
+      })),
     })),
   };
 }

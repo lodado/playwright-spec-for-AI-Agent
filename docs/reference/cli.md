@@ -46,9 +46,9 @@ artifacts. Never runs Playwright.
 Reads: every `*.spec.ts` in the resolved spec directory that carries a
 `@qa-scenario` line and no `@qa-live-skip: true` line.
 
-Writes: `<page>-qa-spec.json`, `<page>-qa-spec-abstracted.json`. Both carry the
-same `specSourcesHash`, `parserVersion`, `excluded`, and `unparsedTestCount`
-stamps, so `abstract-ai` can compare like with like.
+Writes: `<page>-qa-spec.json`, carrying the `specSourcesHash`, `parserVersion`,
+`excluded`, and `unparsedTestCount` stamps that `abstract-ai` and `judge` compare
+against.
 
 Exit codes: 0 on success. 2 when `--page=` is missing, the spec directory does
 not exist, a `@qa-fixture` file is missing, a test carries no
@@ -58,7 +58,10 @@ Annotation syntax lives in [Annotations](./annotations.md).
 
 ## abstract-ai
 
-Sends the parsed spec to the AI agent, which writes a Given/When/Then live plan.
+Sends the annotated spec to the AI agent, which writes a Given/When/Then live
+plan. The agent receives each test's title and its declared annotations, not the
+Playwright body: the plan states the behaviour the check defends, and the body is
+quoted later for the judge that verifies it.
 
 | Option                  | Default | Required | Effect                                                          |
 | ----------------------- | ------- | -------- | ---------------------------------------------------------------- |
@@ -66,7 +69,7 @@ Sends the parsed spec to the AI agent, which writes a Given/When/Then live plan.
 | `--dry-run`             | off     | no       | Write the prompt and stop before calling the agent.             |
 | `--force`               | off     | no       | Regenerate even when the input hash is unchanged.               |
 
-Reads: `<page>-qa-spec-abstracted.json`, falling back to `<page>-qa-spec.json`.
+Reads: `<page>-qa-spec.json`.
 
 Writes: `<page>-qa-spec-live.json`, `<page>-qa-spec-live.md`,
 `<page>-qa-abstract-audit.json`, `<page>-hermes-abstract-query.txt`,

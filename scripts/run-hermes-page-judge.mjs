@@ -74,7 +74,7 @@ import {
   buildBrowseChecklist,
   listAlwaysRunScenarios,
   selectScenariosForLiveRun,
-} from "./dashboard-spec-parser.mjs";
+} from "./spec-annotation-reader.mjs";
 import { buildJudgeBrowseDocument } from "./qa-spec-judge-document.mjs";
 import {
   buildUploadFixturesPayload,

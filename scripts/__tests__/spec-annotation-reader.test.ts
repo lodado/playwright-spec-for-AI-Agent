@@ -2,25 +2,19 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  adaptExpectationForLive,
-  classifyLiveRunPolicy,
   countUnparsedTests,
   describeLiveRunPolicy,
-  detectApiMock,
-  detectSubscriptionMutation,
   extractTestBlocks,
-  liveRegexFromLiteral,
-  literalExpectedForLive,
   mapLivePolicyAnnotation,
   parseAnnotations,
-  parseDashboardSpecFile,
   parseFileFixtures,
   parseFixtureFromCommentLine,
   parseFixturesBeforeIndex,
   parseLivePolicyBeforeIndex,
+  parseSpecFile,
   resolveTestFixtures,
   resolveTestLivePolicy,
-} from "../dashboard-spec-parser.mjs";
+} from "../spec-annotation-reader.mjs";
 import { getLivePolicyOverrides } from "../hermes-qa-project-config.mjs";
 
 vi.mock("../hermes-qa-project-config.mjs", async importOriginal => {
@@ -62,49 +56,6 @@ describe("parseAnnotations", () => {
       scenario: null,
       liveSkip: false,
       alwaysRun: false,
-    });
-  });
-});
-
-describe("dashboard-spec-parser live numeric adaptation", () => {
-  it("converts comma-formatted mock numbers to digit wildcards", () => {
-    expect(liveRegexFromLiteral("42,835")).toBe("[\\d,]+");
-    expect(literalExpectedForLive("42,835")).toMatchObject({
-      kind: "regex",
-      pattern: "[\\d,]+",
-    });
-  });
-
-  it("preserves static prefix while wildcarding numeric suffix", () => {
-    expect(liveRegexFromLiteral("Credit 0")).toBe("Credit [\\d,]+");
-    expect(literalExpectedForLive("Credit 0")).toMatchObject({
-      kind: "regex",
-      pattern: "Credit [\\d,]+",
-    });
-  });
-
-  it("keeps non-numeric copy literals unchanged", () => {
-    expect(literalExpectedForLive("Subscription Info")).toEqual({
-      kind: "literal",
-      value: "Subscription Info",
-    });
-  });
-
-  it("adapts CREDIT_BVA credit literals for live wildcard matching", () => {
-    const adapted = adaptExpectationForLive(
-      {
-        type: "containText",
-        locator: { kind: "testId", value: "credit-remaining" },
-        expected: { kind: "literal", value: "Credit 0" },
-      },
-      "shows Credit 0 when remaining_credits is 0",
-      "CREDIT_BVA",
-    );
-
-    expect(adapted.liveSkip).toBeUndefined();
-    expect(adapted.expected).toMatchObject({
-      kind: "regex",
-      pattern: "Credit [\\d,]+",
     });
   });
 });
@@ -172,7 +123,7 @@ test.describe("group", () => {
 
   it("requires @qa-live-policy on every test in @qa-scenario files", () => {
     expect(() =>
-      parseDashboardSpecFile(
+      parseSpecFile(
         "bad.spec.ts",
         `// @qa-scenario: ACTIVE
 test.describe("x", () => {
@@ -230,7 +181,7 @@ test.describe("uploads", () => {
   });
 
   it("includes fixtures on parsed tests", () => {
-    const parsed = parseDashboardSpecFile(
+    const parsed = parseSpecFile(
       "upload.spec.ts",
       `// @qa-scenario: ACTIVE
 // @qa-fixture: avatar=tests/fixtures/qa-avatar.png
@@ -249,51 +200,7 @@ test("uploads avatar", async ({ page }) => {
   });
 });
 
-describe("classifyLiveRunPolicy", () => {
-  it("allows dialog-open interactions without mutation", () => {
-    const body = `
-      await page.getByTestId("subscription-history-button").click();
-      await expect(page.getByText("Subscription History")).toBeVisible();
-    `;
-    expect(classifyLiveRunPolicy(body, "interaction")).toBe(
-      "executable-interaction",
-    );
-    expect(detectSubscriptionMutation(body)).toBe(false);
-  });
-
-  it("blocks resume confirm + mocked POST", () => {
-    const body = `
-      await page.route("**/api/v1/plans/subscription/resume", route => {
-        route.fulfill({ status: 204 });
-      });
-      await resumeLink.click();
-      await page.getByRole("button", { name: "confirm" }).click();
-    `;
-    expect(detectSubscriptionMutation(body)).toBe(true);
-    expect(classifyLiveRunPolicy(body, "interaction")).toBe(
-      "blocked-subscription-mutation",
-    );
-  });
-
-  it("blocks auth mock tests", () => {
-    const body = `
-      await page.route("**/api/v1/auth/me", route =>
-        route.fulfill({ status: 401 })
-      );
-      await expect(page).toHaveURL(/\\/login/);
-    `;
-    expect(classifyLiveRunPolicy(body, "auth")).toBe("blocked-auth-mock");
-  });
-
-  it("blocks tests that depend on page.route mock setup", () => {
-    const body = `
-      await setupDashboardWithCredit(page, 0);
-      await expect(page.getByTestId("credit-remaining")).toContainText("Credit 0");
-    `;
-    expect(detectApiMock(body)).toBe(true);
-    expect(classifyLiveRunPolicy(body, "read-only")).toBe("judgment-mock-api");
-  });
-
+describe("describeLiveRunPolicy", () => {
   it("describes judgment-mock-api for Hermes discretion", () => {
     expect(describeLiveRunPolicy("judgment-mock-api")).toMatch(
       /reasonably matches intent/i,
@@ -314,7 +221,7 @@ describe("annotation line anchoring", () => {
     ].join("\n");
 
     expect(parseAnnotations(source).liveSkip).toBe(false);
-    expect(parseDashboardSpecFile("prose.spec.ts", source)?.tests).toHaveLength(
+    expect(parseSpecFile("prose.spec.ts", source)?.tests).toHaveLength(
       1,
     );
   });
@@ -379,7 +286,7 @@ describe("extractTestBlocks", () => {
       'test("tagged", { tag: "@slow" }, async ({ page }) => {});',
     ].join("\n");
 
-    const parsed = parseDashboardSpecFile("drops.spec.ts", source);
+    const parsed = parseSpecFile("drops.spec.ts", source);
 
     expect(parsed?.tests).toHaveLength(2);
     expect(parsed?.unparsedTestCount).toBeUndefined();
@@ -432,7 +339,7 @@ describe("@qa-live-policy vocabulary", () => {
 
   it("names file and line when a test has no policy", () => {
     expect(() =>
-      parseDashboardSpecFile(
+      parseSpecFile(
         "bad.spec.ts",
         `// @qa-scenario: ACTIVE\n\ntest("no policy", async ({ page }) => {});`,
       ),
@@ -445,7 +352,7 @@ describe("shipped examples", () => {
     const path = fileURLToPath(
       new URL("../../examples/sample-spec.ts", import.meta.url),
     );
-    const parsed = parseDashboardSpecFile(
+    const parsed = parseSpecFile(
       "sample-spec.ts",
       readFileSync(path, "utf8"),
     );
@@ -462,5 +369,23 @@ describe("shipped examples", () => {
       "executable-interaction",
       "executable-interaction",
     ]);
+  });
+});
+
+describe("checkId slugs", () => {
+  it("keeps a non-Latin title distinguishable instead of collapsing it to unnamed-test", () => {
+    const source = `
+// @qa-scenario: PUBLIC
+// @qa-live-policy: readonly
+test("공개 랜딩이 서비스 소개를 보여준다", async ({ page }) => {});
+// @qa-live-policy: readonly
+test("로그인 후 기록을 시작한다", async ({ page }) => {});
+`;
+    const parsed = parseSpecFile("home.spec.ts", source)!;
+    const ids = parsed.tests.map(test => test.checkId);
+
+    expect(ids).not.toContain("unnamed-test");
+    // Two upload-fixture keys that collide are two tests sharing one fixture.
+    expect(new Set(ids).size).toBe(2);
   });
 });

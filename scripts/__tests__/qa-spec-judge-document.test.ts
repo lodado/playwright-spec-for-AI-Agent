@@ -59,9 +59,6 @@ describe("renderJudgeHermesDocument", () => {
     expect(doc).toContain("**Given:**");
     expect(doc).toContain("**When:**");
     expect(doc).toContain("**Then:**");
-    expect(doc).toContain('[data-testid="health-score"]');
-    expect(doc).toContain("numeric health score");
-    expect(doc).toContain('mock:"98점"');
     expect(doc).not.toContain('"specDefinition"');
     expect(doc).not.toContain("non-deterministic");
     expect(doc).not.toContain("How to use this plan");
@@ -108,7 +105,7 @@ describe("renderJudgeHermesDocument", () => {
     expect(doc).toContain("**Then:**");
   });
 
-  it("to name an unread assertion and point at the source instead of forbidding pass", () => {
+  it("to point every check at the quoted source rather than summarising its assertions", () => {
     const doc = renderJudgeHermesDocument({
       page: "dashboard",
       spec: {
@@ -119,11 +116,6 @@ describe("renderJudgeHermesDocument", () => {
           tests: [{
             title: "uses unsupported assertion",
             liveRunPolicy: "executable-readonly",
-            expectations: [],
-            unsupportedConstructs: [{
-              api: "toHaveScreenshot",
-              location: { file: "gap.spec.ts", line: 8, column: 3 },
-            }],
           }],
         }],
       },
@@ -137,11 +129,11 @@ describe("renderJudgeHermesDocument", () => {
       },
     });
 
-    // The reader is told which assertion the summary omits, and where to read it.
-    expect(doc).toContain("toHaveScreenshot");
-    expect(doc).toContain("gap.spec.ts:8:3");
+    // No assertion is summarised, so none can be narrowed: the body is quoted
+    // whole and the Then sends the reader to it.
+    expect(doc).toContain("Matches the assertions in the quoted Playwright source");
     expect(doc).toContain("## Playwright source");
-    // A gap in this parser is not a gap in the spec: the source is right there.
+    expect(doc).toContain("toHaveScreenshot");
     expect(doc).not.toContain("pass is forbidden");
   });
 });
@@ -406,32 +398,34 @@ describe("buildJudgeBrowseDocument", () => {
   });
 
   it("keeps a blocked-heavy plan small (prompt diet)", () => {
-    const tests = Array.from({ length: 40 }, (_, index) => ({
-      title: `mutating check ${index}`,
-      liveRunPolicy: "blocked-subscription-mutation",
-      expectations: [],
-    }));
+    const build = (count: number) =>
+      buildJudgeBrowseDocument({
+        page: "dashboard",
+        spec: {
+          scenarios: [
+            {
+              scenarioId: "ACTIVE",
+              label: "Active",
+              sourceFile: "x.spec.ts",
+              tests: Array.from({ length: count }, (_, index) => ({
+                title: `mutating check ${index}`,
+                liveRunPolicy: "blocked-subscription-mutation",
+              })),
+            },
+          ],
+        },
+        stagingLogin,
+        alwaysRunScenarioIds: [],
+      }).document;
 
-    const { document } = buildJudgeBrowseDocument({
-      page: "dashboard",
-      spec: {
-        scenarios: [
-          {
-            scenarioId: "ACTIVE",
-            label: "Active",
-            sourceFile: "x.spec.ts",
-            tests,
-          },
-        ],
-      },
-      stagingLogin,
-      alwaysRunScenarioIds: [],
-    });
+    expect(build(40)).toContain("mutating check 39 — skip");
 
-    // 40 blocked tests are one line each; a Given/When/Then block per test cost
-    // ~120 chars more apiece.
-    expect(document).toContain("mutating check 39 — skip");
-    expect(document.length).toBeLessThan(3500);
+    // Measure the marginal cost per blocked test, not the total: the fixed
+    // header carries standing instructions whose size is a separate concern,
+    // and folding it in makes this budget fail on any wording change.
+    // One line each. A Given/When/Then block per test costs ~120 chars apiece.
+    const marginal = (build(40).length - build(20).length) / 20;
+    expect(marginal).toBeLessThan(80);
   });
 });
 

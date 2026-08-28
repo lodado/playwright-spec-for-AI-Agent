@@ -34,7 +34,7 @@ import {
   resolveJudgeTarget,
   resolveSpecDir,
 } from "./page-qa-paths.mjs";
-import { parseSpecDirectory } from "./dashboard-spec-parser.mjs";
+import { parseSpecDirectory } from "./spec-annotation-reader.mjs";
 import { buildJudgeTargetUrl, redactEmail } from "./staging-qa-config.mjs";
 import { hasSessionProfile } from "./qa-browser-session.mjs";
 import { verifyLedger } from "./qa-run-ledger.mjs";

@@ -15,7 +15,6 @@ characters.
 | File                                         | Written by                         | Read by                                                         |
 | -------------------------------------------- | ---------------------------------- | ----------------------------------------------------------------- |
 | `{slug}-qa-spec.json`                        | `spec`                             | `abstract-ai`, `judge`, `nightly`, `show`                         |
-| `{slug}-qa-spec-abstracted.json`             | `spec`                             | `abstract-ai` (preferred input), `judge`                          |
 | `{slug}-qa-spec-live.json`                   | `abstract-ai`                      | `judge`, `nightly` (reuse check)                                  |
 | `{slug}-qa-spec-live.md`                     | `abstract-ai`                      | `judge` (the plan), `review` (fallback)                           |
 | `{slug}-qa-abstract-audit.json`              | `abstract-ai`                      | `abstract-ai` (reuse bookkeeping)                                 |

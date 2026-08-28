@@ -36,8 +36,8 @@ spec → abstract-ai → judge → review → slack (optional)
 
 | Stage | Consumes | Produces | Agent |
 | ----- | -------- | -------- | ----- |
-| `spec` | `@qa-scenario`-annotated Playwright specs in the page's spec directory | `{slug}-qa-spec.json`, `{slug}-qa-spec-abstracted.json` | none |
-| `abstract-ai` | the abstracted spec | `{slug}-qa-spec-live.json`, `{slug}-qa-spec-live.md`, `{slug}-qa-abstract-audit.json` | text-only, 2 turns |
+| `spec` | `@qa-scenario`-annotated Playwright specs in the page's spec directory | `{slug}-qa-spec.json` | none |
+| `abstract-ai` | `{slug}-qa-spec.json` | `{slug}-qa-spec-live.json`, `{slug}-qa-spec-live.md`, `{slug}-qa-abstract-audit.json` | text-only, 2 turns |
 | `judge` | the live plan and the staging URL | `{slug}-qa-judge-plan.md`, `{slug}-hermes-judgment.json`/`.md`, `{slug}-qa-evidence-manifest.json`, `{slug}-qa-report.ctrf.json`, `evidence/` | browsing |
 | `review` | the judgment and the pinned judge plan | `{slug}-hermes-judge-review-packet.md`, `{slug}-hermes-judge-review.json`/`.md` | text-only |
 | `slack` | the judgment, the review, and the acknowledgements | a Slack message | none |
@@ -54,21 +54,25 @@ their inputs provably did not change: `abstract-ai` when the spec hash is
 unchanged, `judge` when staging reports a build that already passed. Those two
 stages are the largest cost in a nightly run.
 
-## Deterministic parsing before judgment
+## Deterministic reading before judgment
 
 `spec` reads the annotations and never executes or modifies a spec file. It
-also applies a rule-based abstraction pass (`ABSTRACTION_RULES_VERSION`
-`1.0.0`) that turns recognisable CI literals into constraints — a Korean score
-literal such as `98 점` becomes "a numeric score with unit is displayed", a
-percentage becomes a percentage constraint, an ISO date becomes a date.
+reads *only* the annotations: which page, which scenario, which live policy,
+which fixtures. It does not interpret your assertions.
 
-Keeping this in code rather than in the prompt has one purpose: the same specs
-must always yield the same scenario JSON. When the parse is deterministic, a
-verdict that changed is either the page changing or the model changing, and the
-hash stamps below tell you which. When the parse is a model call, every run
-starts from a slightly different document and nothing downstream can be
-compared. `abstract-ai` starts from the abstracted spec precisely so that the
-model's job is narrowed to phrasing intent, not deciding what the tests say.
+That boundary is deliberate. An earlier version parsed `expect(...)` chains into
+a structured list of expectations, which meant it could only represent the
+matchers it had been taught. An assertion it did not recognise silently vanished
+from the plan, so the check appeared to pass while testing less than the spec
+said — and every Playwright release widened the gap. Reading annotations only is
+a contract the tool can actually keep: annotations are a vocabulary this project
+defines, while assertions are a language Playwright keeps extending.
+
+What stays deterministic is what has to be. The same specs always yield the same
+scenario JSON, so a verdict that changed is either the page changing or the model
+changing, and the hash stamps below tell you which. What the tests *mean* is left
+to the agent, which is handed the Playwright source verbatim and can read any
+assertion Playwright can express.
 
 The annotation vocabulary and the live policies that drive this pass are in
 [the annotations reference](../reference/annotations.md).

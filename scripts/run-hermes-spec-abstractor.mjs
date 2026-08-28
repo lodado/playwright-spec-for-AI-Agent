@@ -13,17 +13,15 @@ import { fileURLToPath } from "node:url";
 import { readArtifact, withSchema } from "./artifact-schema.mjs";
 import { runMain, UsageError } from "./errors.mjs";
 import { hashSpecDefinition } from "./spec-hash.mjs";
-import { ABSTRACTION_RULES_VERSION } from "./expectation-abstractor.mjs";
+import { SPEC_READER_VERSION } from "./spec-annotation-reader.mjs";
 import { buildGwtPromptSpec } from "./abstract-ai-payload.mjs";
 import { prepareAdapter, runAgent } from "./ai-agent-adapter.mjs";
 import { normalizeAbstractAiResult } from "./normalize-abstracted-spec.mjs";
 import { renderLiveSpecMarkdown } from "./qa-spec-live-artifact.mjs";
-import { loadSpecSourceFiles } from "./qa-spec-artifacts.mjs";
 import {
   artifactPaths,
   ensureProjectConfig,
   parsePageArg,
-  resolveSpecDir,
 } from "./page-qa-paths.mjs";
 
 const HERMES_MAX_TURNS_ABSTRACT = 2;
@@ -33,7 +31,7 @@ const HERMES_MAX_TURNS_ABSTRACT = 2;
  * stamped next to the input hash so a prompt change re-runs the agent even
  * though the specs are untouched.
  */
-export const ABSTRACT_PROMPT_REV = "3.0.0";
+export const ABSTRACT_PROMPT_REV = "4.0.0";
 
 function hasFlag(argv, flag) {
   return argv.includes(flag);
@@ -49,16 +47,20 @@ export function buildAbstractHermesQuery(payload) {
     "Each test includes only `qaLivePolicy` from Playwright `@qa-live-policy`; use that value in When/Then behavior.",
     "Do not explain what policies mean. Just apply them.",
     "",
-    "## Source is the authority",
-    "Each runnable test carries its Playwright body as `source`. That body is the",
-    "authority on what the check asserts — the title only names it. Derive When and",
-    "Then from what the code actually does: every assertion in the body must be",
-    "represented, and an assertion the body never makes must not appear.",
-    "A test with no `source` is not run; state `skip`.",
+    "## Write from the title, not from implementation",
+    "You are given each test's title and its live policy — not its code. The title",
+    "is a claim about user-visible behaviour: state the outcome a user could see on",
+    "a working page, in the terms the title uses. Do not invent selectors, test ids,",
+    "element counts, or exact copy — you have not seen them, and a plan that guesses",
+    "at implementation detail fails a correct page.",
+    "Stay at the level the title supports: if a title names one observable outcome,",
+    "the block asserts that one outcome.",
+    "A test whose scenario is `liveSkip`, or whose policy is blocked, is not run; state `skip`.",
     "",
     "Scenario/Test options you must apply:",
     "- `alwaysRun: true` -> scenario header must include `always-run`.",
     "- `liveSkip: true` -> scenario should be marked as skipped on live; tests under it should not be executable.",
+    "- `fixtures` -> the check uploads those named files; say so in Given.",
     "- `qaLivePolicy` values: `readonly`, `safe-interaction`, `safe-interaction-no-confirm`, `mock-judgment`, `subscription-mutation`, `auth-mock`, `skip`.",
     "- For `subscription-mutation` / `auth-mock` / `skip`, Then should state `skip`.",
     "Use semantic intent for non-deterministic live data: generalize literals/counts/labels/dates.",
@@ -116,19 +118,6 @@ function reusableLiveSpec(paths, inputHash) {
   return existing;
 }
 
-/**
- * Quoting the source is best-effort: the stage's own input is the spec JSON, so
- * a project whose spec directory has moved since `spec` ran still abstracts —
- * with a thinner prompt, not a crash.
- */
-function readSpecSources(page) {
-  try {
-    return loadSpecSourceFiles(resolveSpecDir(page));
-  } catch {
-    return {};
-  }
-}
-
 export async function run(argv) {
   await ensureProjectConfig(argv);
   const page = parsePageArg(argv);
@@ -138,9 +127,7 @@ export async function run(argv) {
 
   mkdirSync(paths.outputDir, { recursive: true });
 
-  const inputPath = existsSync(paths.specAbstractedJson)
-    ? paths.specAbstractedJson
-    : paths.specJson;
+  const inputPath = paths.specJson;
 
   if (!existsSync(inputPath)) {
     throw new UsageError(`Missing QA spec: ${inputPath}`, {
@@ -149,14 +136,7 @@ export async function run(argv) {
   }
 
   const inputSpec = readArtifact(inputPath, { kind: "qa-spec" });
-  // Provenance is always measured against the raw `spec` artifact, never
-  // against whichever derived artifact happened to feed the agent: `judge`
-  // re-derives the same hash from spec.json, and hashing spec-abstracted.json
-  // here would make every plan look stale to it.
-  const provenanceSpec = existsSync(paths.specJson)
-    ? readArtifact(paths.specJson, { kind: "qa-spec" })
-    : inputSpec;
-  const inputHash = hashSpecDefinition(provenanceSpec);
+  const inputHash = hashSpecDefinition(inputSpec);
 
   if (!dryRun && !force) {
     const reused = reusableLiveSpec(paths, inputHash);
@@ -178,13 +158,8 @@ export async function run(argv) {
   const payload = {
     task: "abstract-qa-spec-gwt",
     page,
-    rulesVersion: ABSTRACTION_RULES_VERSION,
-    // The spec source, not the parsed expectations: the parser only names the
-    // assertions it supports, so a plan written from its output silently
-    // describes a narrower check than the test actually makes.
-    specDefinition: buildGwtPromptSpec(inputSpec, {
-      specSourceFiles: readSpecSources(page),
-    }),
+    rulesVersion: SPEC_READER_VERSION,
+    specDefinition: buildGwtPromptSpec(inputSpec),
   };
 
   const query = buildAbstractHermesQuery(payload);

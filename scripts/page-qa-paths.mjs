@@ -103,7 +103,6 @@ export function artifactPaths(page, outputDir = resolveOutputDir(page)) {
     outputDir,
     slug,
     specJson: join(outputDir, `${slug}-qa-spec.json`),
-    specAbstractedJson: join(outputDir, `${slug}-qa-spec-abstracted.json`),
     specLiveJson: join(outputDir, `${slug}-qa-spec-live.json`),
     specLiveMd: join(outputDir, `${slug}-qa-spec-live.md`),
     specJudgePlanMd: join(outputDir, `${slug}-qa-judge-plan.md`),

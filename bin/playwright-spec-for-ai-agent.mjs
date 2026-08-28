@@ -27,7 +27,6 @@ const COMMANDS = {
       "--config",
       "--project-root",
       "--strict-config",
-      "--strict-parser",
     ],
   },
   "abstract-ai": {
@@ -198,10 +197,6 @@ const FLAG_HELP = {
   "--force-abstract": ["--force-abstract", "Re-run abstract-ai even when the spec is unchanged"],
   "--force-judge": ["--force-judge", "Judge even when the deploy and spec are unchanged"],
   "--strict-config": ["--strict-config", "Turn config warnings into errors (env: QA_STRICT_CONFIG=1)"],
-  "--strict-parser": [
-    "--strict-parser",
-    "Fail when Playwright constructs cannot be represented (env: QA_STRICT_PARSER=1)",
-  ],
 };
 
 /**

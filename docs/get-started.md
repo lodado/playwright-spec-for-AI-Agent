@@ -209,12 +209,11 @@ Slack is not configured.
 npx playwright-spec-for-ai-agent spec --page=pricing
 ```
 
-This writes two JSON artifacts and prints how many tests it kept:
+This writes the spec artifact and prints how many tests it kept:
 
 ```text
 Pricing QA spec written: …/qa-output/pricing/pricing-qa-spec.json
-Pricing rule-abstracted spec: …/qa-output/pricing/pricing-qa-spec-abstracted.json
-  Live QA tests in JSON: 1 included, 0 excluded (1 parsed total)
+  Live QA tests in JSON: 1 included, 0 excluded (1 read total)
   Excluded tests recorded in artifact: 0
   Spec sources hash: sha256:c63c98043372b3d558485faa0f3cc7ae9d244112dbb1d6506f472b8d525b5f38
   (run abstract-ai --page=pricing for qa-spec-live.json + .md)
@@ -223,8 +222,9 @@ Pricing rule-abstracted spec: …/qa-output/pricing/pricing-qa-spec-abstracted.j
 
 An `excluded` count above zero is normal — it is your `blocked-*` policies doing
 their job, and each excluded test is listed with its reason. A
-`N test(s) could not be parsed` line means the parser skipped a test rather than
-assuming it passes; look at that test's shape before trusting the coverage number.
+`N test(s) could not be read` line means a test declaration could not be located
+and was left out rather than assumed to pass; look at that test's shape before
+trusting the coverage number.
 
 The spec sources hash is stamped onto every later artifact. It is what makes `judge`
 refuse a plan built from a spec revision that no longer exists.

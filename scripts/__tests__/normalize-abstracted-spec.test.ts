@@ -280,7 +280,7 @@ describe("abstract-ai stage", () => {
     mkdirSync(fixtureDir, { recursive: true });
 
     writeFileSync(
-      join(outputDir, "dashboard-qa-spec-abstracted.json"),
+      join(outputDir, "dashboard-qa-spec.json"),
       JSON.stringify(inputSpec, null, 2),
     );
     writeFileSync(
@@ -366,7 +366,7 @@ describe("abstract-ai stage", () => {
     rmSync(rawOutputPath());
 
     writeFileSync(
-      join(outputDir, "dashboard-qa-spec-abstracted.json"),
+      join(outputDir, "dashboard-qa-spec.json"),
       JSON.stringify(
         {
           ...inputSpec,

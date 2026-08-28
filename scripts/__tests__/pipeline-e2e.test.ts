@@ -294,7 +294,7 @@ describe("flag forms", () => {
 });
 
 describe("artifacts a later stage reads back", () => {
-  it("to hand the abstraction agent the playwright source of each runnable test", () => {
+  it("to hand the abstraction agent the annotated contract, never the test body", () => {
     expect(runPipeline().status).toBe(0);
 
     const query = readFileSync(
@@ -302,9 +302,10 @@ describe("artifacts a later stage reads back", () => {
       "utf8"
     );
 
-    // The readonly check's own assertion, verbatim from the spec file.
-    expect(query).toContain("toHaveText");
-    // The mutating check is never run, so its steps stay out of the prompt.
+    // The declared contract travels: titles and their @qa-live-policy.
+    expect(query).toContain('"qaLivePolicy"');
+    // No implementation detail: the plan is written from behaviour, not code.
+    expect(query).not.toContain("toHaveText");
     expect(query).not.toContain('getByTestId("cancel-btn")');
   });
 
