@@ -28,6 +28,7 @@
  *   --review-on=         always | fail (default) | never
  *   --force-abstract     re-run abstract-ai even when the spec is unchanged
  *   --force-judge        judge even when staging is on an already-passed build
+ *   --with-issues        file/close a GitHub issue per page that needs action
  *   --skip-abstract-ai   skip abstract-ai (use the rule-abstracted spec only)
  *   --skip-review        alias of --review-on=never
  */
@@ -61,6 +62,7 @@ const STAGE_SCRIPTS = {
   judge: "run-hermes-page-judge.mjs",
   review: "run-hermes-judge-review.mjs",
   slack: "slack-page-qa-report.mjs",
+  issues: "page-qa-issues.mjs",
 };
 
 const REVIEW_MODES = ["always", "fail", "never"];
@@ -68,6 +70,7 @@ const REVIEW_MODES = ["always", "fail", "never"];
 /** Flags this file consumes; every other argv entry is forwarded to the stages. */
 const OWN_FLAGS = new Set([
   "--with-slack",
+  "--with-issues",
   "--skip-abstract-ai",
   "--skip-review",
   "--all",
@@ -78,7 +81,7 @@ const OWN_VALUE_FLAGS = ["--page=", "--pages=", "--target-path=", "--review-on="
 
 const HELP = `Usage: npx playwright-spec-for-ai-agent nightly [options]
 
-  spec → abstract-ai → judge → review → (optional slack)
+  spec → abstract-ai → judge → review → (optional slack, issues)
 
 Options:
   --page=<slug>        Page id
@@ -86,6 +89,7 @@ Options:
   --all                Run every page in the project config
   --target-path=<path> Staging URL path (single page only; config wins otherwise)
   --with-slack         Post to Slack on fail/manual_review
+  --with-issues        File/close a GitHub issue per page that needs action
   --review-on=<mode>   always | fail (default) | never
   --force-abstract     Re-run abstract-ai even when the spec hash is unchanged
   --force-judge        Judge even when staging reports an already-passed build
@@ -416,6 +420,10 @@ async function runPage(page, ctx) {
     );
   }
 
+  if (ctx.options.withIssues) {
+    codes.push(runStage(ctx, page, "issues", [`--page=${page}`, ...ctx.rest]));
+  }
+
   return worstExitCode(codes);
 }
 
@@ -464,6 +472,7 @@ export async function run(argv = process.argv.slice(2), overrides = {}) {
     stages: [],
     options: {
       withSlack: argv.includes("--with-slack"),
+      withIssues: argv.includes("--with-issues"),
       skipAbstract: argv.includes("--skip-abstract-ai"),
       forceAbstract: argv.includes("--force-abstract"),
       forceJudge: argv.includes("--force-judge"),

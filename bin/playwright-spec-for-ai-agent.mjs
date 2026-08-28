@@ -114,6 +114,7 @@ const COMMANDS = {
       "--page",
       "--target-path",
       "--with-slack",
+      "--with-issues",
       "--skip-abstract-ai",
       "--skip-review",
       "--pages",
@@ -142,6 +143,10 @@ const COMMANDS = {
   handoff: {
     script: "page-qa-handoff.mjs",
     summary: "Render the verdict as a fix-planning task for a coding agent",
+  },
+  issues: {
+    script: "page-qa-issues.mjs",
+    summary: "File a GitHub issue per page whose verdict still needs action",
   },
   ack: {
     script: "page-qa-ack.mjs",
@@ -180,6 +185,7 @@ const FLAG_HELP = {
   ],
   "--account-notes": ["--account-notes=<text>", "Free-text note forwarded to the agent prompt"],
   "--with-slack": ["--with-slack", "Post to Slack on fail/manual_review"],
+  "--with-issues": ["--with-issues", "File/close a GitHub issue per page that needs action"],
   "--skip-abstract-ai": ["--skip-abstract-ai", "Reuse the existing live plan"],
   "--skip-review": ["--skip-review", "Stop after judge; do not run the review pass"],
   "--non-interactive": ["--non-interactive", "Skip prompts (CI); --yes and -y are aliases"],
@@ -241,6 +247,8 @@ const VALUE_FLAGS = new Set([
   "--by",
   "--until",
   "--remove",
+  "--issue-on",
+  "--label",
 ]);
 
 const GLOBAL_OPTIONS = [

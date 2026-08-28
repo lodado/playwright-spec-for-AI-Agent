@@ -115,6 +115,39 @@ describe("--review-on", () => {
   });
 });
 
+describe("issue filing stage", () => {
+  it("runs only under --with-issues, and never forwards the flag to a stage", async () => {
+    writeSpec("dashboard");
+    writeJudgment("dashboard", { status: "fail", checks: [{ item: "a", result: "fail" }] });
+    const spawned = recorder();
+
+    await run([...ARGS(), "--page=dashboard"], { spawn: spawned.spawn });
+    expect(spawned.stages()).not.toContain("page-qa-issues.mjs");
+
+    const withIssues = recorder();
+    await run([...ARGS(), "--page=dashboard", "--with-issues"], {
+      spawn: withIssues.spawn,
+    });
+
+    expect(withIssues.stages()).toContain("page-qa-issues.mjs");
+    for (const call of withIssues.calls) {
+      expect(call.args).not.toContain("--with-issues");
+    }
+  });
+
+  it("counts a filing failure in the worst exit code without masking the verdict", async () => {
+    writeSpec("dashboard");
+    writeJudgment("dashboard", { status: "pass", checks: [{ item: "a", result: "pass" }] });
+    const spawned = recorder({ "page-qa-issues.mjs": 3 });
+
+    const code = await run([...ARGS(), "--page=dashboard", "--with-issues"], {
+      spawn: spawned.spawn,
+    });
+
+    expect(code).toBe(3);
+  });
+});
+
 describe("review gating", () => {
   it("skips the review agent when the verdict is a clean pass", async () => {
     writeSpec("dashboard");

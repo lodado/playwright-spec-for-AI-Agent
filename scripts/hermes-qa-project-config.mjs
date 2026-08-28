@@ -737,6 +737,17 @@ export function getStorageStatePath(page) {
   return resolve(project.root, String(configured));
 }
 
+/**
+ * Footer appended to every filed GitHub issue. It is the only place an agent
+ * trigger (`@claude`, a label mention) can come from: hardcoding one would make
+ * this tool decide who acts on a verdict, which is the operator's call.
+ */
+export function getGithubIssueConfig() {
+  const project = getProjectConfig();
+  const footer = project.github?.issueFooter;
+  return { footer: footer ? String(footer) : "" };
+}
+
 export function getStagingVersionUrl(page) {
   const project = getProjectConfig();
   const pageConfig = page ? getPageConfig(page) : {};
