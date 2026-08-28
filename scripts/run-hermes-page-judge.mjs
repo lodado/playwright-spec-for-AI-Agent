@@ -165,6 +165,7 @@ export function buildBrowseHermesQuery({
     "  - **pass** when the live UI reasonably satisfies the test **intent** (you would accept it as a human QA reviewer).",
     "  - **manual_review** when intent match is **ambiguous** or evidence is thin — do **not** fail just because live differs from the mock.",
     "  - **fail** only when the UI **clearly** contradicts intent (missing control, broken state, wrong class of outcome).",
+    "  - **skip** when the mocked precondition cannot exist on this account at all — the test needs `remaining_credits: 0` and you can see the account has 7, or it needs pay-as-you-go and this account is on Free. Quote what the account actually shows. This is not `manual_review`: nothing was ambiguous, the check simply had no way to run here.",
     "- For other semantic / abstracted expectations: same rule — reasonable for intent → pass; ambiguous → manual_review.",
     "- If blocked on live → **skip**.",
     "",

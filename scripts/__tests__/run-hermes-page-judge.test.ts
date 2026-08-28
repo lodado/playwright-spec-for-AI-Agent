@@ -631,3 +631,17 @@ describe("buildBrowseHermesQuery", () => {
     expect(query).toContain("re-observe once settled before marking `fail`");
   });
 });
+
+describe("judge prompt", () => {
+  it("tells the judge that an unsatisfiable mock precondition is skip, not manual_review", async () => {
+    const { buildBrowseHermesQuery } = await import("../run-hermes-page-judge.mjs");
+    const query = buildBrowseHermesQuery({
+      judgeDocument: "### ACTIVE — a check",
+      stagingLogin: { targetUrl: "https://staging.acmecorp.com/dashboard" },
+      preauthenticated: true,
+    });
+
+    expect(query).toMatch(/\*\*skip\*\* when the mocked precondition cannot exist/);
+    expect(query).toMatch(/not `manual_review`/);
+  });
+});
