@@ -13,6 +13,33 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [6.3.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v6.2.0...v6.3.0) (2026-08-28)
+
+
+### Features
+
+* add strict parser integrity gate ([b03a21d](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/b03a21d63b6847ac3f2e231efa079e024e999358))
+* cap parser gaps at manual review ([ae1f89d](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/ae1f89dc767da667803cfb11ab0786dee8f8938f))
+* confirm the plan against the page, not against its own wording ([ccb616f](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/ccb616f94b6bf58f54cda20fdba379ce7a470aa2))
+* cross-check the live plan against what the parser read ([9ab3f33](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/9ab3f33c4ca49538298582a8c50f4ff6e0b1aad0))
+* derive the live plan from playwright source, not parsed expectations ([d2ef52f](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/d2ef52fc2c30ac5c78b7d2a2532170ae629d722a))
+* extract ordered playwright action steps ([f4b4126](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/f4b4126a45760a7f57aed7053d57f6b3cf1bc6e8))
+* parse common playwright locator assertions ([0f22372](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/0f223726571899b1577eece3c1e14555572c3cb1))
+* prevent silent playwright assertion loss ([217470b](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/217470bfc9fa92722d763bf81cb64a25dc60a699))
+* reuse a session instead of asking an agent to log in ([f23ca9f](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/f23ca9fd528f7ae60c0ee47385f591a83fcdf56d))
+* settle the account state before judging, then judge only that state ([e7631ee](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/e7631ee69a4b25103364eee853afad28833ebce4))
+* show playwright source for every runnable check ([803ed10](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/803ed10948e6b1fc35bbe8ed1dd9790c65764031))
+* verify verdicts in the harness instead of trusting agent prose ([947c436](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/947c4366b92077221cfbd2511fe4148673cbe103))
+
+
+### Bug Fixes
+
+* keep spec appendices when a live plan supplies the body ([e7e99a8](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/e7e99a847a3fe9ae63a341652ad4e02b222248bc))
+* name the verdict for a mocked precondition the account cannot meet ([d13f17b](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/d13f17bc0e5ed0461b0e35dab421a4a5a30061fd))
+* parse playwright test details objects ([d67eb83](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/d67eb83736482e5d8829da649822d8823fe424af))
+* read assertions with options args and locators held in a local ([64fb2f2](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/64fb2f2536d6967f1b00557ca602dedadac77ccb))
+* stop the cross-check from demanding literals the prompt generalizes ([2f00324](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/2f00324080cd3af1cd7e564fe3730e6301babb7a))
+
 ## [6.2.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v6.1.0...v6.2.0) (2026-08-27)
 
 
