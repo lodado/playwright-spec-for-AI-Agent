@@ -18,10 +18,12 @@ import { buildGwtPromptSpec } from "./abstract-ai-payload.mjs";
 import { prepareAdapter, runAgent } from "./ai-agent-adapter.mjs";
 import { normalizeAbstractAiResult } from "./normalize-abstracted-spec.mjs";
 import { renderLiveSpecMarkdown } from "./qa-spec-live-artifact.mjs";
+import { loadSpecSourceFiles } from "./qa-spec-artifacts.mjs";
 import {
   artifactPaths,
   ensureProjectConfig,
   parsePageArg,
+  resolveSpecDir,
 } from "./page-qa-paths.mjs";
 
 const HERMES_MAX_TURNS_ABSTRACT = 2;
@@ -31,7 +33,7 @@ const HERMES_MAX_TURNS_ABSTRACT = 2;
  * stamped next to the input hash so a prompt change re-runs the agent even
  * though the specs are untouched.
  */
-export const ABSTRACT_PROMPT_REV = "2.0.0";
+export const ABSTRACT_PROMPT_REV = "3.0.0";
 
 function hasFlag(argv, flag) {
   return argv.includes(flag);
@@ -46,6 +48,14 @@ export function buildAbstractHermesQuery(payload) {
     "Write livePlan as explicit Given/When/Then/Never markdown — one block per test in specDefinition.",
     "Each test includes only `qaLivePolicy` from Playwright `@qa-live-policy`; use that value in When/Then behavior.",
     "Do not explain what policies mean. Just apply them.",
+    "",
+    "## Source is the authority",
+    "Each runnable test carries its Playwright body as `source`. That body is the",
+    "authority on what the check asserts — the title only names it. Derive When and",
+    "Then from what the code actually does: every assertion in the body must be",
+    "represented, and an assertion the body never makes must not appear.",
+    "A test with no `source` is not run; state `skip`.",
+    "",
     "Scenario/Test options you must apply:",
     "- `alwaysRun: true` -> scenario header must include `always-run`.",
     "- `liveSkip: true` -> scenario should be marked as skipped on live; tests under it should not be executable.",
@@ -106,6 +116,19 @@ function reusableLiveSpec(paths, inputHash) {
   return existing;
 }
 
+/**
+ * Quoting the source is best-effort: the stage's own input is the spec JSON, so
+ * a project whose spec directory has moved since `spec` ran still abstracts —
+ * with a thinner prompt, not a crash.
+ */
+function readSpecSources(page) {
+  try {
+    return loadSpecSourceFiles(resolveSpecDir(page));
+  } catch {
+    return {};
+  }
+}
+
 export async function run(argv) {
   await ensureProjectConfig(argv);
   const page = parsePageArg(argv);
@@ -156,7 +179,12 @@ export async function run(argv) {
     task: "abstract-qa-spec-gwt",
     page,
     rulesVersion: ABSTRACTION_RULES_VERSION,
-    specDefinition: buildGwtPromptSpec(inputSpec),
+    // The spec source, not the parsed expectations: the parser only names the
+    // assertions it supports, so a plan written from its output silently
+    // describes a narrower check than the test actually makes.
+    specDefinition: buildGwtPromptSpec(inputSpec, {
+      specSourceFiles: readSpecSources(page),
+    }),
   };
 
   const query = buildAbstractHermesQuery(payload);

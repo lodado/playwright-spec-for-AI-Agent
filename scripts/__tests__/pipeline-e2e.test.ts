@@ -294,6 +294,20 @@ describe("flag forms", () => {
 });
 
 describe("artifacts a later stage reads back", () => {
+  it("to hand the abstraction agent the playwright source of each runnable test", () => {
+    expect(runPipeline().status).toBe(0);
+
+    const query = readFileSync(
+      join(qaDir(), `${PAGE}-hermes-abstract-query.txt`),
+      "utf8"
+    );
+
+    // The readonly check's own assertion, verbatim from the spec file.
+    expect(query).toContain("toHaveText");
+    // The mutating check is never run, so its steps stay out of the prompt.
+    expect(query).not.toContain('getByTestId("cancel-btn")');
+  });
+
   it("keeps the ledger chain intact and reports the spec hash as current", () => {
     expect(runPipeline().status).toBe(0);
     expect(cli(["review", `--page=${PAGE}`]).status).not.toBe(2);
