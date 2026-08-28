@@ -14,9 +14,9 @@ For what the stages mean, read
 npx playwright-spec-for-ai-agent <command> [options]
 ```
 
-Seven pipeline commands run in this order: `spec`, `abstract-ai`, `login`,
-`judge`, `review`, `slack`, `nightly`. Six operator commands inspect or
-rehearse a project: `doctor`, `show`, `report`, `handoff`, `ack`, `demo`.
+Eight pipeline commands run in this order: `spec`, `abstract-ai`, `login`,
+`judge`, `review`, `slack`, `issues`, `nightly`. Six operator commands inspect
+or rehearse a project: `doctor`, `show`, `report`, `handoff`, `ack`, `demo`.
 
 Two conventions apply to every command:
 
@@ -207,6 +207,7 @@ or many.
 | `--all`                | off     | one of the three | Run every page in the config's `pages` and legacy `targetPaths` blocks.        |
 | `--target-path=<path>` | config  | no              | Single page only. Ignored for `--pages=` and `--all`, where config decides.     |
 | `--with-slack`         | off     | no              | Run the `slack` stage on `fail` and `manual_review`.                            |
+| `--with-issues`        | off     | no              | Run the `issues` stage after `review` for each page.                            |
 | `--review-on=<mode>`   | `fail`  | no              | `always` \| `fail` \| `never` — when to run the review stage.                   |
 | `--skip-review`        | off     | no              | Alias of `--review-on=never`.                                                   |
 | `--skip-abstract-ai`   | off     | no              | Reuse the existing live plan.                                                   |
@@ -283,6 +284,63 @@ Exit codes: 0 when no page fails the `--fail-on` gate. 1 when a page fails on
 its verdict. 3 when a failing page is `quarantined` or `unreadable`, because
 that is an infrastructure failure rather than a verdict. 2 when no pages resolve
 or a value flag is invalid.
+
+## issues
+
+Files one GitHub issue per page whose verdict still needs someone to act, using
+the `handoff` document as the body. It reuses an open issue rather than filing a
+new one each night, and closes it when a later run passes.
+
+| Option              | Default      | Required | Effect                                                              |
+| ------------------- | ------------ | -------- | --------------------------------------------------------------------- |
+| `--page=<slug>`     | —            | no       | One page. Without it, `--pages=` or every configured page.          |
+| `--pages=<a,b>`     | every configured page | no | File for these pages.                                          |
+| `--issue-on=<mode>` | `unsettled`  | no       | `unsettled` (fail + manual_review) \| `fail`.                       |
+| `--include-harness` | off          | no       | Also file `HARNESS_DEFECT` causes and quarantined runs.             |
+| `--label=<name>`    | `qa:verdict` | no       | Extra label, repeatable. `qa:verdict` is always applied.            |
+| `--allow-public`    | off          | no       | Permit filing on a public repository.                               |
+| `--dry-run`         | off          | no       | Print the title and body that would be sent; make no API call.      |
+
+Environment: `GITHUB_TOKEN` (the workflow needs `permissions: issues: write`)
+and `GITHUB_REPOSITORY` as `owner/repo`. GitHub Actions supplies both.
+
+Reads: `<page>-hermes-judgment.json`, `<page>-qa-ack.json`,
+`<page>-qa-verdict-history.json`, `<page>-qa-run.invalid`, and everything
+`handoff` reads to build the body.
+
+Writes: an issue, a comment, or a state change on GitHub, and an `issue` event
+appended to `<page>-qa-runs.jsonl`.
+
+### What it decides
+
+- **One issue per page**, found by the `<!-- playwright-spec-for-ai-agent:
+  page=<slug> -->` marker in the body rather than by title, so renaming the
+  issue does not orphan it.
+- **Silence when nothing changed.** The body carries a fingerprint of the
+  failing check set; an identical set produces no comment. A changed set
+  comments and rewrites the body. A recurrence on a closed issue reopens that
+  thread instead of filing a second one, so what was already tried stays
+  attached.
+- **A passing verdict closes it.** Only a real re-judgment against staging can
+  produce that verdict, so a merged fix closes nothing by itself — the next run
+  does.
+- **`HARNESS_DEFECT` is not filed by default**, nor is a quarantined run: a
+  check that was never really judged is ops work, and filing it at the
+  application team is how a label becomes noise. `--include-harness` opts in.
+- **Acknowledged checks are excluded**, on the same rules as the Slack alert.
+- **A flaky check adds `qa:flaky`** rather than being dropped, so the reader
+  knows the finding may not reproduce.
+- **A public repository is refused** without `--allow-public`, because the body
+  carries the staging URL, the page structure, and evidence paths.
+
+The footer that follows the handoff document — an `@mention` that triggers a
+coding agent, for instance — comes from `github.issueFooter` in the project
+config and nowhere else. Deciding who acts on a verdict is the operator's call.
+
+Exit codes: 0, including when there is nothing to file. 2 for a bad flag value
+or when no page resolves. 3 when `GITHUB_TOKEN`/`GITHUB_REPOSITORY` is missing,
+when the repository is public without `--allow-public`, or when a GitHub API
+call fails. One page's API failure does not stop the others.
 
 ## handoff
 

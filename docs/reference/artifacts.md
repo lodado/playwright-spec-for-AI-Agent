@@ -23,19 +23,19 @@ characters.
 | `{slug}-qa-judge-plan.md`                    | `judge`                            | `review` (the pinned plan)                                        |
 | `{slug}-hermes-query.txt`                    | `judge`                            | humans (secrets redacted)                                         |
 | `{slug}-hermes-raw-output.txt`               | `judge`                            | humans (secrets redacted)                                         |
-| `{slug}-hermes-judgment.json`                | `judge`                            | `review`, `slack`, `report`, `show`, `ack`, `doctor`, `nightly`, `handoff` |
+| `{slug}-hermes-judgment.json`                | `judge`                            | `review`, `slack`, `report`, `show`, `ack`, `doctor`, `nightly`, `handoff`, `issues` |
 | `{slug}-hermes-judgment.md`                  | `judge`                            | humans                                                            |
 | `{slug}-qa-evidence-manifest.json`           | `judge`                            | humans, `handoff` (per-check fallback)                            |
 | `{slug}-qa-report.ctrf.json`                 | `judge`                            | any CTRF-consuming reporter                                       |
-| `{slug}-qa-verdict-history.json`             | `judge`                            | `flakinessReport()` / `stableVerdict()`, `handoff` (stability)    |
-| `{slug}-qa-runs.jsonl`                       | `judge`, `review`, `nightly`, `slack`, `ack` | `report`, `review` packet, `doctor`                     |
-| `{slug}-qa-run.invalid`                      | `judge`, on failure                | `review`, `slack`, `report`, `show`, `doctor`                     |
+| `{slug}-qa-verdict-history.json`             | `judge`                            | `flakinessReport()` / `stableVerdict()`, `handoff`, `issues`      |
+| `{slug}-qa-runs.jsonl`                       | `judge`, `review`, `nightly`, `slack`, `ack`, `issues` | `report`, `review` packet, `doctor`           |
+| `{slug}-qa-run.invalid`                      | `judge`, on failure                | `review`, `slack`, `report`, `show`, `doctor`, `issues`           |
 | `{slug}-hermes-judge-review-packet.md`       | `review`                           | humans (the reviewer's exact input)                               |
 | `{slug}-hermes-judge-review-query.txt`       | `review`                           | humans                                                            |
 | `{slug}-hermes-judge-review-raw-output.txt`  | `review`                           | humans (`-sampleN.txt` with `--samples=`)                         |
 | `{slug}-hermes-judge-review.json`            | `review`                           | `slack`, `report`, `show`, `handoff`                              |
 | `{slug}-hermes-judge-review.md`              | `review`                           | humans                                                            |
-| `{slug}-qa-ack.json`                         | `ack`                              | `slack`                                                           |
+| `{slug}-qa-ack.json`                         | `ack`                              | `slack`, `issues`                                                 |
 | `evidence/`                                  | `judge` runner                     | `review` packet, `show --evidence`, both via the paths in the judgment |
 | `videos/`                                    | `judge` runner, under `QA_RECORD_VIDEO` | humans                                                       |
 

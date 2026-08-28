@@ -47,6 +47,16 @@ export default defineConfig({
     // storageState: "playwright/.auth/user.json",
   },
 
+  /**
+   * `issues` only. The footer is appended below the handoff document in every
+   * filed issue, and it is the only place an agent trigger can come from —
+   * deciding who acts on a verdict is yours, not this tool's.
+   */
+  // github: {
+  //   issueFooter:
+  //     "@claude Classify each check above and open a PR with the smallest fix. Do not weaken a check to make it pass.",
+  // },
+
   pages: {
     // A plain read-only page: no login, no account state to speak of.
     search: {

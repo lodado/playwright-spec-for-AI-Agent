@@ -31,7 +31,7 @@ input can be refused instead of silently absorbed.
 `nightly` runs them in order for one page or for every configured page:
 
 ```text
-spec → abstract-ai → judge → review → slack (optional)
+spec → abstract-ai → judge → review → slack · issues (optional)
 ```
 
 | Stage | Consumes | Produces | Agent |

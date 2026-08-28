@@ -2,7 +2,9 @@ name: playwright-spec-for-AI-Agent
 description: >-
   Run the AI staging QA pipeline (spec -> abstract-ai -> judge -> review) for one
   or more pages, upload the __QA__ artifacts, and write the verdict table to the
-  job summary. This action does NOT install the agent CLI it drives
+  job summary. With `--with-issues` in extra-args it also files one GitHub issue
+  per page that still needs action, which needs `permissions: issues: write` and
+  the github-token input. This action does NOT install the agent CLI it drives
   (hermes-agent, aside, or whatever QA_AGENT_CMD points at) and does NOT provide
   its credentials or the staging account — install and authenticate the backend
   in your own steps before calling this action.
@@ -21,7 +23,14 @@ inputs:
     required: false
     default: ""
   extra-args:
-    description: "Extra flags appended to every nightly run, e.g. --with-slack --skip-review."
+    description: "Extra flags appended to every nightly run, e.g. --with-slack --with-issues --skip-review."
+    required: false
+    default: ""
+  github-token:
+    description: >-
+      Token used by --with-issues to file and close issues. Needs
+      `permissions: issues: write` on the calling job; this action cannot grant
+      it. Leave empty when not filing issues.
     required: false
     default: ""
   node-version:
@@ -48,6 +57,7 @@ runs:
         QA_PAGES: ${{ inputs.pages }}
         QA_CONFIG_PATH: ${{ inputs.config-path }}
         QA_EXTRA_ARGS: ${{ inputs.extra-args }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
         set -u
         config_flag=""

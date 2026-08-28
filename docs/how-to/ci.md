@@ -204,6 +204,19 @@ the acked count is reported in the headline instead. When `GITHUB_SERVER_URL`,
 `GITHUB_REPOSITORY`, and `GITHUB_RUN_ID` are set, the message links back to the
 Actions run.
 
+## File issues instead of only alerting
+
+`nightly --with-issues` runs the `issues` stage after `review`. It files one
+GitHub issue per page that still needs action, using the `handoff` document as
+the body, so a verdict becomes a work item a coding agent can pick up. It needs
+`permissions: issues: write` and refuses to run on a public repository without
+`--allow-public`, because the body carries your staging URL and page structure.
+
+An unchanged failure set produces no comment, and only a later passing verdict
+closes the issue — merging a fix closes nothing, which is what keeps the loop
+from certifying itself. The full walkthrough, including how to point an agent at
+the label, is [Close the loop](./close-the-loop.md).
+
 ## Skip work that provably did not change
 
 Two `nightly` stages are skipped when their inputs are unchanged. Both are cost
@@ -221,6 +234,7 @@ other two. `--skip-review` is an alias of `--review-on=never`.
 
 ## Related
 
+- [Close the loop](./close-the-loop.md) — turn failing verdicts into agent work items.
 - [CLI reference](../reference/cli.md) — every flag named here.
 - [Configuration](../reference/configuration.md) — `staging.versionUrl`, `staging.storageState`, and the environment variables.
 - [Artifacts](../reference/artifacts.md) — what lands in `__QA__/`, including the CTRF field mapping.
