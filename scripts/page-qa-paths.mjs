@@ -113,6 +113,11 @@ export function artifactPaths(page, outputDir = resolveOutputDir(page)) {
     hermesRawOutput: join(outputDir, `${slug}-hermes-raw-output.txt`),
     hermesQuery: join(outputDir, `${slug}-hermes-query.txt`),
     hermesAbstractQuery: join(outputDir, `${slug}-hermes-abstract-query.txt`),
+    hermesDetectQuery: join(outputDir, `${slug}-hermes-detect-query.txt`),
+    hermesDetectRawOutput: join(
+      outputDir,
+      `${slug}-hermes-detect-raw-output.txt`
+    ),
     hermesAbstractRawOutput: join(
       outputDir,
       `${slug}-hermes-abstract-raw-output.txt`

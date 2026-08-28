@@ -41,6 +41,17 @@ import {
 } from "./judge-verdict.mjs";
 import { resolveSpecForJudge } from "./resolve-spec-for-judge.mjs";
 import { seedAsideSession, seedProfileSession } from "./qa-session-seed.mjs";
+import {
+  buildStateDetectionQuery,
+  DETECT_MAX_TURNS,
+  normalizeStateDetection,
+  parseStateOverride,
+  reconcileState,
+  scenarioHints,
+  scopePlanMarkdown,
+  selectableScenarioIds,
+  UNKNOWN_STATE,
+} from "./judge-state-detection.mjs";
 import { appendRunEvent, newRunId } from "./qa-run-ledger.mjs";
 import { writeCtrf } from "./qa-ctrf.mjs";
 import { appendVerdict } from "./qa-verdict-history.mjs";
@@ -63,6 +74,7 @@ import { resolveStagingQaConfig } from "./staging-qa-prompt.mjs";
 import {
   buildBrowseChecklist,
   listAlwaysRunScenarios,
+  selectScenariosForLiveRun,
 } from "./dashboard-spec-parser.mjs";
 import { buildJudgeBrowseDocument } from "./qa-spec-judge-document.mjs";
 import {
@@ -285,6 +297,84 @@ function renderMarkdown(judgment) {
 }
 
 /**
+ * Settle the account state before the plan is built. Returns null when there is
+ * nothing to choose between, when the operator forced a state, or when the
+ * detector could not tell — the caller then judges every scenario, which is the
+ * old behaviour and the safe direction to fail in.
+ */
+async function detectAccountState({
+  page,
+  paths,
+  targetUrl,
+  config,
+  adapter,
+  preauthenticated,
+  runId,
+  override,
+}) {
+  const resolved = resolveSpecForJudge(paths);
+  const scenarioIds = selectableScenarioIds(resolved?.definition);
+  const expected = config.expectedAccountState || null;
+
+  if (override) {
+    return { state: override, expected, mismatch: false, source: "flag", evidence: "" };
+  }
+  // One state is not a choice, and choosing badly costs more than the scoping saves.
+  if (scenarioIds.length < 2) return null;
+
+  const query = buildStateDetectionQuery({
+    targetUrl,
+    scenarioIds,
+    scenarioHints: scenarioHints(resolved.definition),
+    preauthenticated,
+    authRequired: isAuthRequired(config),
+  });
+
+  let detection;
+  try {
+    const raw = runAgent(query, adapter.capabilities.supportsMaxTurns ? DETECT_MAX_TURNS : null, {
+      // Its own artifacts: the judge call that follows writes to the same page
+      // and would otherwise overwrite the only record of what the detector saw.
+      paths: {
+        ...paths,
+        hermesQuery: paths.hermesDetectQuery,
+        hermesRawOutput: paths.hermesDetectRawOutput,
+      },
+      secrets: [config.email, config.password].filter(Boolean),
+      requiredKeys: ["state"],
+      mode: "browse",
+    });
+    detection = normalizeStateDetection(raw, { scenarioIds });
+  } catch (error) {
+    // Detection is an optimisation. Losing it costs prompt size, not correctness.
+    console.warn(`State detection failed, judging every scenario: ${error.message}`);
+    return null;
+  }
+
+  const reconciled = reconcileState(detection, expected);
+  appendRunEvent(paths.runsLedger, {
+    runId,
+    kind: "judge-state",
+    page,
+    state: reconciled.state,
+    expected: reconciled.expected,
+    mismatch: reconciled.mismatch,
+    confidence: detection.confidence,
+  });
+
+  if (detection.state === UNKNOWN_STATE) {
+    console.warn(
+      `Account state undetermined (${detection.reasons.join("; ") || "no reason given"}) — judging every scenario.`
+    );
+    return null;
+  }
+  console.log(
+    `Account state: ${reconciled.state}${reconciled.expected ? ` (expected ${reconciled.expected})` : ""} — ${detection.evidence}`
+  );
+  return { ...reconciled, source: "detected", evidence: detection.evidence };
+}
+
+/**
  * Everything needed to run (or dry-run) the judge: resolved plan, prompt, turn
  * budget, and the planned-check list the verdict floor is measured against.
  */
@@ -296,6 +386,7 @@ export function prepareJudgePlan({
   config,
   adapter,
   preauthenticated,
+  accountState = null,
 }) {
   const resolved = resolveSpecForJudge(paths);
   if (!resolved) {
@@ -334,13 +425,31 @@ export function prepareJudgePlan({
   }
   stagingLogin.targetUrl = targetUrl;
 
-  const specSourceFiles = loadSpecSourceFiles(resolveSpecDir(page));
-  const uploadFixtures = buildUploadFixturesPayload(specDefinition, page);
-  const hasScenarios = Array.isArray(specDefinition?.scenarios);
-  const alwaysRunScenarioIds = hasScenarios
-    ? listAlwaysRunScenarios(specDefinition).map(scenario => scenario.scenarioId)
+  // One live account is in one state. Judging the other states' scenarios costs
+  // a prompt that grows with every state the product has, and reports them as
+  // `skip` for "wrong account" — noise measured against a denominator that was
+  // never applicable. With a state settled, the run carries that state plus the
+  // always-run scenarios and nothing else.
+  const scopedScenarios =
+    accountState && accountState !== UNKNOWN_STATE
+      ? selectScenariosForLiveRun(specDefinition, accountState)
+      : null;
+  const notApplicable = scopedScenarios
+    ? (specDefinition.scenarios ?? [])
+        .map(scenario => scenario.scenarioId)
+        .filter(id => !scopedScenarios.some(scenario => scenario.scenarioId === id))
     : [];
-  const checklist = hasScenarios ? buildBrowseChecklist(specDefinition) : [];
+  const scopedSpec = scopedScenarios
+    ? { ...specDefinition, scenarios: scopedScenarios }
+    : specDefinition;
+
+  const specSourceFiles = loadSpecSourceFiles(resolveSpecDir(page));
+  const uploadFixtures = buildUploadFixturesPayload(scopedSpec, page);
+  const hasScenarios = Array.isArray(scopedSpec?.scenarios);
+  const alwaysRunScenarioIds = hasScenarios
+    ? listAlwaysRunScenarios(scopedSpec).map(scenario => scenario.scenarioId)
+    : [];
+  const checklist = hasScenarios ? buildBrowseChecklist(scopedSpec) : [];
   // One planned entry per plan block, duplicates included: the same title is
   // planned once per scenario and the agent reports one check per block, so
   // deduplicating here made `coverage.planned` disagree with the very document
@@ -349,15 +458,18 @@ export function prepareJudgePlan({
   // The parser reads these `data-testid` values from the same source the plan
   // was written from. They stay out of the plan — it is intent-level on purpose
   // — and reach the judge as contract points to confirm on the page.
-  const contractHints = collectContractHints(specDefinition);
+  const contractHints = collectContractHints(scopedSpec);
 
   const savedPlanMarkdown = existsSync(paths.specLiveMd)
-    ? readFileSync(paths.specLiveMd, "utf8")
+    ? scopePlanMarkdown(
+        readFileSync(paths.specLiveMd, "utf8"),
+        scopedScenarios?.map(scenario => scenario.scenarioId) ?? []
+      )
     : null;
 
   const { document: judgeDocument, planSource } = buildJudgeBrowseDocument({
     page,
-    spec: specDefinition,
+    spec: scopedSpec,
     specLiveMarkdown: savedPlanMarkdown,
     planSource: savedPlanMarkdown ? "spec-live.md" : null,
     stagingLogin: {
@@ -393,6 +505,7 @@ export function prepareJudgePlan({
     planSource,
     plannedChecks,
     contractHints,
+    notApplicable,
     readOnly: isReadOnlyPlan(checklist),
     // An adapter that cannot cap its turns ignores the budget entirely.
     maxTurns: adapter.capabilities.supportsMaxTurns
@@ -699,6 +812,7 @@ export async function main(argv = process.argv.slice(2)) {
       config,
       adapter,
       preauthenticated,
+      accountState: parseStateOverride(argv),
     });
     writeAgentQueryArtifact(paths, plan.query, plan.secrets);
     console.log(
@@ -718,7 +832,18 @@ export async function main(argv = process.argv.slice(2)) {
 
   let plan;
   let result;
+  let accountState = null;
   try {
+    accountState = await detectAccountState({
+      page,
+      paths,
+      targetUrl,
+      config,
+      adapter,
+      preauthenticated,
+      runId,
+      override: parseStateOverride(argv),
+    });
     plan = prepareJudgePlan({
       page,
       target,
@@ -727,6 +852,7 @@ export async function main(argv = process.argv.slice(2)) {
       config,
       adapter,
       preauthenticated,
+      accountState: accountState?.state ?? null,
     });
     appendRunEvent(paths.runsLedger, {
       runId,
@@ -782,7 +908,12 @@ export async function main(argv = process.argv.slice(2)) {
     plannedChecks: plan.plannedChecks,
     contractHints: plan.contractHints,
     runnerEvidence: result.runnerEvidence,
-    violations: result.violations,
+    // A page judged in a state nobody asked for was not the test anyone
+    // planned, so the run does not get to be green — but the reading still
+    // stands, so this lowers the verdict instead of quarantining the run.
+    violations: accountState?.mismatch
+      ? [...result.violations, { kind: "account-state-mismatch", detail: accountState.note }]
+      : result.violations,
   });
 
   const judgment = withSchema(
@@ -794,6 +925,16 @@ export async function main(argv = process.argv.slice(2)) {
       targetPath,
       planSource: plan.planSource,
       specHash: plan.specHash,
+      accountState: accountState
+        ? {
+            state: accountState.state,
+            expected: accountState.expected ?? null,
+            mismatch: Boolean(accountState.mismatch),
+            source: accountState.source,
+            evidence: accountState.evidence || null,
+          }
+        : null,
+      notApplicable: plan.notApplicable,
       status: decision.status,
       cause: decision.cause,
       summary: decision.summary,

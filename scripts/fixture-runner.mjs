@@ -9,7 +9,7 @@ import { EnvironmentError } from "./errors.mjs";
  * possible. Point QA_FIXTURE_DIR at a directory of <stage>.json files to
  * replay your own recorded responses instead.
  */
-export const FIXTURE_STAGES = ["abstract", "judge", "review"];
+export const FIXTURE_STAGES = ["abstract", "detect", "judge", "review"];
 
 export function resolveFixtureStage({
   requiredKeys = ["status"],
@@ -21,6 +21,7 @@ export function resolveFixtureStage({
   ]);
   if (keys.has("livePlan")) return "abstract";
   if (keys.has("criteria") || keys.has("overallReview")) return "review";
+  if (keys.has("state")) return "detect";
   return "judge";
 }
 
@@ -117,6 +118,16 @@ function builtinFixture(stage, mode, query = "") {
       livePlan: fixtureLivePlan(spec),
       spec: spec ?? { scenarios: [] },
       changes: [],
+    };
+  }
+
+  if (stage === "detect") {
+    // Offline runs cannot see a page, so they must not scope the plan to a
+    // state they invented: UNKNOWN makes the judge carry every scenario.
+    return {
+      state: "UNKNOWN",
+      evidence: "",
+      confidence: "low",
     };
   }
 

@@ -282,7 +282,13 @@ export function analyzeHarViolations(
  */
 function violationFloor(kind) {
   if (kind === "off-origin-navigation") return "fail";
-  if (kind === "unexpected-mutation" || kind === "blocked-mutation") {
+  if (
+    kind === "unexpected-mutation" ||
+    kind === "blocked-mutation" ||
+    // The page was in a different account state than the project configured, so
+    // the checks that ran are not the ones anyone planned.
+    kind === "account-state-mismatch"
+  ) {
     return "manual_review";
   }
   return "pass";
@@ -292,6 +298,9 @@ function deriveCause({ status, declared, checks, violations }) {
   if (status === "pass") return "NONE";
   if (violations.some(violation => violation.kind === "off-origin-navigation")) {
     return "HARNESS_DEFECT";
+  }
+  if (violations.some(violation => violation.kind === "account-state-mismatch")) {
+    return "ENVIRONMENT_DEFECT";
   }
   const raw = typeof declared === "string" ? declared.trim().toUpperCase() : "";
   if (CAUSES.includes(raw) && raw !== "NONE") return raw;

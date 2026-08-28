@@ -609,3 +609,24 @@ describe("collectContractHints", () => {
     expect(hints.has("no locators")).toBe(false);
   });
 });
+
+describe("account state mismatch", () => {
+  it("floors the verdict at manual_review with cause ENVIRONMENT_DEFECT", async () => {
+    const { normalizeBrowseDecision } = await import("../judge-verdict.mjs");
+    const decision = normalizeBrowseDecision(
+      { status: "pass", checks: [passing("shows the plan name")] },
+      {
+        violations: [
+          {
+            kind: "account-state-mismatch",
+            detail: "the account is INACTIVE, but this page expects ACTIVE",
+          },
+        ],
+      },
+    );
+
+    expect(decision.status).toBe("manual_review");
+    expect(decision.cause).toBe("ENVIRONMENT_DEFECT");
+    expect(decision.summary).toContain("account-state-mismatch");
+  });
+});
