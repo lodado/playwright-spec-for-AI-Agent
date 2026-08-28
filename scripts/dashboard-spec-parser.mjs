@@ -537,6 +537,35 @@ function parseLocatorExpression(expression) {
     return { kind: "text", value: unescapeString(textMatch[2]) };
   }
 
+  const roleMatch = expression.match(
+    /page\.getByRole\(\s*(["'`])((?:\\.|(?!\1).)*?)\1\s*(?:,\s*\{([\s\S]*?)\})?\s*\)/
+  );
+  if (roleMatch) {
+    const nameMatch = roleMatch[3]?.match(
+      /\bname\s*:\s*(["'`])((?:\\.|(?!\1).)*?)\1/
+    );
+    return {
+      kind: "role",
+      value: unescapeString(roleMatch[2]),
+      ...(nameMatch
+        ? { name: parseStringLiteral(unescapeString(nameMatch[2])) }
+        : {}),
+    };
+  }
+
+  for (const [method, kind] of [
+    ["getByLabel", "label"],
+    ["getByPlaceholder", "placeholder"],
+    ["getByAltText", "altText"],
+    ["getByTitle", "title"],
+    ["locator", "css"],
+  ]) {
+    const match = expression.match(
+      new RegExp(`page\\.${method}\\(\\s*(["'\\x60])((?:\\\\.|(?!\\1).)*?)\\1\\s*\\)`)
+    );
+    if (match) return { kind, value: unescapeString(match[2]) };
+  }
+
   return null;
 }
 
@@ -555,12 +584,79 @@ function parseStringLiteral(value) {
   return { kind: "template", pattern: `^${shape}$` };
 }
 
+function parseStaticExpected(value) {
+  const trimmed = value.trim();
+  const stringMatch = trimmed.match(/^(["'`])((?:\\.|(?!\1).)*)\1$/s);
+  if (stringMatch) return parseStringLiteral(unescapeString(stringMatch[2]));
+  const regexMatch = trimmed.match(/^\/((?:\\.|[^/])*)\/([dgimsuvy]*)$/s);
+  if (regexMatch) {
+    return { kind: "regex", pattern: regexMatch[1], flags: regexMatch[2] };
+  }
+  return null;
+}
+
 export function parseReadOnlyExpectations(body) {
   const expectations = [];
   const chunks = body.split(/await expect\(/).slice(1);
 
   for (const chunk of chunks) {
     const statement = `await expect(${chunk}`;
+    const targetMatch = statement.match(
+      /expect\(\s*([\s\S]*?)\s*\)\s*\.\s*(not\s*\.\s*)?([A-Za-z_$][\w$]*)\s*\(([\s\S]*?)\)/m
+    );
+    if (!targetMatch) continue;
+    const locator = parseLocatorExpression(targetMatch[1]);
+    if (!locator) continue;
+    const negated = Boolean(targetMatch[2]);
+    const matcher = targetMatch[3];
+    const argument = targetMatch[4];
+
+    if (matcher === "toBeHidden" || (matcher === "toBeVisible" && negated)) {
+      expectations.push({ type: "notVisible", locator });
+      continue;
+    }
+    if (matcher === "toBeVisible") {
+      expectations.push({ type: "visible", locator });
+      continue;
+    }
+    if (matcher === "toContainText" || matcher === "toHaveText") {
+      const expected = parseStaticExpected(argument);
+      if (expected) {
+        expectations.push({
+          type: matcher === "toContainText" ? "containText" : "haveText",
+          locator,
+          expected,
+          ...(negated ? { negated: true } : {}),
+        });
+      }
+      continue;
+    }
+    if (matcher === "toHaveCount") {
+      const expected = Number(argument.trim());
+      if (Number.isInteger(expected)) expectations.push({ type: "count", locator, expected });
+      continue;
+    }
+    if (matcher === "toHaveValue") {
+      const expected = parseStaticExpected(argument);
+      if (expected) expectations.push({ type: "value", locator, expected });
+      continue;
+    }
+    const stateTypes = {
+      toBeEnabled: "enabled",
+      toBeDisabled: "disabled",
+      toBeChecked: "checked",
+      toBeEditable: "editable",
+      toBeEmpty: "empty",
+      toBeFocused: "focused",
+      toBeAttached: "attached",
+      toBeInViewport: "inViewport",
+    };
+    if (stateTypes[matcher]) {
+      expectations.push({ type: stateTypes[matcher], locator, ...(negated ? { negated: true } : {}) });
+      continue;
+    }
+
+    /* Legacy fallbacks below remain during artifact migration. */
     const notVisibleMatch = statement.match(
       /expect\(\s*([\s\S]*?)\s*\)\.not\.toBeVisible/m
     );

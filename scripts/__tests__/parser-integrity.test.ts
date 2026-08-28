@@ -12,7 +12,7 @@ describe("spec parser integrity as a mixed supported and unsupported test", () =
   it("to be accountable for every Playwright assertion without silent loss", () => {
     const body = `
       await expect(page.getByTestId("ready")).toBeVisible();
-      await expect(page.getByRole("button", { name: "Save" })).toHaveText("Save");
+      await expect(page.getByRole("button", { name: "Save" })).toHaveScreenshot();
     `;
 
     const analysis = analyzeReadOnlyExpectations(body, {
@@ -29,7 +29,7 @@ describe("spec parser integrity as a mixed supported and unsupported test", () =
     expect(analysis.expectations).toHaveLength(1);
     expect(analysis.unsupportedConstructs).toEqual([
       expect.objectContaining({
-        api: "toHaveText",
+        api: "toHaveScreenshot",
         category: "assertion",
         reason: "unsupported assertion or locator expression",
         severity: "error",
@@ -46,8 +46,8 @@ describe("dashboard spec as a read-only test with unsupported assertions", () =>
       `// @qa-scenario: ACTIVE
 // @qa-live-policy: readonly
 test("uses common APIs", async ({ page }) => {
-  await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
-  await expect(page.getByTestId("title")).toHaveText("Hello");
+  await expect(pageObject.saveButton).toBeVisible();
+  await expect(page.getByTestId("title")).toHaveScreenshot();
 });`,
     );
 
