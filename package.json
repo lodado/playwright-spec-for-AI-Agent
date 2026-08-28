@@ -46,7 +46,9 @@
   "files": [
     "bin",
     "scripts",
+    "!scripts/__tests__",
     "docs",
+    "!docs/superpowers",
     "action.yml",
     "playwright-spec-for-ai-agent.config.example.mjs",
     "examples",
