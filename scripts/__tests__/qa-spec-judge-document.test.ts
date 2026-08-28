@@ -107,6 +107,35 @@ describe("renderJudgeHermesDocument", () => {
     expect(doc).not.toContain("**Given:**");
     expect(doc).toContain("**Then:**");
   });
+
+  it("caps parser gaps at manual_review and names unsupported APIs", () => {
+    const doc = renderJudgeHermesDocument({
+      page: "dashboard",
+      spec: {
+        scenarios: [{
+          scenarioId: "ACTIVE",
+          label: "Active",
+          sourceFile: "gap.spec.ts",
+          tests: [{
+            title: "uses unsupported assertion",
+            liveRunPolicy: "judgment-parser-gap",
+            expectations: [],
+            unsupportedConstructs: [{
+              api: "toHaveScreenshot",
+              location: { file: "gap.spec.ts", line: 8, column: 3 },
+            }],
+          }],
+        }],
+      },
+      includeSession: false,
+      specSourceFiles: {},
+    });
+
+    expect(doc).toContain("manual_review");
+    expect(doc).toContain("toHaveScreenshot");
+    expect(doc).toContain("gap.spec.ts:8:3");
+    expect(doc).not.toContain("Matches Playwright assertions");
+  });
 });
 
 describe("buildBrowseHermesQuery", () => {

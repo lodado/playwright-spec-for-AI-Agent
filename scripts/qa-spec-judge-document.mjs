@@ -11,6 +11,8 @@ const POLICY_WHEN = {
   "executable-interaction": "Safe UI steps per Playwright excerpt; Esc for dialogs.",
   "judgment-interaction-no-confirm": "Open flow; stop before confirm; Esc.",
   "judgment-mock-api": "View page; judge by intent (mock-api).",
+  "judgment-parser-gap":
+    "Inspect available evidence, but never pass; report manual_review / SPEC_GAP.",
 };
 
 /** Only safe-interaction tests need their Playwright steps quoted. */
@@ -143,6 +145,15 @@ function buildGivenWhenThen(test) {
     given.push("abstractReview");
   }
 
+  if (test.liveRunPolicy === "judgment-parser-gap") {
+    for (const diagnostic of test.unsupportedConstructs ?? []) {
+      const location = diagnostic.location
+        ? `${diagnostic.location.file}:${diagnostic.location.line}:${diagnostic.location.column}`
+        : "unknown location";
+      given.push(`Unsupported Playwright API ${diagnostic.api} at ${location}`);
+    }
+  }
+
   const when = [POLICY_WHEN[test.liveRunPolicy] ?? test.liveRunPolicy];
   const then = [];
 
@@ -156,6 +167,8 @@ function buildGivenWhenThen(test) {
     then.push("UI matches intent up to safe point");
   } else if (test.liveRunPolicy === "judgment-mock-api") {
     then.push("UI matches intent");
+  } else if (test.liveRunPolicy === "judgment-parser-gap") {
+    then.push("Result is manual_review / SPEC_GAP; pass is forbidden");
   }
 
   return { given, when, then };
