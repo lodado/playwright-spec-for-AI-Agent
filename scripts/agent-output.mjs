@@ -32,11 +32,25 @@ export function extractFinalResponseText(output) {
   return text;
 }
 
+/**
+ * A single fenced block, unwrapped. Only a value that IS one fenced block is
+ * unwrapped: prose that merely happens to contain a fence is left alone so the
+ * regular candidate scan still sees it in context.
+ */
+function stripCodeFence(value) {
+  const trimmed = (value ?? "").trim();
+  const fenced = trimmed.match(/^```(?:[a-z]+)?\s*\n?([\s\S]*?)\n?```$/i);
+  return fenced ? fenced[1].trim() : trimmed;
+}
+
 export function unwrapAgentEnvelope(parsed) {
   if (!parsed || typeof parsed !== "object") return parsed;
 
   if (typeof parsed.result === "string") {
-    const trimmed = parsed.result.trim();
+    // `claude -p --output-format json` carries the model's answer as a string
+    // in `result`, and models routinely fence it. Stripping the fence here is
+    // what keeps a correct answer from being reported as unusable output.
+    const trimmed = stripCodeFence(parsed.result);
     if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
       try {
         return JSON.parse(trimmed);

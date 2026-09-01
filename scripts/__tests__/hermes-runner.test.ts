@@ -101,6 +101,23 @@ describe("extractJsonFromHermesOutput", () => {
     ).toEqual(inner);
   });
 
+  /**
+   * `claude -p --output-format json` puts the model's answer in `result` as a
+   * string, and the model routinely fences it. Without fence-aware unwrapping
+   * the documented exec recipe reports "did not return valid JSON" for a run
+   * that actually answered correctly.
+   */
+  it("unwraps an envelope result whose JSON is fenced", () => {
+    const inner = { status: "pass", summary: "Example Domain" };
+    const wrapped = JSON.stringify({
+      type: "result",
+      result: "```json\n" + JSON.stringify(inner) + "\n```",
+    });
+    expect(
+      extractJsonFromHermesOutput(wrapped, { requiredKeys: ["status"] }),
+    ).toEqual(inner);
+  });
+
   it("prefers the final-response verdict over an HTTP status dumped on stderr", () => {
     const stdout = [
       "🎯 FINAL RESPONSE:",
