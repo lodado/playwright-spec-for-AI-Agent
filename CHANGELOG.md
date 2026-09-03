@@ -13,6 +13,18 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [7.2.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.1.1...v7.2.0) (2026-09-03)
+
+
+### Features
+
+* **adapter:** hand an exec agent the browser the harness already authenticated ([b00e11f](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/b00e11f77c8f85748c914d767f2d165071f1c5b6))
+
+
+### Bug Fixes
+
+* **adapter:** read a fenced answer in an agent envelope as the verdict ([1febc7d](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/1febc7d94d1fa7640420cf8af4f2e7ee376c87a8))
+
 ## [7.1.1](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.1.0...v7.1.1) (2026-08-28)
 
 
