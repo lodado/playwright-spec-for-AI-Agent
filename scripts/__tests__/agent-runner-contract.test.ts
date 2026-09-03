@@ -25,7 +25,7 @@ import {
   resolveAsideTimeoutMs,
   runAside,
 } from "../aside-runner.mjs";
-import { runExecAgent } from "../exec-runner.mjs";
+import { execChildEnv, runExecAgent } from "../exec-runner.mjs";
 import { runFixture } from "../fixture-runner.mjs";
 import { runAgent } from "../ai-agent-adapter.mjs";
 import { EnvironmentError } from "../errors.mjs";
@@ -232,6 +232,29 @@ describe("exec adapter", () => {
     expect(JSON.stringify(args)).not.toContain("judge this page");
     expect(JSON.stringify(args)).not.toContain(SECRET);
     expect(spawnOptions.input).toContain("judge this page");
+  });
+
+  it("forwards the run's CDP endpoint to a browser MCP server under cdp-attach", () => {
+    vi.stubEnv("QA_AGENT_AUTH", "cdp-attach");
+    vi.stubEnv("BROWSER_CDP_URL", "http://127.0.0.1:9222");
+    expect(execChildEnv().PLAYWRIGHT_MCP_CDP_ENDPOINT).toBe(
+      "http://127.0.0.1:9222"
+    );
+  });
+
+  it("never overwrites a CDP endpoint the operator set themselves", () => {
+    vi.stubEnv("QA_AGENT_AUTH", "cdp-attach");
+    vi.stubEnv("BROWSER_CDP_URL", "http://127.0.0.1:9222");
+    vi.stubEnv("PLAYWRIGHT_MCP_CDP_ENDPOINT", "http://127.0.0.1:9333");
+    expect(execChildEnv().PLAYWRIGHT_MCP_CDP_ENDPOINT).toBe(
+      "http://127.0.0.1:9333"
+    );
+  });
+
+  it("leaves the endpoint unset when the adapter is not attaching to our browser", () => {
+    vi.stubEnv("QA_AGENT_AUTH", "");
+    vi.stubEnv("BROWSER_CDP_URL", "http://127.0.0.1:9222");
+    expect(execChildEnv().PLAYWRIGHT_MCP_CDP_ENDPOINT).toBeUndefined();
   });
 
   it("fails with a named env var when QA_AGENT_CMD is unset", () => {

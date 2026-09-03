@@ -177,6 +177,65 @@ pipeline offline.
 Run `<command> --help` for its flags, or read
 [docs/reference/cli.md](docs/reference/cli.md) for the full reference.
 
+## Agent backends
+
+`QA_AI_ADAPTER` picks which agent browses staging. The default is `hermes`.
+`aside` and `fixture` are also built in, and `exec` runs whichever agent CLI you
+already have — no adapter code to write.
+
+An `exec` backend browses the harness's own authenticated browser when it can
+attach over the Chrome DevTools Protocol. Set `QA_AGENT_AUTH=cdp-attach` and the
+run's endpoint is forwarded to the child as `PLAYWRIGHT_MCP_CDP_ENDPOINT`, which
+is the variable a Playwright MCP server reads. Nothing you set yourself is
+overwritten. Without that variable, staging credentials would have to travel in
+the prompt instead, and `judge` prints a `[security]` warning when they do.
+
+### Claude Code plus Playwright MCP
+
+```bash
+cat > /tmp/qa-mcp.json <<'JSON'
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--isolated", "--headless"]
+    }
+  }
+}
+JSON
+
+QA_AI_ADAPTER=exec \
+QA_AGENT_AUTH=cdp-attach \
+QA_AGENT_CMD="claude -p --output-format json --mcp-config /tmp/qa-mcp.json --allowed-tools mcp__playwright" \
+  npx playwright-spec-for-ai-agent judge --page=dashboard
+```
+
+The prompt is piped on stdin, never argv. Claude's `--output-format json` wraps
+the verdict in a `result` field, fenced or not; the adapter unwraps both.
+
+### Codex plus Playwright MCP
+
+```bash
+QA_AI_ADAPTER=exec \
+QA_AGENT_AUTH=cdp-attach \
+QA_AGENT_CMD="codex exec --json -c mcp_servers.playwright.command=npx -c mcp_servers.playwright.args=[\"-y\",\"@playwright/mcp@latest\",\"--isolated\",\"--headless\"]" \
+  npx playwright-spec-for-ai-agent judge --page=dashboard
+```
+
+### Any other browser CLI
+
+A CLI that drives its own browser and cannot attach to ours still works, but it
+authenticates itself: leave `QA_AGENT_AUTH` unset, seed a `staging.storageState`,
+and accept that the prompt carries credentials. Confirm what a backend declares
+before trusting a run:
+
+```bash
+QA_AI_ADAPTER=exec QA_AGENT_CMD="..." npx playwright-spec-for-ai-agent doctor
+```
+
+Per-variable detail is in
+[docs/reference/adapters.md](docs/reference/adapters.md).
+
 ## Why this exists
 
 Deterministic Playwright tests belong in CI: fast, stable, good at mocked UI states.

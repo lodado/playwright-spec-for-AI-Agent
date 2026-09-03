@@ -107,6 +107,56 @@ QA_AI_ADAPTER=exec QA_AGENT_CMD="claude -p --output-format json" \
 `QA_AGENT_CMD` is also recorded as `agentMeta.model`. A missing `QA_AGENT_CMD`
 is an environment error carrying the fix.
 
+#### Handing the CLI our browser
+
+Under `QA_AGENT_AUTH=cdp-attach` the runner owns the browser and knows its CDP
+endpoint only at run time, so a static MCP config file can never name it. The
+adapter therefore copies `BROWSER_CDP_URL` into the child environment under the
+names browser MCP servers read:
+
+| Forwarded as                   | Read by                    |
+| ------------------------------ | -------------------------- |
+| `PLAYWRIGHT_MCP_CDP_ENDPOINT`  | `@playwright/mcp`          |
+
+A value already present in the environment is never overwritten, so an operator
+pointing a server somewhere else keeps that choice. Nothing is forwarded when
+`QA_AGENT_AUTH` is anything but `cdp-attach`, or when no runner browser is open.
+
+Two working invocations:
+
+```bash
+# Claude Code driving a headless Playwright MCP browser
+QA_AI_ADAPTER=exec QA_AGENT_AUTH=cdp-attach \
+QA_AGENT_CMD="claude -p --output-format json --mcp-config ./qa-mcp.json --allowed-tools mcp__playwright" \
+  npx playwright-spec-for-ai-agent judge --page=dashboard
+
+# Codex, same server declared inline
+QA_AI_ADAPTER=exec QA_AGENT_AUTH=cdp-attach \
+QA_AGENT_CMD="codex exec --json -c mcp_servers.playwright.command=npx -c mcp_servers.playwright.args=[\"-y\",\"@playwright/mcp@latest\",\"--isolated\",\"--headless\"]" \
+  npx playwright-spec-for-ai-agent judge --page=pricing
+```
+
+`qa-mcp.json` needs no CDP endpoint of its own:
+
+```json
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--isolated", "--headless"]
+    }
+  }
+}
+```
+
+Both CLIs wrap their answer in a JSON envelope with the payload in `result`,
+often fenced. The adapter unwraps one envelope and one fence, so no output
+shim is needed.
+
+A CLI whose browser cannot attach to ours should leave `QA_AGENT_AUTH` unset. It
+then authenticates itself and the prompt carries staging credentials, which
+`judge` warns about.
+
 ### `fixture`
 
 Offline, deterministic, shape-correct stage output: no model, no network. It is

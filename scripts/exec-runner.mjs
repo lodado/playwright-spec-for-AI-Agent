@@ -46,6 +46,26 @@ export function resolveExecInvocation() {
 }
 
 /**
+ * Browser MCP servers read the CDP endpoint from their own environment
+ * variable, and the harness only knows the endpoint at run time, so a static
+ * MCP config file can never name it. Under `QA_AGENT_AUTH=cdp-attach` we
+ * forward `BROWSER_CDP_URL` under the names those servers already read. An
+ * explicitly set value always wins, so this can only fill a gap.
+ */
+export const CDP_ENDPOINT_ALIASES = ["PLAYWRIGHT_MCP_CDP_ENDPOINT"];
+
+export function execChildEnv(env = process.env) {
+  if (execAdapterCapabilities().auth !== "cdp-attach") return env;
+  const cdpUrl = env.BROWSER_CDP_URL?.trim();
+  if (!cdpUrl) return env;
+  const overlay = {};
+  for (const alias of CDP_ENDPOINT_ALIASES) {
+    if (!env[alias]?.trim()) overlay[alias] = cdpUrl;
+  }
+  return Object.keys(overlay).length ? { ...env, ...overlay } : env;
+}
+
+/**
  * `credentials-in-prompt` by default: an arbitrary CLI cannot be assumed to
  * attach to a browser we authenticated. QA_AGENT_AUTH=cdp-attach opts in for a
  * CLI whose browser tools honor BROWSER_CDP_URL.
@@ -74,7 +94,7 @@ export function runExecAgent(
     shell: false,
     encoding: "utf8",
     maxBuffer: 1024 * 1024 * 10,
-    env: process.env,
+    env: execChildEnv(),
     input: query,
     timeout,
   });
