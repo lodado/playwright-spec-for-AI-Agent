@@ -38,6 +38,8 @@ import { parseSpecDirectory } from "./spec-annotation-reader.mjs";
 import { buildJudgeTargetUrl, redactEmail } from "./staging-qa-config.mjs";
 import { hasSessionProfile } from "./qa-browser-session.mjs";
 import { verifyLedger } from "./qa-run-ledger.mjs";
+import { browserbaseOptions, readBrowserbaseContext, resolveBrowserProvider } from "./browser-provider.mjs";
+import { createBrowserbaseClient } from "./browserbase-client.mjs";
 
 const NETWORK_TIMEOUT_MS = 10_000;
 
@@ -50,6 +52,10 @@ Options:
   --page=<slug>      Only check this page (default: every configured page)
   --json             Machine-readable report on stdout
   --check-network    Also fetch each target URL (HEAD/GET, 10s timeout)
+                     Browserbase: also validate saved Context existence, never allocate a session
+  --browser-provider=local|browserbase  Browser backend (or QA_BROWSER_PROVIDER)
+  --browserbase-profile=<name>          Saved Context profile (default: default)
+  --browserbase-timeout=<seconds>       Validate remote session timeout (60-21600)
   --config=<path>    Project config file
   --project-root=<path>
   --help, -h         Show this help
@@ -478,16 +484,88 @@ function credentialChecks(pages) {
   return checks;
 }
 
-async function peerChecks() {
+/** Presence and Context existence are not proof of an authenticated site session. */
+async function browserbaseChecks(pages, argv, checkNetwork) {
+  const { profile } = browserbaseOptions(argv);
+  const root = getProjectConfig().root;
+  const projectId = process.env.BROWSERBASE_PROJECT_ID?.trim() || "";
+  const apiKey = process.env.BROWSERBASE_API_KEY?.trim() || "";
+  const checks = [
+    ...["BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID"].map(name =>
+      check(name, process.env[name]?.trim() ? "pass" : "fail",
+        process.env[name]?.trim() ? "present (not verified remotely)" : "not set",
+        `Export ${name}.`)),
+  ];
+  const conflict = argv.some(arg => arg === "--cdp-url" || arg.startsWith("--cdp-url=") ||
+    arg === "--creds-in-prompt" || arg.startsWith("--creds-in-prompt=")) ||
+    Boolean(process.env.QA_BROWSER_CDP_URL?.trim());
+  checks.push(check("Browserbase options", conflict ? "fail" : "pass",
+    conflict ? "Browserbase does not support --cdp-url, QA_BROWSER_CDP_URL or --creds-in-prompt" : "no conflicting local browser options",
+    conflict ? "Remove the conflicting option or select --browser-provider=local." : ""));
+  let attach = false;
+  try { attach = describeAdapter().capabilities.auth === "cdp-attach"; } catch { /* adapterChecks reports the error */ }
+  checks.push(check("Browserbase adapter auth", attach ? "pass" : "fail",
+    attach ? "cdp-attach supported" : "Browserbase requires adapter auth=cdp-attach",
+    attach ? "" : "Choose a cdp-attach adapter (exec: QA_AGENT_AUTH=cdp-attach)."));
+
+  let client;
+  for (const page of pages) {
+    const hint = `Run \`npx playwright-spec-for-ai-agent login --browser-provider=browserbase --page=${page} --browserbase-profile=${profile} --success-url=<authenticated-url>\`, or configure storageState.`;
+    let context = null;
+    if (projectId) {
+      try {
+        const { url } = targetUrlForPage(page);
+        context = readBrowserbaseContext({ root, projectId, origin: new URL(url).origin, profile });
+      } catch {
+        checks.push(check(`${page} · Browserbase context`, "fail",
+          "Cannot read saved Context for the resolved target origin and profile",
+          "Check the target URL and .private/qa-browserbase-contexts.json in the project root."));
+      }
+    }
+    const storageState = getStorageStatePath(page);
+    const seeded = storageState && existsSync(storageState);
+    const required = pageAuthRequired(page);
+    checks.push(check(`${page} · Browserbase auth`, !required ? "skip" : context || seeded ? "pass" : "fail",
+      !required ? "page does not require login" : context || seeded
+        ? `${context ? "saved Context present" : "storageState present"}; site login not verified live`
+        : "No saved Context or existing storageState for required login; site login not verified live",
+      required && !context && !seeded ? hint : ""));
+
+    if (!checkNetwork) continue;
+    const name = `${page} · Browserbase context remote`;
+    if (!context || !apiKey || !projectId) {
+      checks.push(check(name, "skip", !context
+        ? "No saved Context: remote validation skipped; credential presence only, not verified"
+        : "Missing credentials: remote validation skipped, not verified"));
+      continue;
+    }
+    try {
+      client ??= createBrowserbaseClient();
+      const remote = await client.getContext(context.contextId);
+      const valid = remote?.id === context.contextId &&
+        (remote.projectId === undefined || remote.projectId === projectId);
+      checks.push(check(name, valid ? "pass" : "fail", valid
+        ? "Context exists in Browserbase; site login not verified live"
+        : "Saved Context is missing or belongs to a different project", valid ? "" : hint));
+    } catch {
+      // Never include provider errors: they can contain credentials or response bodies.
+      checks.push(check(name, "fail", "Unable to validate saved Context remotely; site login not verified live",
+        "Check Browserbase credentials, project and saved Context availability."));
+    }
+  }
+  return checks;
+}
+
+async function peerChecks(browserbase = false) {
   try {
     await import("@playwright/test");
     return check("@playwright/test", "pass", "importable");
   } catch {
     return check(
       "@playwright/test",
-      "warn",
-      "not installed (optional peer)",
-      "Needed for `login`, the pre-authenticated session, and trace/HAR evidence: npm i -D @playwright/test && npx playwright install chromium"
+      browserbase ? "fail" : "warn",
+      browserbase ? "not installed (required for Browserbase CDP attach)" : "not installed (optional peer)",
+      browserbase ? "Install the local CDP client: npm i -D @playwright/test (no local browser needed)." : "Needed for `login`, the pre-authenticated session, and trace/HAR evidence: npm i -D @playwright/test && npx playwright install chromium"
     );
   }
 }
@@ -560,6 +638,7 @@ export function parseDoctorArgs(argv = []) {
 export async function collectDoctorReport(argv = []) {
   const options = parseDoctorArgs(argv);
   const warnings = await loadConfigCapturingWarnings(argv);
+  const browserbase = resolveBrowserProvider(argv) === "browserbase";
 
   const configured = listConfiguredPages();
   const pages = options.page ? [options.page] : configured;
@@ -590,7 +669,9 @@ export async function collectDoctorReport(argv = []) {
     checks.push(...specChecks(page), ...targetChecks(page), ...artifactChecks(page));
   }
 
-  checks.push(...adapterChecks(), ...credentialChecks(pages), await peerChecks(), slackCheck());
+  checks.push(...adapterChecks(),
+    ...(browserbase ? await browserbaseChecks(pages, argv, options.checkNetwork) : credentialChecks(pages)),
+    await peerChecks(browserbase), slackCheck());
 
   if (options.checkNetwork) {
     checks.push(...(await networkChecks(pages)));
