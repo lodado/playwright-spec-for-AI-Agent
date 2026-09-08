@@ -62,8 +62,8 @@ the allocated session in the agent worker, even if the latter previously pointed
 elsewhere. The parent environment is unchanged. Do not hard-code a different
 endpoint in MCP config.
 
-The agent runs in an isolated worker so a synchronous CLI cannot freeze the
-owning CDP connection while opening a new tab. Worker console output is suppressed
+The agent runs in an isolated child process so a synchronous CLI cannot freeze the
+owning CDP connection while opening a new tab. Child-process console output is suppressed
 to avoid leaking connection secrets. Built-in adapters still write their normal
 redacted raw-output artifacts. Local provider execution remains unchanged.
 
@@ -177,6 +177,11 @@ normal completion and failures after allocation. Signal cleanup is best-effort.
 SIGKILL, host crashes, and an ambiguous failed allocation response cannot be
 cleaned up reliably by a local process. The remote timeout bounds orphan lifetime.
 Check the Browserbase dashboard if release fails.
+
+On macOS and Linux, cancellation immediately kills the isolated agent process
+group, including ordinary CLI descendants, before remote cleanup can exit the
+parent. Timeouts allow a short, bounded shutdown grace period. On Windows only
+the direct agent child is terminated, so descendant cleanup is best-effort.
 
 A profile lock left after a crash is not stolen automatically. Verify that no
 QA process uses the profile, then remove only its `.private/qa-browserbase-*.lock`
