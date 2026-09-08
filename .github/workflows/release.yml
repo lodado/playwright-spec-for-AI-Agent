@@ -17,8 +17,10 @@ jobs:
   # `skip-github-release` keeps it from publishing a GitHub Release, which is
   # what shows up in followers' activity feeds. The trade-off is that it also
   # stops tagging, so the publish job below owns the tag.
+  # Explicit chore(release) commits already contain version/changelog updates.
+  # Publish them without creating/updating a release PR or its labels.
   release-please:
-    if: startsWith(github.ref, 'refs/heads/')
+    if: startsWith(github.ref, 'refs/heads/') && !startsWith(github.event.head_commit.message, 'chore(release)')
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v4
@@ -113,7 +115,7 @@ jobs:
       # release, so release-please never opens the next one and the repo silently
       # stops cutting versions. Since this job owns the tag, it owns the label.
       - name: Close out the release PR
-        if: steps.check.outputs.publish == 'true'
+        if: steps.check.outputs.publish == 'true' && (startsWith(github.ref, 'refs/tags/') || needs.release-please.result == 'success')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

@@ -13,6 +13,27 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [7.3.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.2.0...v7.3.0) (2026-09-08)
+
+### Features
+
+* Add an optional Browserbase browser provider, independent of the AI adapter. Local execution remains the default.
+* Add Live View operator login, scoped persistent Context metadata, non-allocating doctor checks, and remote dashboard judgment with CDP evidence.
+* Isolate remote synchronous agent execution in a child process to keep CDP responsive and support bounded process-group cancellation on macOS/Linux.
+
+### Bug Fixes
+
+* Verify delayed SPA authentication markers before spending an agent call, redact provider secrets from surfaced errors, and retain login locks through cleanup and Context persistence.
+
+### Documentation
+
+* Add English setup and verification recipes for Hermes, Aside, Claude Code, Codex, fixtures, and custom adapters.
+* Document Browserbase login, evidence limits, remote safety boundaries, and platform-specific cleanup behavior. Browserbase does not enable local HAR/video or local origin/mutation enforcement.
+
+### Release Automation
+
+* Allow explicit manual release commits to publish npm without updating release PRs. GitHub Release announcements remain disabled.
+
 ## [7.2.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.1.1...v7.2.0) (2026-09-03)
 
 
