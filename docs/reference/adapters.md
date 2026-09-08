@@ -2,7 +2,8 @@
 
 Look up which agent backend a run uses, which environment variables configure
 it, and what its capability descriptor declares. This page is for an operator
-choosing or debugging a backend; to write your own, see
+choosing or debugging a backend. For setup and execution, see
+[Run an adapter](../how-to/run-an-adapter.md); to write your own, see
 [Add an adapter](../how-to/add-an-adapter.md).
 
 Every stage that calls a model — `abstract-ai`, `judge`, `review` — goes through
@@ -13,6 +14,10 @@ run(query, maxTurns, options) -> parsed JSON
 ```
 
 `QA_AI_ADAPTER` selects the backend. The default is `hermes`.
+
+Browserbase is a **browser provider**, not an AI adapter. The browser provider
+defaults to `local`. Browserbase judge accepts only `cdp-attach` adapters and
+rejects `--credentials-in-prompt`. See [Run QA in Browserbase](../how-to/browserbase.md).
 
 ```bash
 QA_AI_ADAPTER=aside npx playwright-spec-for-ai-agent judge --page=dashboard
@@ -41,8 +46,9 @@ whenever the backend is swapped.
 the `exec` adapter. Set it only when the CLI's browser tools honour
 `BROWSER_CDP_URL`.
 
-All four spawn their CLI with `spawnSync`, so all four take the descriptor
-default `blocksEventLoop: true`.
+Hermes, Aside, and exec spawn their CLI with `spawnSync`. Fixture returns JSON
+in-process and spawns no CLI. All four inherit `blocksEventLoop: true` as a
+conservative descriptor default.
 
 ### `hermes`
 
@@ -100,12 +106,17 @@ QA_AI_ADAPTER=exec QA_AGENT_CMD="claude -p --output-format json" \
 
 | Variable                | Default                  | Effect                                                                                  |
 | ----------------------- | ------------------------ | ---------------------------------------------------------------------------------------- |
-| `QA_AGENT_CMD`          | none — required          | The command line. Split on whitespace, honouring single and double quotes.                |
+| `QA_AGENT_CMD`          | none — required          | Executable and arguments, split by a limited quote-aware tokenizer. Not a shell command. |
 | `QA_AGENT_AUTH`         | unset                    | `cdp-attach` sets `auth: "cdp-attach"` and `supportsVideo: true`; any other value is ignored. |
 | `QA_AGENT_TIMEOUT_MS`   | `600000`                 | Wall-clock bound on the spawned process.                                                  |
 
 `QA_AGENT_CMD` is also recorded as `agentMeta.model`. A missing `QA_AGENT_CMD`
 is an environment error carrying the fix.
+
+The child uses `shell: false`. Pipes, redirects, variable expansion, and shell
+escape rules are not evaluated. Whole arguments can be single- or double-quoted,
+but this is not a full shell parser. Put structured MCP arrays in a config file
+rather than nesting CLI, shell, and TOML quoting.
 
 #### Handing the CLI our browser
 
@@ -118,11 +129,17 @@ names browser MCP servers read:
 | ------------------------------ | -------------------------- |
 | `PLAYWRIGHT_MCP_CDP_ENDPOINT`  | `@playwright/mcp`          |
 
-A value already present in the environment is never overwritten, so an operator
-pointing a server somewhere else keeps that choice. Nothing is forwarded when
+With the local provider, a value already present in the environment is not
+overwritten. A stale value can therefore send the agent to the wrong browser.
+Nothing is forwarded when
 `QA_AGENT_AUTH` is anything but `cdp-attach`, or when no runner browser is open.
 
-Two working invocations:
+With Browserbase, the isolated agent worker overrides both `BROWSER_CDP_URL`
+and `PLAYWRIGHT_MCP_CDP_ENDPOINT` with the allocated session endpoint. The parent
+environment is unchanged. Do not override the endpoint in MCP configuration.
+
+Example commands, after completing the MCP and session setup in
+[Run an adapter](../how-to/run-an-adapter.md#exec-with-claude-code):
 
 ```bash
 # Claude Code driving a headless Playwright MCP browser
@@ -130,9 +147,9 @@ QA_AI_ADAPTER=exec QA_AGENT_AUTH=cdp-attach \
 QA_AGENT_CMD="claude -p --output-format json --mcp-config ./qa-mcp.json --allowed-tools mcp__playwright" \
   npx playwright-spec-for-ai-agent judge --page=dashboard
 
-# Codex, same server declared inline
+# Codex, with the server configured in ~/.codex/config.toml
 QA_AI_ADAPTER=exec QA_AGENT_AUTH=cdp-attach \
-QA_AGENT_CMD="codex exec --json -c mcp_servers.playwright.command=npx -c mcp_servers.playwright.args=[\"-y\",\"@playwright/mcp@latest\",\"--isolated\",\"--headless\"]" \
+QA_AGENT_CMD="codex exec -" \
   npx playwright-spec-for-ai-agent judge --page=pricing
 ```
 
@@ -149,13 +166,21 @@ QA_AGENT_CMD="codex exec --json -c mcp_servers.playwright.command=npx -c mcp_ser
 }
 ```
 
-Both CLIs wrap their answer in a JSON envelope with the payload in `result`,
-often fenced. The adapter unwraps one envelope and one fence, so no output
-shim is needed.
+For Codex, use the [TOML configuration recipe](../how-to/run-an-adapter.md#exec-with-codex),
+including the runtime endpoint environment allowlist. The `npx` MCP example
+resolves a package when run; pin a tested version for reproducible execution.
+
+The adapter accepts stage JSON directly, or unwraps a `result` object/string
+such as Claude Code's JSON output. A string result may contain one fenced JSON
+block. It does not decode Codex JSON event streams such as
+`item.completed`/`agent_message`. The Codex recipe deliberately omits `--json`
+and requires the CLI's final answer on stdout. Use an output wrapper or custom
+adapter if your CLI version cannot meet that contract. These are configuration
+recipes, not a claim of live validation across CLI/MCP versions.
 
 A CLI whose browser cannot attach to ours should leave `QA_AGENT_AUTH` unset. It
 then authenticates itself and the prompt carries staging credentials, which
-`judge` warns about.
+`judge` warns about. This mode is local-only and is rejected by Browserbase judge.
 
 ### `fixture`
 
@@ -207,14 +232,20 @@ Any field a backend omits falls back to the default below.
 | `supportsMaxTurns`       | boolean               | `false`                   | `judge`: `false` passes `maxTurns: null` and skips the computed turn budget entirely.           |
 | `supportsToolsetDisable` | boolean               | `false`                   | Nothing. Descriptive only — the `hermes` adapter disables its own toolsets without reading it.  |
 | `supportsVideo`          | boolean               | `false`                   | `doctor`, to print `video=…`. Recording itself is gated by `QA_RECORD_VIDEO` plus a runner-launched browser, not by this field. |
-| `blocksEventLoop`        | boolean               | `true`                    | `judge`: only `false` enables live request interception. Everything else falls back to post-run HAR inspection. |
+| `blocksEventLoop`        | boolean               | `true`                    | Local `judge`: only `false` enables live interception; blocking adapters use post-run HAR checks when HAR is available. Browserbase uses process isolation, not these guards. |
 
-`blocksEventLoop` is the load-bearing one. A `spawnSync` adapter freezes this
+For the local provider, `blocksEventLoop` is the load-bearing one. A `spawnSync` adapter freezes this
 process for the whole agent run, so a Playwright `context.route` handler could
 never be serviced and the browser would stall waiting for it. Origin pinning and
 mutation blocking are therefore live only under `blocksEventLoop: false`;
-blocking adapters get the same two checks from the recorded HAR after the run.
+blocking adapters get those two checks from recorded HAR after the run, when HAR
+is available. Post-run inspection detects violations but cannot prevent them.
 See [Violation floors](../explanation/how-verdicts-are-decided.md#violation-floors).
+
+Browserbase runs the agent in an isolated process, keeping the owning CDP
+connection responsive even when the adapter blocks. It does not enable local
+request guards or local HAR capture on the remote context. See
+[Browserbase evidence and safety limits](../how-to/browserbase.md#evidence-and-safety-limits).
 
 ### What `auth` selects
 
@@ -224,8 +255,9 @@ See [Violation floors](../explanation/how-verdicts-are-decided.md#violation-floo
 | `self-prelogin`          | The adapter drives its own browser. The harness seeds a `storageState` into it, or calls `prelogin()`, and never sets `BROWSER_CDP_URL`. |
 | `credentials-in-prompt`  | No session to hand over: staging credentials go into the prompt and therefore into the agent's session logs. `judge` prints a `[security]` warning. |
 
-`judge --credentials-in-prompt` forces the last mode whatever the adapter
-declares. Full setup for each path is in
+With the local provider, `judge --credentials-in-prompt` forces the last mode
+whatever the adapter declares. Browserbase rejects that flag and any adapter
+whose effective auth mode is not `cdp-attach`. Full setup for each local path is in
 [Authenticate a judge run](../how-to/authentication.md).
 
 Read the resolved descriptor with `doctor`:
@@ -273,6 +305,10 @@ in [Troubleshooting](../troubleshooting.md).
 
 ## Related pages
 
+- [Run an adapter](../how-to/run-an-adapter.md): prerequisites, configuration,
+  commands, and verification for each built-in adapter.
+- [Run QA in Browserbase](../how-to/browserbase.md): remote browser setup,
+  compatible adapters, and evidence limitations.
 - [Add an adapter](../how-to/add-an-adapter.md) — the module contract and the
   published contract test suite.
 - [Authenticate a judge run](../how-to/authentication.md) — `login`,
