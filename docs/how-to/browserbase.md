@@ -41,6 +41,9 @@ The provider uses Node's built-in `fetch`, not a new runtime SDK dependency.
 
 ## 2. Choose a CDP-capable agent
 
+Use [Run an adapter](./run-an-adapter.md) to configure Hermes or an exec adapter
+with Claude Code or Codex, then return here for remote login and judgment.
+
 Supported: Hermes, or `exec` with `QA_AGENT_AUTH=cdp-attach` and a browser tool
 that honors the supplied CDP endpoint. Existing `exec` Playwright MCP recipes
 are in [Adapters](../reference/adapters.md#handing-the-cli-our-browser).

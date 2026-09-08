@@ -24,7 +24,7 @@ spec → abstract-ai → judge → review → slack · issues (optional)
 
 - **It is** a live-staging judgment layer for apps that already have Playwright specs.
 - **It is not** a test generator, a test healer, or a replacement for your CI suite.
-- **It never runs Playwright against staging.** Specs are read as source material, never executed there, and never modified.
+- **It never executes your Playwright test suite against staging.** Specs are read as source material and never modified. Browser session setup and evidence capture can use Playwright APIs.
 - Ambiguous results become `manual_review` rather than a forced pass or fail.
 - Zero runtime dependencies. `@playwright/test` is an *optional* peer, needed only for the browser session paths and the trace/HAR evidence they enable.
 
@@ -34,7 +34,7 @@ spec → abstract-ai → judge → review → slack · issues (optional)
 npx playwright-spec-for-ai-agent demo
 ```
 
-No credentials, no model, no network: a bundled demo app on a local port, driven by
+No credentials, no model, no external service: a bundled demo app on a local port, driven by
 the `fixture` adapter whose judge always returns `manual_review`, so an offline run
 can never look green. `--keep` or `--out=<dir>` keeps the artifacts to inspect.
 
@@ -179,62 +179,88 @@ Run `<command> --help` for its flags, or read
 
 ## Agent backends
 
-`QA_AI_ADAPTER` picks which agent browses staging. The default is `hermes`.
-`aside` and `fixture` are also built in, and `exec` runs whichever agent CLI you
-already have — no adapter code to write.
+Choose **who judges** with `QA_AI_ADAPTER`. Choose **where the browser runs**
+with `QA_BROWSER_PROVIDER`. These are separate settings. The defaults are
+`hermes` and `local`.
 
-An `exec` backend browses the harness's own authenticated browser when it can
-attach over the Chrome DevTools Protocol. Set `QA_AGENT_AUTH=cdp-attach` and the
-run's endpoint is forwarded to the child as `PLAYWRIGHT_MCP_CDP_ENDPOINT`, which
-is the variable a Playwright MCP server reads. Nothing you set yourself is
-overwritten. Without that variable, staging credentials would have to travel in
-the prompt instead, and `judge` prints a `[security]` warning when they do.
+| AI adapter | What runs | Login/browser model | Browserbase judge |
+| --- | --- | --- | --- |
+| `hermes` | Hermes Agent with your configured model | Attaches to the runner's authenticated browser over CDP | Supported |
+| `aside` | `aside exec` | Uses Aside's own browser and prelogin or storage-state seeding | Not supported |
+| `exec` | Your configured CLI, including Claude Code or Codex | CDP attach when `QA_AGENT_AUTH=cdp-attach`; otherwise legacy credentials-in-prompt | Only with a CDP-capable browser tool |
+| `fixture` | Deterministic local JSON, no model | Does not browse or verify a live site | Not supported |
+| Custom module | A project-relative or installed adapter module | Declares its own capabilities | Only when it declares and implements `cdp-attach` |
 
-### Claude Code plus Playwright MCP
+**Start here:** [Run each adapter](docs/how-to/run-an-adapter.md) provides
+prerequisites, configuration, commands, expected results, and failure checks for
+Hermes, Aside, Claude Code, Codex, fixtures, and custom modules.
+[Adapter reference](docs/reference/adapters.md) lists all variables and the
+capability contract.
 
-```bash
-cat > /tmp/qa-mcp.json <<'JSON'
-{
-  "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest", "--isolated", "--headless"]
-    }
-  }
-}
-JSON
-
-QA_AI_ADAPTER=exec \
-QA_AGENT_AUTH=cdp-attach \
-QA_AGENT_CMD="claude -p --output-format json --mcp-config /tmp/qa-mcp.json --allowed-tools mcp__playwright" \
-  npx playwright-spec-for-ai-agent judge --page=dashboard
-```
-
-The prompt is piped on stdin, never argv. Claude's `--output-format json` wraps
-the verdict in a `result` field, fenced or not; the adapter unwraps both.
-
-### Codex plus Playwright MCP
+For example, after configuring your page, generating its live plan, authenticating
+the selected agent CLI, and preparing the site's login session:
 
 ```bash
-QA_AI_ADAPTER=exec \
-QA_AGENT_AUTH=cdp-attach \
-QA_AGENT_CMD="codex exec --json -c mcp_servers.playwright.command=npx -c mcp_servers.playwright.args=[\"-y\",\"@playwright/mcp@latest\",\"--isolated\",\"--headless\"]" \
-  npx playwright-spec-for-ai-agent judge --page=dashboard
+QA_AI_ADAPTER=hermes npx playwright-spec-for-ai-agent doctor --page=dashboard
+QA_AI_ADAPTER=hermes npx playwright-spec-for-ai-agent judge --page=dashboard
 ```
 
-### Any other browser CLI
+`doctor` checks setup without spending an agent run. A passing configuration
+check does not prove that the site's login or the model's judgment is correct.
 
-A CLI that drives its own browser and cannot attach to ours still works, but it
-authenticates itself: leave `QA_AGENT_AUTH` unset, seed a `staging.storageState`,
-and accept that the prompt carries credentials. Confirm what a backend declares
-before trusting a run:
+## Browser providers
+
+Browserbase is a **remote browser provider**, not another AI adapter. Selecting
+it does not replace Hermes, select a different model, or guarantee faster runs.
+
+| Provider | Where it runs | Login reuse | Evidence and limits |
+| --- | --- | --- | --- |
+| `local` (default) | A local browser or an explicitly attached CDP browser | Local login profile, storage state, or an already signed-in browser | Evidence and guards depend on the session path |
+| `browserbase` | Remote Chromium accessed over CDP | Manual Live View login and a saved Context scoped to project, origin, and account profile; storage state can seed an ephemeral session | Screenshots, ARIA, trace when available, and a session dashboard link. No local HAR/video or local origin/mutation enforcement |
+
+### Log in through Browserbase
+
+Install the optional `@playwright/test` peer. No local Chromium download is
+required for this provider. Put `BROWSERBASE_API_KEY` and
+`BROWSERBASE_PROJECT_ID` in a gitignored, owner-only `.env.browserbase` file.
+Also configure your staging URL and page as described in
+[Get started](docs/get-started.md). Never put keys in command arguments or commit
+filled-in environment files.
+
+Run from the configured project root. Replace the page, profile, success URL,
+and authenticated-only selector with values from your app:
 
 ```bash
-QA_AI_ADAPTER=exec QA_AGENT_CMD="..." npx playwright-spec-for-ai-agent doctor
+npx playwright-spec-for-ai-agent login --page=dashboard \
+  --browser-provider=browserbase --browserbase-profile=qa-user \
+  --success-url=/dashboard --success-selector='[data-testid="account-menu"]' \
+  --env-file=.env.browserbase
+
+npx playwright-spec-for-ai-agent doctor --page=dashboard \
+  --browser-provider=browserbase --browserbase-profile=qa-user \
+  --env-file=.env.browserbase
+
+npx playwright-spec-for-ai-agent judge --page=dashboard \
+  --browser-provider=browserbase --browserbase-profile=qa-user \
+  --env-file=.env.browserbase
 ```
 
-Per-variable detail is in
-[docs/reference/adapters.md](docs/reference/adapters.md).
+`login` prints a private Live View link. Complete login there. The command saves
+Context metadata only after observing the configured success condition and
+completing session release. At least one success condition is required; both
+must match when both are supplied. `judge` rechecks the saved condition and
+uses one remote session for account-state detection and judgment.
+
+The remote path isolates synchronous agents in a child process to keep CDP
+responsive, redacts provider secrets from surfaced text, and cleans up allocated
+sessions. Browserbase usage can incur charges, and its browser must be able to
+reach your site. Its `localhost` is not your machine. SSO/MFA remains subject to
+your identity provider's restrictions.
+
+Read [Browserbase setup, supported features, and limitations](docs/how-to/browserbase.md)
+for the full workflow, `exec` integration, timeout/cancellation behavior, and
+what has and has not been validated. Offline tests and real local-CDP tests do
+not establish that cloud login or Context persistence works for your account.
 
 ## Why this exists
 
@@ -251,7 +277,7 @@ Those tools write or run tests; this one judges staging against tests you wrote.
 |                              | **this tool**                                        | Playwright Planner / Generator / Healer agents | Stagehand                              | Magnitude                              | raw Playwright vs. staging        |
 | ---------------------------- | ---------------------------------------------------- | ---------------------------------------------- | -------------------------------------- | -------------------------------------- | --------------------------------- |
 | **Input**                    | Annotations on specs you already have                | The app, plus a prompt or a failing test       | Natural-language steps in your code    | Natural-language test cases            | The spec file                     |
-| **Runs against staging**     | An AI agent in a browser. Never Playwright.          | Generated/healed Playwright tests              | The framework's own browser automation | The framework's own browser automation | Your Playwright suite, as written |
+| **Runs against staging**     | An AI agent in a browser, not your test suite.       | Generated/healed Playwright tests              | The framework's own browser automation | The framework's own browser automation | Your Playwright suite, as written |
 | **Output**                   | A judged verdict + evidence, per planned check       | Test files / a repaired test                   | Automation results                     | Test results                           | Pass/fail per assertion           |
 | **Test authoring required**  | You already did it                                   | The tools write them                           | You write NL steps                     | You write NL cases                     | You write and maintain them       |
 | **Safety model**             | Origin pinning, read-only mutation guard, runner-owned evidence, downgrade-only verdicts | Your own CI conventions | Your own configuration | Your own configuration | Whatever your test does |
@@ -264,20 +290,30 @@ Other tools are summarised briefly from their stated purpose — check their own
   stores a session in an owner-only profile (`.private/qa-browser-profile`, mode
   `0700`); `staging.storageState` replays a file your repo already has; `--cdp-url`
   borrows a browser you signed into yourself. The agent receives a CDP URL, or nothing.
-- **The CDP endpoint is unauthenticated** for the length of the run. Chromium offers
+- **A locally exposed Chromium CDP endpoint is unauthenticated** for the length of the run. Chromium offers
   no CDP auth, so the mitigations are the loopback bind and the endpoint's lifetime —
   which is why the attach recipe uses a dedicated `--user-data-dir` instead of your
   everyday Chrome profile.
+- **Browserbase connection links are private capabilities.** The provider redacts
+  API keys and connection URLs from surfaced text and stores only scoped Context
+  metadata locally. Do not share the Live View link or point agents at production
+  accounts. See [Browserbase safety limits](docs/how-to/browserbase.md#evidence-and-safety-limits).
 - **Origin pinning.** `allowedOrigins` defaults to the staging origin; a navigation
   off it floors the verdict at `fail` with cause `HARNESS_DEFECT`. On a read-only
   plan, non-GET requests are treated the same.
+- **Guard coverage depends on the browser path.** Browserbase and attached remote
+  contexts do not provide the local runner's origin/mutation enforcement or HAR.
+  A read-only prompt is not a security boundary. Use server-side read-only roles
+  when actions must be prevented.
 - **A filed issue is still quoted evidence.** The judge's prose reaches a reader
   with write access to your repository, so it travels quoted and injection-scanned
   with the same patterns applied to aria snapshots. Filing on a public repository
   is refused unless you opt in: the body carries the staging URL and page structure.
-- **The harness captures the evidence, not the agent.** Trace, HAR, screenshots, and
-  aria snapshots come from the Playwright context the runner owns, so the audited
-  thing cannot forge or omit them. Secrets are redacted from every artifact.
+- **Runner evidence is separate from agent claims.** Available trace, HAR,
+  screenshots, and ARIA snapshots come from the runner's Playwright context.
+  Capture availability varies by provider and session path. Text redaction does
+  not remove sensitive application data from screenshots or traces; protect them
+  as private artifacts.
 
 Full detail, and what each session path gives up:
 [docs/how-to/authentication.md](docs/how-to/authentication.md).

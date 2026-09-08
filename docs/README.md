@@ -17,6 +17,7 @@ then walks the same pipeline against a page of your own.
 | ------------------------------------------------------- | ------------------------------------------------------------------------ |
 | [how-to/authentication.md](./how-to/authentication.md)  | How do I give the judge a signed-in session for my app?                  |
 | [how-to/browserbase.md](./how-to/browserbase.md) | How do I run a remote browser and reuse a Live View login? |
+| [how-to/run-an-adapter.md](./how-to/run-an-adapter.md) | How do I configure and run Hermes, Aside, Claude Code, Codex, fixtures, or a custom adapter? |
 | [how-to/ci.md](./how-to/ci.md)                          | How do I run this unattended, and what does each exit code mean?         |
 | [how-to/close-the-loop.md](./how-to/close-the-loop.md)  | How do I turn failing verdicts into issues an agent can work on?        |
 | [how-to/add-an-adapter.md](./how-to/add-an-adapter.md)  | How do I point the pipeline at an agent backend that is not bundled?     |
