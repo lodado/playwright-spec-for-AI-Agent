@@ -50,7 +50,7 @@ on `PATH`. See the [resolution order](../reference/adapters.md#hermes).
 ```bash
 export QA_AI_ADAPTER=hermes
 # Set this to a model supported by your existing Hermes provider.
-export HERMES_INFERENCE_MODEL='your-provider/model-name'
+# export HERMES_INFERENCE_MODEL='your-provider/model-name'
 ```
 
 Omit `HERMES_INFERENCE_MODEL` if `~/.hermes/config.yaml` already supplies
@@ -58,7 +58,8 @@ Omit `HERMES_INFERENCE_MODEL` if `~/.hermes/config.yaml` already supplies
 overrides the configured endpoint. Keep provider credentials in Hermes's own
 private configuration, not in `QA_AGENT_CMD` or a QA prompt.
 
-For a protected local page, run `login --page=pricing` and finish sign-in, or
+For a protected local page, run
+`npx playwright-spec-for-ai-agent login --page=pricing` and finish sign-in, or
 configure an existing `storageState`. Hermes attaches to the browser the runner
 provides. Each QA call uses a temporary Hermes home and disables memory tools.
 
@@ -77,7 +78,7 @@ needed, `aside repl`.
 ```bash
 export QA_AI_ADAPTER=aside
 # Optional: use a model name from your Aside setup.
-export ASIDE_QA_MODEL='your-model-name'
+# export ASIDE_QA_MODEL='your-model-name'
 export ASIDE_QA_TIMEOUT_MS=600000
 ```
 
@@ -200,7 +201,7 @@ To select fixture in your own project instead:
 ```bash
 export QA_AI_ADAPTER=fixture
 # Optional: directory containing abstract.json, judge.json, and/or review.json.
-export QA_FIXTURE_DIR='./qa-fixtures'
+# export QA_FIXTURE_DIR='./qa-fixtures'
 ```
 
 Omit `QA_FIXTURE_DIR` to use built-ins. If set, the directory must exist. A
@@ -223,8 +224,9 @@ export QA_AI_ADAPTER='./qa/my-adapter.mjs'
 ```
 
 Its exported `run(query, maxTurns, options)` must synchronously return parsed
-JSON. Declare browser/auth capabilities accurately and run the published adapter
-contract tests before using the shared sequence below.
+JSON. Declare browser/auth capabilities accurately and test against the documented
+contract, using the repository's adapter contract tests as examples, before the
+shared sequence below.
 
 ## 3. Run and verify
 

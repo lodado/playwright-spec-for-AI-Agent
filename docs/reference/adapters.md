@@ -310,7 +310,7 @@ in [Troubleshooting](../troubleshooting.md).
 - [Run QA in Browserbase](../how-to/browserbase.md): remote browser setup,
   compatible adapters, and evidence limitations.
 - [Add an adapter](../how-to/add-an-adapter.md) — the module contract and the
-  published contract test suite.
+  repository's contract test suite.
 - [Authenticate a judge run](../how-to/authentication.md) — `login`,
   `storageState`, and `--cdp-url=`.
 - [Artifacts reference](./artifacts.md) — what a run writes, including
