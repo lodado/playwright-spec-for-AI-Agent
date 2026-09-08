@@ -58,8 +58,14 @@ QA_AGENT_AUTH=cdp-attach
 ```
 
 For remote runs, `BROWSER_CDP_URL` and `PLAYWRIGHT_MCP_CDP_ENDPOINT` both name
-the allocated session, even if the latter previously pointed elsewhere. They
-are restored afterwards. Do not hard-code a different endpoint in MCP config.
+the allocated session in the agent worker, even if the latter previously pointed
+elsewhere. The parent environment is unchanged. Do not hard-code a different
+endpoint in MCP config.
+
+The agent runs in an isolated worker so a synchronous CLI cannot freeze the
+owning CDP connection while opening a new tab. Worker console output is suppressed
+to avoid leaking connection secrets. Built-in adapters still write their normal
+redacted raw-output artifacts. Local provider execution remains unchanged.
 
 ## 3. Log in once through Live View
 
@@ -179,6 +185,25 @@ file. Do not delete another active process's lock or the entire private director
 `--cdp-url`, `QA_BROWSER_CDP_URL`, and `--credentials-in-prompt` conflict with
 Browserbase judge. `--attach` and `--channel` conflict with Browserbase login.
 Select `--browser-provider=local` to keep using the existing local workflow.
+
+## What the tests prove
+
+| Requirement | Check | Boundary |
+| --- | --- | --- |
+| Provider flags, help, invalid inputs | `browserbase-cli.test.ts` invokes the public CLI in child processes | No cloud allocation |
+| REST methods, statuses, validation, redaction | `browserbase-client.test.ts` | HTTP responses are mocked, not live API acceptance |
+| Scoped Contexts, verified login, release, cancellation | `browser-provider.test.ts`, `browserbase-login-cli.test.ts` | Cloud/browser substitutes test failure paths |
+| Non-allocating doctor and missing/expired Context handling | `browserbase-doctor.test.ts` | API and adapter boundaries are mocked |
+| Judge routing, shared session, expired auth, safe artifacts | `browserbase-judge.test.ts` | Model and cloud session are mocked |
+| Real CDP, shared httpOnly cookies, demo interactions, screenshots, ARIA, trace ZIP, disconnect | `browserbase-cdp.integration.test.ts` | Real installed Chromium and unchanged demo app; only cloud REST is substituted |
+| Synchronous agent opens and navigates new tabs without freezing the owning CDP client | `browserbase-agent-cdp.integration.test.ts` | Real local Chromium and synchronous subprocess, not a live model/cloud session |
+| Isolated adapter results, typed errors, secret handling and timeout | `browserbase-agent-runner.test.ts` | Local worker and controlled adapters |
+
+Run `npm test` for the repository regression suite. The real-CDP test explicitly
+skips if Chromium is not installed. A passing offline suite does not verify
+Browserbase credentials, Live View access, Context persistence across real cloud
+sessions, a site's SSO policy, private-network reachability, or model quality.
+Validate those against an authorized staging account after configuring credentials.
 
 Official references: [Contexts](https://docs.browserbase.com/platform/browser/core-features/contexts),
 [Create session](https://docs.browserbase.com/reference/api/create-a-session),

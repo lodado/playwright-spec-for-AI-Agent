@@ -138,6 +138,14 @@ declares `auth: "cdp-attach"` and either
 - `judge` **attached** to a browser you already run, via `--cdp-url=` or
   `QA_BROWSER_CDP_URL`. Attaching wins when both are available.
 
+With `--browser-provider=browserbase`, the runner allocates a remote session and
+attaches over CDP. This has the attached column's capture limits below, not the
+local launched column's. `runnerEvidence.browserProvider` contains only the
+provider name, session ID, optional Context ID and safe dashboard link. The
+judgment Markdown also links to that dashboard session. CDP and private Live View
+access URLs are not provider metadata. See [Browserbase evidence and safety
+limits](../how-to/browserbase.md#evidence-and-safety-limits).
+
 An adapter that drives its own browser (`auth: "self-prelogin"`) leaves
 `evidence/` empty: there is no runner-owned context to record.
 
