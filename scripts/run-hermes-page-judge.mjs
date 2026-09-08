@@ -15,7 +15,8 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prepareAdapter, runAgent } from "./ai-agent-adapter.mjs";
 import { writeAgentQueryArtifact } from "./agent-output.mjs";
-import { browserbaseOptions, resolveBrowserProvider, readBrowserbaseContext, launchBrowserbaseSession, withBrowserbaseAgentEnv } from "./browser-provider.mjs";
+import { browserbaseOptions, resolveBrowserProvider, readBrowserbaseContext, launchBrowserbaseSession } from "./browser-provider.mjs";
+import { runBrowserbaseAgent } from "./browserbase-agent-runner.mjs";
 import { withSchema } from "./artifact-schema.mjs";
 import {
   AgentOutputError,
@@ -335,7 +336,8 @@ async function detectAccountState({
 
   let detection;
   try {
-    const invoke = () => runAgent(query, adapter.capabilities.supportsMaxTurns ? DETECT_MAX_TURNS : null, {
+    const maxTurns = adapter.capabilities.supportsMaxTurns ? DETECT_MAX_TURNS : null;
+    const options = {
       // Its own artifacts: the judge call that follows writes to the same page
       // and would otherwise overwrite the only record of what the detector saw.
       paths: {
@@ -346,8 +348,10 @@ async function detectAccountState({
       secrets: [config.email, config.password, ...(remoteSession?.secrets ?? [])].filter(Boolean),
       requiredKeys: ["state"],
       mode: "browse",
-    });
-    const raw = remoteSession ? withBrowserbaseAgentEnv(remoteSession, invoke) : invoke();
+    };
+    const raw = remoteSession
+      ? await runBrowserbaseAgent(remoteSession, query, maxTurns, options)
+      : runAgent(query, maxTurns, options);
     detection = normalizeStateDetection(raw, { scenarioIds });
   } catch (error) {
     // Detection is an optimisation. Losing it costs prompt size, not correctness.
@@ -627,13 +631,15 @@ async function executeJudge({
   let raw;
   let runnerEvidence = null;
   try {
-    const invoke = () => runAgent(plan.query, plan.maxTurns, {
+    const options = {
       paths,
       secrets: [...plan.secrets, ...(remoteSession?.secrets ?? [])],
       requiredKeys: ["status"],
       mode: "browse",
-    });
-    raw = remoteSession ? withBrowserbaseAgentEnv(remoteSession, invoke) : invoke();
+    };
+    raw = remoteSession
+      ? await runBrowserbaseAgent(remoteSession, plan.query, plan.maxTurns, options)
+      : runAgent(plan.query, plan.maxTurns, options);
   } finally {
     if (session && !remoteSession) {
       if (previousCdp === undefined) delete process.env.BROWSER_CDP_URL;

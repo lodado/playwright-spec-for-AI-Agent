@@ -3,10 +3,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resetProjectConfigForTests } from "../hermes-qa-project-config.mjs";
-import { saveBrowserbaseContext } from "../browser-provider.mjs";
-const mocks = vi.hoisted(() => ({ run: vi.fn(), launch: vi.fn(), resolve: vi.fn(), auth: "cdp-attach" }));
-vi.mock("../ai-agent-adapter.mjs", () => ({ prepareAdapter: async () => ({ name: "test", capabilities: { auth: mocks.auth, supportsMaxTurns: true, blocksEventLoop: true } }), runAgent: mocks.run }));
+import { saveBrowserbaseContext, withBrowserbaseAgentEnv } from "../browser-provider.mjs";
+const mocks = vi.hoisted(() => ({ run: vi.fn(), worker: vi.fn(), localRun: vi.fn(), launch: vi.fn(), resolve: vi.fn(), auth: "cdp-attach" }));
+vi.mock("../ai-agent-adapter.mjs", () => ({ prepareAdapter: async () => ({ name: "test", capabilities: { auth: mocks.auth, supportsMaxTurns: true, blocksEventLoop: true } }), runAgent: mocks.localRun }));
 vi.mock("../browser-provider.mjs", async importOriginal => ({ ...await importOriginal<any>(), launchBrowserbaseSession: mocks.launch }));
+vi.mock("../browserbase-agent-runner.mjs", () => ({ runBrowserbaseAgent: mocks.worker }));
 vi.mock("../resolve-spec-for-judge.mjs", () => ({ resolveSpecForJudge: mocks.resolve }));
 vi.mock("../qa-spec-artifacts.mjs", () => ({ loadSpecSourceFiles: () => ({}), buildUploadFixturesPayload: () => ({ defaults: {}, byCheckId: {} }) }));
 import { main } from "../run-hermes-page-judge.mjs";
@@ -20,6 +21,8 @@ beforeEach(() => {
   Object.assign(process.env, { QA_BROWSER_PROVIDER: "browserbase", BROWSERBASE_API_KEY: "TOPSECRET", BROWSERBASE_PROJECT_ID: "project-1", STAGING_QA_BASE_URL: base, QA_OUTPUT_DIR: output, CI: "true" });
   delete process.env.STAGING_QA_EMAIL; delete process.env.STAGING_QA_PASSWORD; delete process.env.QA_BROWSER_CDP_URL; delete process.env.BROWSER_CDP_URL;
   mocks.auth = "cdp-attach";
+  mocks.localRun.mockReset();
+  mocks.worker.mockReset().mockImplementation(async (session, ...args) => withBrowserbaseAgentEnv(session, () => mocks.run(...args)));
   mocks.resolve.mockReturnValue({ path: join(output, "dashboard-qa-spec.json"), planSource: "spec-live.json", staleness: { ok: true, expected: null, actual: "sha256:abc" }, definition: { scenarios: [{ scenarioId: "ACTIVE", tests: [{ title: "shows score", checkId: "score", liveRunPolicy: "executable-readonly", stagingMode: "read-only", expectations: [] }] }] } });
   mocks.run.mockReset().mockImplementation(() => ({ status: "manual_review", cause: "SPEC_GAP", summary: "TOPSECRET", checks: [{ item: "shows score", result: "manual_review", cause: "SPEC_GAP", confidence: "low", detail: "visible", evidenceRefs: [] }], evidence: [] }));
   const evidence = { screenshots: [], ariaSnapshots: [], violations: [], tracePath: null, harPath: null, videoPath: null, browserProvider: { name: "browserbase", sessionId: "session-1" } };
@@ -119,6 +122,32 @@ describe("Browserbase judge boundary", () => {
       expect(close).toHaveBeenCalledTimes(1);
     },
   );
+  it("awaits isolated detection and judging without releasing the attached session", async () => {
+    save();
+    const spec = mocks.resolve().definition;
+    spec.scenarios.push({ ...spec.scenarios[0], scenarioId: "INACTIVE" });
+    let finishDetection: (value: unknown) => void;
+    let finishJudge: (value: unknown) => void;
+    const detection = new Promise(resolve => { finishDetection = resolve; });
+    const judgment = new Promise(resolve => { finishJudge = resolve; });
+    mocks.worker.mockReset().mockImplementation((_session, _query, _turns, options) =>
+      options.requiredKeys.includes("state") ? detection : judgment);
+    const running = main(args);
+    await vi.waitFor(() => expect(mocks.worker).toHaveBeenCalledTimes(1));
+    expect(close).not.toHaveBeenCalled();
+    expect(mocks.localRun).not.toHaveBeenCalled();
+    expect(process.env.BROWSER_CDP_URL).toBeUndefined();
+    expect(process.env.BROWSERBASE_API_KEY).toBe("TOPSECRET");
+    finishDetection!({ state: "ACTIVE", confidence: "high", evidence: "dashboard" });
+    await vi.waitFor(() => expect(mocks.worker).toHaveBeenCalledTimes(2));
+    expect(close).not.toHaveBeenCalled();
+    expect(mocks.worker.mock.calls[1][0]).toBe(mocks.worker.mock.calls[0][0]);
+    expect(mocks.worker.mock.calls[1][3].secrets).toContain("TOPSECRET");
+    finishJudge!({ status: "manual_review", cause: "SPEC_GAP", checks: [], evidence: [] });
+    expect(await running).toBe(0);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(mocks.localRun).not.toHaveBeenCalled();
+  });
   it("state detection and judge use the same allocated remote session", async () => {
     save();
     const spec = mocks.resolve().definition;
