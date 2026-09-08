@@ -14,11 +14,17 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import {
   applyStagingUrlDefaults,
+  getProjectConfig,
   loadProjectConfig,
 } from "./hermes-qa-project-config.mjs";
 import { parseStagingQaArgs } from "./staging-qa-config.mjs";
 import { SESSION_PROFILE_DIR } from "./qa-browser-session.mjs";
-import { EnvironmentError, EXIT_OK, runMain } from "./errors.mjs";
+import { EnvironmentError, UsageError, EXIT_OK, runMain } from "./errors.mjs";
+import {
+  resolveBrowserProvider,
+  browserbaseOptions,
+  runBrowserbaseLogin,
+} from "./browser-provider.mjs";
 
 const HELP = `Usage: npx playwright-spec-for-ai-agent login [options]
 
@@ -26,6 +32,18 @@ const HELP = `Usage: npx playwright-spec-for-ai-agent login [options]
   session in a private profile that \`judge\` reuses.
 
 Options:
+  --browser-provider=<local|browserbase>
+                       Use the local browser (default) or Browserbase Live View.
+  --browserbase-profile=<name>
+                       Named Browserbase Context for later judge runs.
+  --browserbase-timeout=<seconds>
+                       Login confirmation timeout (default: 600).
+  --success-url=<url>  Authenticated page URL, absolute or relative to login URL.
+  --success-selector=<selector>
+                       Element that confirms successful authentication.
+                       Browserbase requires a success URL or selector. Sign in
+                       through the printed Live View URL to save the Context.
+                       --attach and --channel are local-only.
   --channel=<name>     Launch real Chrome ("chrome", "msedge", ...) instead of
                        bundled Chromium. Providers that block automated
                        browsers are far likelier to accept it.
@@ -71,6 +89,27 @@ export async function run(argv = process.argv.slice(2)) {
   const config = parseStagingQaArgs(argv);
   applyStagingUrlDefaults(config, argv);
   const loginUrl = new URL(config.loginPath, config.baseUrl).toString();
+
+  if (resolveBrowserProvider(argv) === "browserbase") {
+    const localOnlyFlag = argv.find(arg =>
+      arg === "--attach" || arg.startsWith("--attach=") ||
+      arg === "--channel" || arg.startsWith("--channel=")
+    );
+    if (localOnlyFlag) {
+      throw new UsageError(
+        `${localOnlyFlag.split("=")[0]} is only supported with --browser-provider=local.`
+      );
+    }
+    await runBrowserbaseLogin({
+      root: getProjectConfig().root,
+      loginUrl,
+      ...browserbaseOptions(argv),
+    });
+    console.log(
+      "Context saved. `judge` can reuse it with --browser-provider=browserbase and the same --browserbase-profile."
+    );
+    return EXIT_OK;
+  }
 
   if (argv.includes("--attach")) {
     console.log(attachRecipe(loginUrl));
