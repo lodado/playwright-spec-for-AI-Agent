@@ -15,6 +15,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prepareAdapter, runAgent } from "./ai-agent-adapter.mjs";
 import { writeAgentQueryArtifact } from "./agent-output.mjs";
+import { browserbaseOptions, resolveBrowserProvider, readBrowserbaseContext, launchBrowserbaseSession, withBrowserbaseAgentEnv } from "./browser-provider.mjs";
 import { withSchema } from "./artifact-schema.mjs";
 import {
   AgentOutputError,
@@ -28,6 +29,7 @@ import {
 import {
   getAllowedOrigins,
   getHooks,
+  getProjectConfig,
   getStorageStatePath,
   isPlaceholderBaseUrl,
 } from "./hermes-qa-project-config.mjs";
@@ -39,7 +41,7 @@ import {
   resolveJudgeTurnBudget,
 } from "./judge-verdict.mjs";
 import { resolveSpecForJudge } from "./resolve-spec-for-judge.mjs";
-import { seedAsideSession, seedProfileSession } from "./qa-session-seed.mjs";
+import { seedAsideSession, seedProfileSession, readStorageState, cookiesForOrigin, buildLocalStorageEntries } from "./qa-session-seed.mjs";
 import {
   buildStateDetectionQuery,
   DETECT_MAX_TURNS,
@@ -270,6 +272,9 @@ function renderMarkdown(judgment) {
           "",
           "## Runner-captured evidence",
           "",
+          ...(judgment.runnerEvidence.browserProvider?.name === "browserbase"
+            ? [`- Browserbase session: [${judgment.runnerEvidence.browserProvider.sessionId}](https://www.browserbase.com/sessions/${encodeURIComponent(judgment.runnerEvidence.browserProvider.sessionId)})`]
+            : []),
           ...[
             judgment.runnerEvidence.tracePath &&
               `- trace: \`${judgment.runnerEvidence.tracePath}\``,
@@ -308,6 +313,7 @@ async function detectAccountState({
   preauthenticated,
   runId,
   override,
+  remoteSession = null,
 }) {
   const resolved = resolveSpecForJudge(paths);
   const scenarioIds = selectableScenarioIds(resolved?.definition);
@@ -329,7 +335,7 @@ async function detectAccountState({
 
   let detection;
   try {
-    const raw = runAgent(query, adapter.capabilities.supportsMaxTurns ? DETECT_MAX_TURNS : null, {
+    const invoke = () => runAgent(query, adapter.capabilities.supportsMaxTurns ? DETECT_MAX_TURNS : null, {
       // Its own artifacts: the judge call that follows writes to the same page
       // and would otherwise overwrite the only record of what the detector saw.
       paths: {
@@ -337,10 +343,11 @@ async function detectAccountState({
         hermesQuery: paths.hermesDetectQuery,
         hermesRawOutput: paths.hermesDetectRawOutput,
       },
-      secrets: [config.email, config.password].filter(Boolean),
+      secrets: [config.email, config.password, ...(remoteSession?.secrets ?? [])].filter(Boolean),
       requiredKeys: ["state"],
       mode: "browse",
     });
+    const raw = remoteSession ? withBrowserbaseAgentEnv(remoteSession, invoke) : invoke();
     detection = normalizeStateDetection(raw, { scenarioIds });
   } catch (error) {
     // Detection is an optimisation. Losing it costs prompt size, not correctness.
@@ -564,6 +571,7 @@ async function executeJudge({
   allowedOrigins,
   attachUrl,
   runId,
+  remoteSession = null,
 }) {
   if (preauthenticated && adapter.capabilities.auth === "self-prelogin") {
     const storageStatePath = getStorageStatePath(page);
@@ -593,7 +601,7 @@ async function executeJudge({
   // from the recorded HAR, inspected after the run.
   const liveInterception = adapter.capabilities.blocksEventLoop === false;
   const usesRunnerBrowser = adapter.capabilities.auth === "cdp-attach";
-  const session = !usesRunnerBrowser
+  const session = remoteSession ?? (!usesRunnerBrowser
     ? null
     : attachUrl
       ? // The operator's own browser, already signed in — the only path an
@@ -612,21 +620,24 @@ async function executeJudge({
             allowedOrigins: liveInterception ? allowedOrigins : [],
             blockMutations: liveInterception && plan.readOnly,
           })
-        : null;
-  if (session) process.env.BROWSER_CDP_URL = session.cdpUrl;
+        : null);
+  const previousCdp = process.env.BROWSER_CDP_URL;
+  if (session && !remoteSession) process.env.BROWSER_CDP_URL = session.cdpUrl;
 
   let raw;
   let runnerEvidence = null;
   try {
-    raw = runAgent(plan.query, plan.maxTurns, {
+    const invoke = () => runAgent(plan.query, plan.maxTurns, {
       paths,
-      secrets: plan.secrets,
+      secrets: [...plan.secrets, ...(remoteSession?.secrets ?? [])],
       requiredKeys: ["status"],
       mode: "browse",
     });
+    raw = remoteSession ? withBrowserbaseAgentEnv(remoteSession, invoke) : invoke();
   } finally {
-    if (session) {
-      delete process.env.BROWSER_CDP_URL;
+    if (session && !remoteSession) {
+      if (previousCdp === undefined) delete process.env.BROWSER_CDP_URL;
+      else process.env.BROWSER_CDP_URL = previousCdp;
       runnerEvidence = await session.close();
     }
   }
@@ -731,6 +742,14 @@ function verdictExitCode(status, failOn) {
 export async function main(argv = process.argv.slice(2)) {
   await ensureProjectConfig(argv);
   const adapter = await prepareAdapter();
+  const browserProvider = resolveBrowserProvider(argv);
+  const cloud = browserProvider === "browserbase";
+  const cloudOptions = cloud ? browserbaseOptions(argv) : null;
+  if (cloud && adapter.capabilities.auth !== "cdp-attach") {
+    throw new UsageError("Browserbase requires an AI adapter with auth=cdp-attach.", { hint: "Use hermes, or exec with QA_AGENT_AUTH=cdp-attach and a CDP-capable browser tool." });
+  }
+  if (cloud && (resolveAttachUrl(argv) || argv.includes("--cdp-url"))) throw new UsageError("--cdp-url / QA_BROWSER_CDP_URL cannot be combined with Browserbase.");
+  if (cloud && argv.includes("--credentials-in-prompt")) throw new UsageError("--credentials-in-prompt cannot be combined with Browserbase. Use Browserbase login or storageState.");
   const failOn = parseFailOn(argv);
   const dryRun = argv.includes("--dry-run");
   const page = parsePageArg(argv);
@@ -756,7 +775,7 @@ export async function main(argv = process.argv.slice(2)) {
   const selfPrelogin = adapter.capabilities.auth === "self-prelogin";
   const cdpAttach = adapter.capabilities.auth === "cdp-attach";
   const attachUrl = cdpAttach ? resolveAttachUrl(argv) : "";
-  const attachable = cdpAttach && (Boolean(attachUrl) || hasSessionProfile());
+  const attachable = cdpAttach && (cloud || Boolean(attachUrl) || hasSessionProfile());
   // A configured storage state IS the session, so nothing needs to type
   // credentials — demanding them anyway blocks exactly the apps this path
   // exists for (no login form to drive in the first place).
@@ -794,6 +813,11 @@ export async function main(argv = process.argv.slice(2)) {
   }
   const allowedOrigins = getAllowedOrigins(page);
   const runId = newRunId();
+  const cloudIdentity = cloud ? { root: getProjectConfig().root, projectId: process.env.BROWSERBASE_PROJECT_ID?.trim(), origin: new URL(targetUrl).origin, profile: cloudOptions.profile } : null;
+  const cloudContext = cloud && cloudIdentity.projectId ? readBrowserbaseContext(cloudIdentity) : null;
+  if (cloud && isAuthRequired(config) && !cloudContext && !seedable) {
+    throw new EnvironmentError("No saved Browserbase Context for this site and profile.", { hint: "Run login --browser-provider=browserbase --success-url=<signed-in-url>, or configure staging.storageState." });
+  }
 
   if (dryRun) {
     const plan = prepareJudgePlan({
@@ -812,6 +836,7 @@ export async function main(argv = process.argv.slice(2)) {
         `Dry run — no agent was called.`,
         `  target:        ${targetUrl}`,
         `  adapter:       ${adapter.name}`,
+        `  browser:       ${browserProvider}`,
         `  auth mode:     ${preauthenticated ? `preauthenticated (${adapter.capabilities.auth})` : "credentials-in-prompt"}`,
         `  plan source:   ${plan.planSource}`,
         `  planned checks:${String(plan.plannedChecks.length).padStart(4)}`,
@@ -825,7 +850,56 @@ export async function main(argv = process.argv.slice(2)) {
   let plan;
   let result;
   let accountState = null;
+  let remoteSession = null;
   try {
+    try {
+    if (cloud) {
+      // Validate the plan before allocating a billable remote browser.
+      prepareJudgePlan({ page, target, targetUrl, paths, config, adapter, preauthenticated, accountState: parseStateOverride(argv) });
+      const state = seedable ? readStorageState(getStorageStatePath(page)) : null;
+      remoteSession = await launchBrowserbaseSession({
+        ...cloudIdentity, contextId: state ? null : cloudContext?.contextId ?? null,
+        persist: false, timeoutSeconds: cloudOptions.timeoutSeconds,
+        evidenceDir: paths.evidenceDir, label: `${paths.slug}-${runId}`,
+      });
+      console.log(`Browserbase session: ${remoteSession.metadata.sessionId}`);
+      console.log(`Session dashboard: https://www.browserbase.com/sessions/${encodeURIComponent(remoteSession.metadata.sessionId)}`);
+      try {
+        if (state) {
+          await remoteSession.context.addCookies(cookiesForOrigin(state.cookies, cloudIdentity.origin));
+          const items = buildLocalStorageEntries(state.origins, cloudIdentity.origin);
+          if (items.length) await remoteSession.context.addInitScript(({ origin, items }) => {
+            if (location.origin === origin) for (const item of items) localStorage.setItem(item.name, item.value);
+          }, { origin: cloudIdentity.origin, items });
+        }
+        const browserPage = remoteSession.context.pages()[0] || await remoteSession.context.newPage();
+        const authUrl = !state && isAuthRequired(config) && cloudContext?.successUrl ? cloudContext.successUrl : targetUrl;
+        const response = await browserPage.goto(authUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        if (response && response.status() >= 400) throw new Error("remote target unavailable");
+        if (!state && isAuthRequired(config) && cloudContext) {
+          // DOMContentLoaded can precede client-side redirects and hydration.
+          // Recheck all markers together, rather than accepting stale URL success.
+          const deadline = Date.now() + 10_000;
+          const marker = cloudContext.successSelector
+            ? browserPage.locator(cloudContext.successSelector).first()
+            : null;
+          while (true) {
+            const visible = !marker || await marker.isVisible();
+            const observed = new URL(browserPage.url());
+            observed.search = "";
+            if (
+              visible && observed.origin === cloudIdentity.origin &&
+              (!cloudContext.successUrl || observed.href === cloudContext.successUrl)
+            ) break;
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) throw new Error("session auth markers timed out");
+            await new Promise(resolve => setTimeout(resolve, Math.min(100, remaining)));
+          }
+        }
+      } catch {
+        throw new EnvironmentError("Browserbase target could not be reached or its saved login is no longer valid.", { hint: "Check cloud network access and run login --browser-provider=browserbase again if the session expired." });
+      }
+    }
     accountState = await detectAccountState({
       page,
       paths,
@@ -835,6 +909,7 @@ export async function main(argv = process.argv.slice(2)) {
       preauthenticated,
       runId,
       override: parseStateOverride(argv),
+      remoteSession,
     });
     plan = prepareJudgePlan({
       page,
@@ -855,7 +930,7 @@ export async function main(argv = process.argv.slice(2)) {
       specHash: plan.specHash,
       spec: plan.specPath,
     });
-    console.log(
+    if (!cloud) console.log(
       `Preflight ${targetUrl} -> HTTP ${await preflightTarget(targetUrl)}`
     );
     if (preauthenticated) {
@@ -876,7 +951,17 @@ export async function main(argv = process.argv.slice(2)) {
       allowedOrigins,
       attachUrl,
       runId,
+      remoteSession,
     });
+    } finally {
+      if (remoteSession) {
+        const evidence = await remoteSession.close();
+        if (result) {
+          result.runnerEvidence = evidence;
+          result.violations.push(...(evidence.violations ?? []));
+        }
+      }
+    }
   } catch (error) {
     // Quarantine the run: partial artifacts (judge plan, raw output) may have
     // been written already; downstream commands must not report on them.
