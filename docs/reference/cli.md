@@ -83,6 +83,8 @@ but returned output the harness cannot use.
 
 Opens a headed browser on the staging login page so an operator signs in once.
 `judge` then reuses that browser profile and needs no credentials.
+With `--browser-provider=browserbase`, prints a private remote Live View link
+instead and saves verified Context metadata. See [Browserbase](../how-to/browserbase.md).
 
 | Option                | Default    | Required | Effect                                                                              |
 | --------------------- | ---------- | -------- | ------------------------------------------------------------------------------------ |
@@ -90,13 +92,19 @@ Opens a headed browser on the staging login page so an operator signs in once.
 | `--attach`            | off        | no       | Print the recipe for attaching to a browser you already run, then exit 0.           |
 | `--base-url=<url>`    | `STAGING_QA_BASE_URL`, else config | no | Staging origin.                                              |
 | `--login-path=<path>` | `STAGING_QA_LOGIN_PATH`, else config, else `/login` | no | Login page path.                                     |
+| `--browser-provider=<name>` | `QA_BROWSER_PROVIDER`, else `local` | no | `local` or `browserbase`. |
+| `--browserbase-profile=<name>` | `QA_BROWSERBASE_PROFILE`, else `default` | no | Remote Context account scope. |
+| `--browserbase-timeout=<seconds>` | `QA_BROWSERBASE_TIMEOUT_SECONDS`, else `600` | no | Remote session timeout, `60..21600`. |
+| `--success-url=<url-or-path>` | unset | one success condition for Browserbase | Same-origin post-login URL, without query. |
+| `--success-selector=<selector>` | unset | one success condition for Browserbase | Visible authenticated marker. Both conditions must match when both are set. |
 
-Reads: nothing on disk.
+Reads: for Browserbase, scoped metadata from `.private/qa-browserbase-contexts.json`.
 
 Writes: a persistent browser profile at `.private/qa-browser-profile`,
 owner-only. The command stores it only after the profile gains a session
 cookie — Chromium creates the directory the moment the window opens, so its
-existence proves nothing.
+existence proves nothing. Browserbase instead writes verified Context metadata
+to `.private/qa-browserbase-contexts.json` with owner-only permissions.
 
 Exit codes: 0 when a session was stored, or after `--attach` printed the
 recipe. 3 when the browser window closed without any new session cookie.
@@ -123,6 +131,9 @@ against the live plan.
 | `--expected-subscription-status=<status>` | config   | no       | Expected account state, uppercased. `--expected-account-state=` is the current name.       |
 | `--account-notes=<text>`                  | config   | no       | Free text forwarded verbatim into the agent prompt.                                        |
 | `--cdp-url=<url>`                         | `QA_BROWSER_CDP_URL` | no | Judge through a browser you already run and signed into.                              |
+| `--browser-provider=<name>` | `QA_BROWSER_PROVIDER`, else `local` | no | `browserbase` requires a CDP-capable adapter and rejects explicit CDP/credential-prompt conflicts. |
+| `--browserbase-profile=<name>` | `QA_BROWSERBASE_PROFILE`, else `default` | no | Reuse this account's scoped Context, unless storageState is configured. |
+| `--browserbase-timeout=<seconds>` | `QA_BROWSERBASE_TIMEOUT_SECONDS`, else `600` | no | Remote session timeout, `60..21600`. |
 | `--fail-on=<mode>`                        | `fail`   | no       | `fail` \| `manual_review` \| `never` — which verdict exits 1.                              |
 | `--non-interactive`                       | off in a TTY | no   | Skip prompts. `--yes` and `-y` are aliases; `CI=true` has the same effect.                 |
 | `--dry-run`                               | off      | no       | Write the prompt and plan, then stop before calling the agent.                             |

@@ -5,7 +5,11 @@ operator setting that up for the first time on an app that requires login. When
 you finish, a judge run reaches the target page authenticated, and `doctor`
 confirms it before you spend an agent run finding out.
 
-There are three paths. Which one you need is decided by how your app signs
+For a remote browser, see [Browserbase login and Context reuse](./browserbase.md).
+It uses a private Live View link, supports manual login when the site permits it,
+and requires an explicit success URL or selector. It does not bypass identity-provider restrictions.
+
+For the default local provider, there are three paths. Which one you need is decided by how your app signs
 people in, not by preference. None of the three puts a credential in the agent
 prompt, in `argv`, or in an artifact. The legacy flow that does
 (`--credentials-in-prompt`) still exists and prints a `[security]` warning every

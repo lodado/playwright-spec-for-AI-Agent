@@ -249,6 +249,10 @@ notify, but it can never change what the run decided.
 | `QA_NO_ENV_FILE=1`                        | do not load `.env.local` / `.env`                                          |
 | `QA_AI_ADAPTER`                           | adapter name or module specifier — see [Adapters](./adapters.md)           |
 | `QA_BROWSER_CDP_URL`                      | attach the judge to a browser you already run; `--cdp-url=` wins over it   |
+| `QA_BROWSER_PROVIDER` | `local` (default) or `browserbase`; independent of the AI adapter |
+| `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | private Browserbase API credentials and project scope |
+| `QA_BROWSERBASE_PROFILE` | Context account profile, default `default`, scoped to project and site origin |
+| `QA_BROWSERBASE_TIMEOUT_SECONDS` | remote session timeout, default `600`, range `60..21600` |
 | `QA_JUDGE_MAX_TURNS`                      | override the judge's computed turn budget (otherwise `12 + 8 × executable tests`, clamped to 20–150) |
 | `QA_RECORD_VIDEO`                         | any non-empty value records webm — runner-launched browser only            |
 | `QA_FIXTURE_DIR`                          | directory of per-stage `<stage>.json` responses for the `fixture` adapter  |

@@ -44,8 +44,14 @@ const COMMANDS = {
   },
   login: {
     script: "run-qa-login.mjs",
-    summary: "Open a headed browser to log in once; judge reuses the session",
+    summary: "Log in once using local Chrome or Browserbase Live View",
     flags: [
+      "--page",
+      "--browser-provider",
+      "--browserbase-profile",
+      "--browserbase-timeout",
+      "--success-url",
+      "--success-selector",
       "--base-url",
       "--login-path",
       "--channel",
@@ -58,6 +64,9 @@ const COMMANDS = {
     script: "run-hermes-page-judge.mjs",
     summary: "Agent opens the target page in a browser and judges live DOM",
     flags: [
+      "--browser-provider",
+      "--browserbase-profile",
+      "--browserbase-timeout",
       "--page",
       "--target-path",
       "--base-url",
@@ -111,6 +120,9 @@ const COMMANDS = {
     script: "run-page-qa-nightly.mjs",
     summary: "spec → abstract-ai → judge → review → (optional slack)",
     flags: [
+      "--browser-provider",
+      "--browserbase-profile",
+      "--browserbase-timeout",
       "--page",
       "--target-path",
       "--with-slack",
@@ -159,6 +171,11 @@ const COMMANDS = {
 };
 
 const FLAG_HELP = {
+  "--browser-provider": ["--browser-provider=<name>", "local (default) | browserbase (env: QA_BROWSER_PROVIDER)"],
+  "--browserbase-profile": ["--browserbase-profile=<name>", "Site/account Context namespace (default: default)"],
+  "--browserbase-timeout": ["--browserbase-timeout=<seconds>", "Remote session lifetime, 60–21600 (default: 600)"],
+  "--success-url": ["--success-url=<url-or-path>", "Browserbase login: expected signed-in URL, no query parameters"],
+  "--success-selector": ["--success-selector=<selector>", "Browserbase login: element visible only after authentication"],
   "--page": ["--page=<slug>", "Page id (required for most commands)"],
   "--target-path": ["--target-path=<path>", "Staging URL path (or set in config)"],
   "--base-url": ["--base-url=<url>", "Staging base URL (env: STAGING_QA_BASE_URL)"],
@@ -216,6 +233,11 @@ const FLAG_HELP = {
  * gate on the default instead, and report a manual_review run as green.
  */
 const VALUE_FLAGS = new Set([
+  "--browser-provider",
+  "--browserbase-profile",
+  "--browserbase-timeout",
+  "--success-url",
+  "--success-selector",
   "--page",
   "--pages",
   "--cdp-url",

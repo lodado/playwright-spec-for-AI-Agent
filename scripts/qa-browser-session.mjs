@@ -456,7 +456,7 @@ export async function connectExistingBrowser({
     return evidence;
   }
 
-  return { cdpUrl, capture, close, evidence, attached: true };
+  return { cdpUrl, context, capture, close, evidence, attached: true };
 }
 
 async function readCookies(context) {
