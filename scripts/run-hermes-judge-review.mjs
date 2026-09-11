@@ -13,7 +13,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { prepareAdapter, runAgent } from "./ai-agent-adapter.mjs";
+import { prepareAdapter, runAgentAsync } from "./ai-agent-adapter.mjs";
 import { readArtifact, withSchema } from "./artifact-schema.mjs";
 import { EXIT_VERDICT_FAIL, runMain, UsageError } from "./errors.mjs";
 import { getHooks } from "./hermes-qa-project-config.mjs";
@@ -267,7 +267,7 @@ export async function run(argv) {
 
   const reviewed = [];
   for (let index = 0; index < samples; index += 1) {
-    const raw = runAgent(query, HERMES_MAX_TURNS_REVIEW, {
+    const raw = await runAgentAsync(query, HERMES_MAX_TURNS_REVIEW, {
       paths: samplePaths(paths, index, samples),
       requiredKeys: ["criteria", "overallReview"],
       mode: "text-only",

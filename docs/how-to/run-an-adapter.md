@@ -223,8 +223,9 @@ then select its module from the project root:
 export QA_AI_ADAPTER='./qa/my-adapter.mjs'
 ```
 
-Its exported `run(query, maxTurns, options)` must synchronously return parsed
-JSON. Declare browser/auth capabilities accurately and test against the documented
+Its exported `run(query, maxTurns, options)` must return parsed JSON, directly or
+through a Promise. Async adapters should declare `blocksEventLoop: false` only
+when they keep the runner responsive. Declare browser/auth capabilities accurately and test against the documented
 contract, using the repository's adapter contract tests as examples, before the
 shared sequence below.
 

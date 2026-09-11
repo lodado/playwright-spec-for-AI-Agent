@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { resetProjectConfigForTests } from "../hermes-qa-project-config.mjs";
 import { saveBrowserbaseContext, withBrowserbaseAgentEnv } from "../browser-provider.mjs";
 const mocks = vi.hoisted(() => ({ run: vi.fn(), worker: vi.fn(), localRun: vi.fn(), launch: vi.fn(), resolve: vi.fn(), auth: "cdp-attach" }));
-vi.mock("../ai-agent-adapter.mjs", () => ({ prepareAdapter: async () => ({ name: "test", capabilities: { auth: mocks.auth, supportsMaxTurns: true, blocksEventLoop: true } }), runAgent: mocks.localRun }));
+vi.mock("../ai-agent-adapter.mjs", () => ({ prepareAdapter: async () => ({ name: "test", capabilities: { auth: mocks.auth, supportsMaxTurns: true, blocksEventLoop: true } }), runAgent: mocks.localRun, runAgentAsync: mocks.localRun }));
 vi.mock("../browser-provider.mjs", async importOriginal => ({ ...await importOriginal<any>(), launchBrowserbaseSession: mocks.launch }));
 vi.mock("../browserbase-agent-runner.mjs", () => ({ runBrowserbaseAgent: mocks.worker }));
 vi.mock("../resolve-spec-for-judge.mjs", () => ({ resolveSpecForJudge: mocks.resolve }));

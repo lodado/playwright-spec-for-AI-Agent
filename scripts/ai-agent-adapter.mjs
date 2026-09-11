@@ -6,6 +6,7 @@ import { runAside } from "./aside-runner.mjs";
 import { preloginAside } from "./aside-prelogin.mjs";
 import { execAdapterCapabilities, runExecAgent } from "./exec-runner.mjs";
 import { FIXTURE_ADAPTER_CAPABILITIES, runFixture } from "./fixture-runner.mjs";
+import { runStagehand, STAGEHAND_CAPABILITIES, resolveStagehandModel } from "./stagehand-runner.mjs";
 import { UsageError } from "./errors.mjs";
 
 /**
@@ -75,6 +76,13 @@ const BUILTIN_ADAPTERS = {
     prelogin: null,
     resolveModel: () => null,
   },
+  stagehand: {
+    run: runStagehand,
+    capabilities: STAGEHAND_CAPABILITIES,
+    prelogin: null,
+    resolveModel: resolveStagehandModel,
+    async: true,
+  },
 };
 
 export function resolveAdapterName() {
@@ -134,6 +142,7 @@ function toAdapterEntry(specifier, module) {
     prelogin: typeof module.prelogin === "function" ? module.prelogin : null,
     resolveModel:
       typeof module.resolveModel === "function" ? module.resolveModel : () => null,
+    async: module.async === true || module.run.constructor?.name === "AsyncFunction",
   };
 }
 
@@ -204,9 +213,17 @@ export function runAgent(query, maxTurns, options = {}) {
   const name = resolveAdapterName();
   const entry = resolveAdapterEntry(name);
   const startedAt = Date.now();
+  if (entry.async) {
+    throw new UsageError(
+      `QA_AI_ADAPTER ${JSON.stringify(name)} is asynchronous; use runAgentAsync() instead.`,
+      { hint: "Await the pipeline's async adapter entrypoint." },
+    );
+  }
   const result = entry.run(query, maxTurns, options);
-  // The agent's self-reported `source` comes from a prompt template and lies
-  // when the backend is swapped — the adapter is the authority on who ran.
+  return stampResult(result, name, entry, startedAt);
+}
+
+function stampResult(result, name, entry, startedAt) {
   if (result && typeof result === "object" && !Array.isArray(result)) {
     result.source = name === "hermes" ? "hermes-agent" : name;
     result.agentMeta = {
@@ -216,4 +233,13 @@ export function runAgent(query, maxTurns, options = {}) {
     };
   }
   return result;
+}
+
+/** Async adapter seam. Sync backends are also supported without changing behavior. */
+export async function runAgentAsync(query, maxTurns, options = {}) {
+  const name = resolveAdapterName();
+  const entry = resolveAdapterEntry(name);
+  const startedAt = Date.now();
+  const result = await entry.run(query, maxTurns, options);
+  return stampResult(result, name, entry, startedAt);
 }

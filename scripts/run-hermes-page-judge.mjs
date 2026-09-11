@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { prepareAdapter, runAgent } from "./ai-agent-adapter.mjs";
+import { prepareAdapter, runAgentAsync } from "./ai-agent-adapter.mjs";
 import { writeAgentQueryArtifact } from "./agent-output.mjs";
 import { browserbaseOptions, resolveBrowserProvider, readBrowserbaseContext, launchBrowserbaseSession } from "./browser-provider.mjs";
 import { runBrowserbaseAgent } from "./browserbase-agent-runner.mjs";
@@ -351,7 +351,7 @@ async function detectAccountState({
     };
     const raw = remoteSession
       ? await runBrowserbaseAgent(remoteSession, query, maxTurns, options)
-      : runAgent(query, maxTurns, options);
+      : await runAgentAsync(query, maxTurns, options);
     detection = normalizeStateDetection(raw, { scenarioIds });
   } catch (error) {
     // Detection is an optimisation. Losing it costs prompt size, not correctness.
@@ -639,7 +639,7 @@ async function executeJudge({
     };
     raw = remoteSession
       ? await runBrowserbaseAgent(remoteSession, plan.query, plan.maxTurns, options)
-      : runAgent(plan.query, plan.maxTurns, options);
+      : await runAgentAsync(plan.query, plan.maxTurns, options);
   } finally {
     if (session && !remoteSession) {
       if (previousCdp === undefined) delete process.env.BROWSER_CDP_URL;

@@ -87,8 +87,10 @@ export function run(query, maxTurns, options = {}) {
 }
 ```
 
-`run` must return a plain object synchronously. `runAgent` is synchronous for
-its three call sites, so a Promise is not awaited.
+`run` may return either a plain object or a Promise. Synchronous adapters remain
+compatible with `runAgent`; asynchronous adapters should be called through
+`runAgentAsync` (the built-in `stagehand` adapter uses this path). The CLI
+pipeline awaits the async entrypoint for every stage.
 
 `options` carries `{ paths, secrets, requiredKeys, requiredKeyGroups, mode }`.
 `mode` is `"browse"` for `judge` and `"text-only"` for `abstract-ai` and
@@ -148,10 +150,10 @@ script already does this, so nothing is needed for normal CLI use. If you call
 `runAgent` yourself, `await prepareAdapter()` first:
 
 ```js
-import { prepareAdapter, runAgent } from "playwright-spec-for-ai-agent/adapter";
+import { prepareAdapter, runAgentAsync } from "playwright-spec-for-ai-agent/adapter";
 
 await prepareAdapter();
-const result = runAgent(query, maxTurns, options);
+const result = await runAgentAsync(query, maxTurns, options);
 ```
 
 Skipping it gives:

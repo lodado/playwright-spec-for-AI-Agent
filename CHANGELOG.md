@@ -13,6 +13,23 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [7.4.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.3.0...v7.4.0) (2026-09-11)
+
+### Features
+
+* Add an optional Stagehand 3.7.3 AI adapter with local CDP attachment, structured QA output, explicit model selection, and text-only abstraction/review.
+* Run asynchronous adapters without blocking runner-owned browser interception, while retaining the synchronous adapter API.
+
+### Reliability
+
+* Isolate Stagehand execution with bounded timeouts, output limits, secret redaction, and browser cleanup.
+* Resolve HTTP CDP discovery endpoints before attaching Stagehand and preserve externally owned browsers on disconnect.
+* Add offline Stagehand configuration checks and adapter lifecycle regression tests.
+
+### Documentation
+
+* Document installation, model billing, runtime requirements, and unverified remote-browser limitations. Stagehand remains opt-in; the default adapter is unchanged.
+
 ## [7.3.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.2.0...v7.3.0) (2026-09-08)
 
 ### Features

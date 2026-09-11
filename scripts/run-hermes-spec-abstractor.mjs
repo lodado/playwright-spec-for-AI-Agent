@@ -15,7 +15,7 @@ import { runMain, UsageError } from "./errors.mjs";
 import { hashSpecDefinition } from "./spec-hash.mjs";
 import { SPEC_READER_VERSION } from "./spec-annotation-reader.mjs";
 import { buildGwtPromptSpec } from "./abstract-ai-payload.mjs";
-import { prepareAdapter, runAgent } from "./ai-agent-adapter.mjs";
+import { prepareAdapter, runAgentAsync } from "./ai-agent-adapter.mjs";
 import { normalizeAbstractAiResult } from "./normalize-abstracted-spec.mjs";
 import { renderLiveSpecMarkdown } from "./qa-spec-live-artifact.mjs";
 import {
@@ -175,7 +175,7 @@ export async function run(argv) {
 
   const adapter = await prepareAdapter();
 
-  const raw = runAgent(query, HERMES_MAX_TURNS_ABSTRACT, {
+  const raw = await runAgentAsync(query, HERMES_MAX_TURNS_ABSTRACT, {
     paths: {
       hermesAbstractQuery: paths.hermesAbstractQuery,
       hermesAbstractRawOutput: paths.hermesAbstractRawOutput,

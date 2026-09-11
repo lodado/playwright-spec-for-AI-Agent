@@ -8,6 +8,7 @@ import {
   resetAdapterCacheForTests,
   resolveAdapterName,
   runAgent,
+  runAgentAsync,
 } from "../ai-agent-adapter.mjs";
 import { buildAsideAgentArgs } from "../aside-runner.mjs";
 import { preloginAside } from "../aside-prelogin.mjs";
@@ -158,6 +159,17 @@ describe("module-specifier adapters", () => {
     await expect(prepareAdapter()).rejects.toThrow(/does not export a `run`/);
   });
 
+  it("stamps resolved metadata for a normal function returning a Promise", async () => {
+    const modulePath = writeAdapterModule();
+    writeFileSync(modulePath, "export function run() { return Promise.resolve({ status: 'pass' }); }");
+    vi.stubEnv("QA_AI_ADAPTER", modulePath);
+    await prepareAdapter();
+    const result = await runAgentAsync("query", 1);
+    expect(result.status).toBe("pass");
+    expect(result.source).toBe(modulePath);
+    expect(result.agentMeta.adapter).toBe(modulePath);
+  });
+
   it("is a no-op for built-in adapters", async () => {
     vi.stubEnv("QA_AI_ADAPTER", "fixture");
     expect((await prepareAdapter()).name).toBe("fixture");
@@ -189,5 +201,29 @@ describe("buildAsideAgentArgs", () => {
       "high",
       "q",
     ]);
+  });
+});
+
+describe("runAgentAsync", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetAdapterCacheForTests();
+  });
+
+  it("awaits async module adapters before stamping metadata", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qa-async-adapter-"));
+    const modulePath = join(dir, "adapter.mjs");
+    writeFileSync(modulePath, `export const capabilities = { blocksEventLoop: false }; export const resolveModel = () => "async/model"; export async function run() { await new Promise(r => setTimeout(r, 15)); return { status: "pass" }; }`);
+    vi.stubEnv("QA_AI_ADAPTER", modulePath);
+    await prepareAdapter();
+    const result = await runAgentAsync("query", 1);
+    expect(result).toMatchObject({ status: "pass", source: modulePath, agentMeta: { adapter: modulePath, model: "async/model" } });
+    expect(result.agentMeta.durationMs).toBeGreaterThanOrEqual(10);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("rejects synchronous entrypoint for asynchronous adapters", async () => {
+    vi.stubEnv("QA_AI_ADAPTER", "stagehand");
+    expect(() => runAgent("query", 1)).toThrow(/asynchronous.*runAgentAsync/);
   });
 });

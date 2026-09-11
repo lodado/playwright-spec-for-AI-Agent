@@ -8,6 +8,7 @@ const { runAgentMock } = vi.hoisted(() => ({ runAgentMock: vi.fn() }));
 vi.mock("../ai-agent-adapter.mjs", () => ({
   prepareAdapter: vi.fn(async () => ({ name: "fixture" })),
   runAgent: runAgentMock,
+  runAgentAsync: runAgentMock,
 }));
 
 import { resetProjectConfigForTests } from "../hermes-qa-project-config.mjs";

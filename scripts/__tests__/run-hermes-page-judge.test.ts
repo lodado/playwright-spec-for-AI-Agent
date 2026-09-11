@@ -28,6 +28,7 @@ vi.mock("../ai-agent-adapter.mjs", () => ({
     prelogin: mocks.prelogin,
   }),
   runAgent: mocks.runAgent,
+  runAgentAsync: mocks.runAgent,
   resolveAdapterName: () => "test-adapter",
 }));
 
@@ -442,6 +443,23 @@ describe("judge wiring", () => {
     expect(readJudgment().runnerEvidence.tracePath).toBe(
       join(outputDir, "evidence", "t.zip"),
     );
+  });
+
+  it("keeps the runner session open until async agent output resolves", async () => {
+    mocks.capabilities.auth = "cdp-attach";
+    mocks.hasSessionProfile.mockReturnValue(true);
+    const session = sessionStub();
+    mocks.launchAuthenticatedBrowser.mockResolvedValue(session);
+    mocks.runAgent.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return agentPayload();
+    });
+    const pending = main(ARGV);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(session.close).not.toHaveBeenCalled();
+    await pending;
+    expect(session.close).toHaveBeenCalled();
+    expect(readJudgment().checks.length).toBeGreaterThan(0);
   });
 
   it("enables live interception only for a non-blocking adapter", async () => {

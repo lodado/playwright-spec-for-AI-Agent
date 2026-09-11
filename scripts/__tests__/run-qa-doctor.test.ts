@@ -193,3 +193,28 @@ describe("formatDoctorReport", () => {
     expect(text).toMatch(/\d+ failed, \d+ warning, \d+ passed/);
   });
 });
+
+describe("Stagehand doctor", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("requires explicit model configuration without making network calls", async () => {
+    vi.stubEnv("QA_AI_ADAPTER", "stagehand");
+    vi.stubEnv("QA_STAGEHAND_MODEL", "");
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const report = await collectDoctorReport(project());
+    expect(find(report, "stagehand configuration").status).toBe("fail");
+    expect(find(report, "stagehand configuration").detail).toContain("QA_STAGEHAND_MODEL");
+    expect(fetch).toHaveBeenCalledTimes(0);
+  });
+
+  it("reports credential presence without exposing its value", async () => {
+    vi.stubEnv("QA_AI_ADAPTER", "stagehand");
+    vi.stubEnv("QA_STAGEHAND_MODEL", "openai/gpt-4.1-mini");
+    vi.stubEnv("QA_STAGEHAND_API_KEY", "private-doctor-test-key");
+    const report = await collectDoctorReport(project());
+    expect(find(report, "stagehand model credentials").status).toBe("pass");
+    expect(JSON.stringify(report)).not.toContain("private-doctor-test-key");
+    expect(find(report, "stagehand limits").status).toBe("pass");
+  });
+});

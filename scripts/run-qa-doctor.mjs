@@ -16,6 +16,7 @@ import { delimiter, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EXIT_ENVIRONMENT, runMain } from "./errors.mjs";
 import { describeAdapter, resolveAdapterName } from "./ai-agent-adapter.mjs";
+import { resolveStagehandDependency, resolveStagehandModel, resolveStagehandRequest } from "./stagehand-runner.mjs";
 import {
   readHermesModelConfig,
   resolveHermesAgentInvocation,
@@ -119,6 +120,7 @@ function locateBinary(command) {
  * does, and fall back to the one backend whose model lives in a config file.
  */
 function resolveAdapterModel(adapter) {
+  if (adapter.name === "stagehand") return resolveStagehandModel();
   if (typeof adapter.resolveModel === "function") {
     try {
       return adapter.resolveModel();
@@ -212,6 +214,26 @@ function adapterChecks() {
   );
 
   if (adapter.name === "hermes") checks.push(hermesProviderCheck());
+  if (adapter.name === "stagehand") {
+    try {
+      resolveStagehandDependency();
+      checks.push(check("stagehand SDK", "pass", "@browserbasehq/stagehand@3.7.3 (local execution)"));
+    } catch (error) {
+      checks.push(check("stagehand SDK", "fail", error.message, error.hint || "Install @browserbasehq/stagehand@3.7.3."));
+    }
+    try {
+      const request = resolveStagehandRequest("", null, { mode: "text-only" });
+      checks.push(check("stagehand limits", "pass", `${request.maxSteps} steps, ${request.timeoutMs}ms deadline`));
+      const provider = request.model.split("/")[0];
+      const keys = { openai: ["OPENAI_API_KEY"], anthropic: ["ANTHROPIC_API_KEY"], google: ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"] }[provider];
+      const hasKey = process.env.QA_STAGEHAND_API_KEY?.trim() || keys?.some(key => process.env[key]?.trim());
+      checks.push(check("stagehand model credentials", hasKey ? "pass" : keys ? "fail" : "warn",
+        hasKey ? "Model API credential configured (API charges are separate from local browser execution)" : "No recognized model API credential configured",
+        "Set QA_STAGEHAND_API_KEY or the model provider's API key. CLI subscription credentials are not reused."));
+    } catch (error) {
+      checks.push(check("stagehand configuration", "fail", error.message));
+    }
+  }
 
   return checks;
 }

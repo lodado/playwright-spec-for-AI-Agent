@@ -188,6 +188,7 @@ with `QA_BROWSER_PROVIDER`. These are separate settings. The defaults are
 | `hermes` | Hermes Agent with your configured model | Attaches to the runner's authenticated browser over CDP | Supported |
 | `aside` | `aside exec` | Uses Aside's own browser and prelogin or storage-state seeding | Not supported |
 | `exec` | Your configured CLI, including Claude Code or Codex | CDP attach when `QA_AGENT_AUTH=cdp-attach`; otherwise legacy credentials-in-prompt | Only with a CDP-capable browser tool |
+| `stagehand` | Optional Stagehand 3.7.3 SDK; configurable model API | Runner-owned local browser or explicit CDP attach | Not yet validated |
 | `fixture` | Deterministic local JSON, no model | Does not browse or verify a live site | Not supported |
 | Custom module | A project-relative or installed adapter module | Declares its own capabilities | Only when it declares and implements `cdp-attach` |
 

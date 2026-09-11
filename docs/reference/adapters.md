@@ -41,6 +41,13 @@ whenever the backend is swapped.
 | `aside`   | `aside exec`                      | `self-prelogin`                     | `false`            | `false`                  | `false`         | `true`            |
 | `exec`    | the CLI named by `QA_AGENT_CMD`   | `credentials-in-prompt`<sup>1</sup> | `false`            | `false`                  | `false`<sup>1</sup> | `true`        |
 | `fixture` | nothing — canned JSON, no network | `credentials-in-prompt`             | `false`            | `false`                  | `false`         | `true`            |
+| `stagehand` | optional Stagehand SDK worker | `cdp-attach` | `true` | `true` | `true` | `false` |
+
+Stagehand is opt-in: see [Run QA with Stagehand](../how-to/stagehand.md).
+It requires the optional `@browserbasehq/stagehand@3.7.3` package and an explicit
+`QA_STAGEHAND_MODEL`. Local browser execution has no Browserbase hosting charge;
+model API usage is billed separately. It uses an async worker; the pipeline calls
+`runAgentAsync()` and keeps existing synchronous adapters compatible.
 
 <sup>1</sup> `QA_AGENT_AUTH=cdp-attach` sets both `auth` and `supportsVideo` on
 the `exec` adapter. Set it only when the CLI's browser tools honour
