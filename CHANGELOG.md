@@ -13,6 +13,25 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [7.5.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.4.0...v7.5.0) (2026-09-22)
+
+### Features
+
+* Add stable check IDs across plans, judgments, and review recommendations, with duplicate and missing-ID validation.
+* Give Hermes native tools for runner-owned checkpoints and approved fixture uploads, with per-check upload receipts and byte verification.
+* Add an offline verdict benchmark and an opt-in adapter benchmark over frozen evidence. CI retains accuracy and latency reports.
+
+### Reliability
+
+* Require runner-owned artifacts or observations verified in captured ARIA before accepting a pass. Reject evidence and upload receipts belonging to another check.
+* Keep browser interception responsive during Hermes execution and isolate the QA plugin from other installed plugins.
+* Preserve saved authentication when seeding browser sessions, and stop treating provider names as API-key requirements for Hermes OAuth.
+* Remove the redundant model call from built-in Hermes upload preflight. Instruct live judges to respect source observation timeouts and verify request failures before blaming account credits.
+
+### Documentation
+
+* Explain check identity, evidence requirements, upload tools, benchmark scope, and adapter setup. Offline benchmark results do not establish live-browser accuracy.
+
 ## [7.4.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.3.0...v7.4.0) (2026-09-11)
 
 ### Features
