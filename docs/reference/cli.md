@@ -432,9 +432,23 @@ Exit codes: 0 even when a stage exits non-zero — `demo` prints the stage's exi
 code and continues, so a deliberately failing stage still demonstrates the whole
 pipeline.
 
+## `benchmark`
+
+Evaluate frozen QA cases with `--repeat=<1-100>` and optional
+`--output=<file.json>`. The default run validates the harness without network
+access or model credentials. `--adapter=<name>` explicitly opts into evidence-only
+model evaluation and may incur provider charges.
+
+```bash
+npx playwright-spec-for-ai-agent benchmark --repeat=3 --output=benchmark.json
+```
+
+See [the benchmark guide](../how-to/benchmark.md) for metric definitions and
+limits. This command does not use project/browser configuration flags.
+
 ## Global options
 
-Every command except `demo` accepts these.
+Every command except `demo` and `benchmark` accepts these.
 
 | Option                    | Default                                    | Effect                                                                       |
 | ------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------ |

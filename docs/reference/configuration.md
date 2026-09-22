@@ -262,7 +262,7 @@ notify, but it can never change what the run decided.
 | `HERMES_INFERENCE_MODEL`                  | Hermes model; otherwise read from `~/.hermes/config.yaml`                  |
 | `HERMES_INFERENCE_BASE_URL`               | self-hosted or proxy inference endpoint                                    |
 | `HERMES_QA_TIMEOUT_MS`                    | Hermes adapter timeout (default 600000)                                    |
-| `HERMES_QA_DISABLED_TOOLSETS`             | override the toolsets disabled in text-only stages                         |
+| `HERMES_QA_DISABLED_TOOLSETS`             | add disabled toolsets in text-only stages; browser/web/terminal remain disabled                         |
 | `HERMES_QA_COMMAND`                       | reserved: any value other than `hermes-agent` aborts the run               |
 | `ASIDE_QA_MODEL`, `ASIDE_QA_EFFORT`       | Aside model and effort; otherwise Aside's own settings apply               |
 | `ASIDE_QA_TIMEOUT_MS`                     | Aside adapter timeout (default 600000)                                     |

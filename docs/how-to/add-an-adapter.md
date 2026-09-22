@@ -97,6 +97,28 @@ pipeline awaits the async entrypoint for every stage.
 `review`. `requiredKeys` differs per stage (`["status"]`, `["livePlan"]`,
 `["criteria", "overallReview"]`), which is how one `run` serves all three.
 
+### Capture an intermediate browser state
+
+For a local, in-process `cdp-attach` module adapter, browse options also include
+`captureEvidence()`. Await it while the state you checked is still visible:
+
+```js
+// After inspecting a dialog, before closing it:
+const captured = await options.captureEvidence();
+check.evidenceRefs = captured.ariaSnapshots;
+```
+
+The runner takes and registers the screenshots and ARIA snapshots. Its final
+evidence manifest retains them even after the page changes. Filenames are
+runner-generated and scoped to the run; the callback accepts no path or label.
+It returns `{ screenshots, ariaSnapshots, violations }`. Inspect capture failures
+rather than assuming a call produced usable evidence.
+
+This callback is absent without a local runner/attached session. It is not
+forwarded into CLI subprocesses or Browserbase workers, and built-in adapters
+do not automatically request checkpoints. A capture establishes provenance,
+not that a screenshot proves an interaction or assertion.
+
 ### 2. Reuse the shared tail
 
 Your `run` owns the tail every built-in adapter performs: write the prompt and

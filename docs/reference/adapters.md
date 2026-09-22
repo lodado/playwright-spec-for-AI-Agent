@@ -70,7 +70,7 @@ Runs the `hermes-agent` CLI, resolved in this order:
 | `HERMES_INFERENCE_MODEL`       | `model.default` (then `model.model`) in `~/.hermes/config.yaml` | The model passed as `--model`. No model anywhere is an environment error. |
 | `HERMES_INFERENCE_BASE_URL`    | `base_url` in `~/.hermes/config.yaml`                        | Passed as `--base_url` for a self-hosted or proxy endpoint.               |
 | `HERMES_QA_TIMEOUT_MS`         | `600000`                                                     | Wall-clock bound on the spawned process.                                  |
-| `HERMES_QA_DISABLED_TOOLSETS`  | `browser,web,terminal`                                       | Toolsets disabled in text-only mode (`abstract-ai`, `review`) only.       |
+| `HERMES_QA_DISABLED_TOOLSETS`  | `browser,web,terminal`                                       | Additional disables in text-only mode; browser/web/terminal cannot be enabled.       |
 | `HERMES_QA_COMMAND`            | `hermes-agent`                                               | Reserved. Any other value aborts the run with a usage error.              |
 
 Every run boots stateless. The adapter creates a throwaway `HERMES_HOME` under

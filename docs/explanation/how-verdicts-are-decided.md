@@ -1,5 +1,7 @@
 # How a verdict is decided
 
+Last updated: 2026-09-22
+
 This page is for someone reading a judgment that says something other than what
 the agent claimed, and wanting to know which rule intervened and why. It
 explains the one principle behind every rule, each floor the harness applies,
@@ -7,7 +9,8 @@ the cause taxonomy, and what `manual_review` means as an answer. After reading
 it you should be able to read a `Verdict floor applied — …` note and say exactly
 which rule fired.
 
-The rules themselves live in `scripts/judge-verdict.mjs`. For the shape of the
+The rules themselves live in `scripts/judge-verdict.mjs`; the reviewer uses its
+evidence predicate too. For the shape of the
 judgment file, see [the artifacts reference](../reference/artifacts.md); for how
 the judgment reaches CI and Slack, see [the CI how-to](../how-to/ci.md).
 
@@ -47,16 +50,45 @@ already gates the pass.
 **Evidence or demote.** A `pass` must cite something concrete, or it becomes
 `manual_review` with `demotedFrom: "pass"`. Concrete means either:
 
-- an `evidenceRefs` entry naming a file the runner actually captured (by full
-  path or basename), or that resolves on disk; or
-- a `detail` containing a quoted string (2+ characters, straight or curly
-  quotes), a URL or an absolute path, or a number carrying a unit (`%`, `ms`,
-  `s`, `px`, `kb`, `mb`, `items`, `rows`, `results`, `credits`, a currency
-  symbol, `점`, `개`, `원`).
+- an `evidenceRefs` entry matching a path registered in this run's
+  `runnerEvidence`, whose file is a nonempty regular file. A bare basename is
+  accepted only when it identifies exactly one registered path; or
+- a `detail` whose quoted strings (2+ characters, straight or curly quotes)
+  all occur in one readable ARIA snapshot registered in this run. Matching
+  collapses whitespace, preserves case, and requires word boundaries, so
+  `"98 pts"` does not match `"198 pts"`.
 
-The list is deliberately mechanical. It does not judge whether the evidence is
-*good*, only whether the agent quoted something it could only have got by
-looking. "I checked it and it was fine" matches none of these.
+An arbitrary existing path, an artifact-looking filename, a URL, or a number
+with a unit does not qualify on its own. Accepted references are stored using
+the runner's registered paths. When inline quotes match an ARIA snapshot, that
+snapshot's path is added to `evidenceRefs`. Missing or empty captures cannot
+support a pass; unreadable snapshots cannot verify quoted text.
+
+Within one normalization or review call, each ARIA file is read at most once,
+including failed reads. The cache is discarded after that call, so a later
+review sees edited or removed captures. It does not cache browser actions or
+model responses.
+
+Adapters without runner-owned captures, including `self-prelogin` and
+`credentials-in-prompt` runs, cannot substantiate a `pass` through agent prose
+alone. Those checks become `manual_review`. Reviewing an older judgment after
+its captures have been removed also flags its missing evidence.
+
+This checks evidence provenance, not whether the evidence proves the claim.
+A screenshot reference can point to the wrong part of the page, and a matching
+quote can describe the wrong element. Each manifest entry now links a stable
+check ID to its evidence paths within a run. Hermes can use `qa_checkpoint` to
+bind intermediate captures to that check before a dialog closes or the page
+changes; another check cannot reuse those artifacts to satisfy its evidence
+requirement. Local in-process module adapters can request intermediate captures
+through [`options.captureEvidence()`](../how-to/add-an-adapter.md#capture-an-intermediate-browser-state).
+A missing capture still requires `manual_review` when the final state cannot
+support the claim.
+
+A check with an explicit upload fixture also needs a runner receipt for that
+check and fixture. `qa_upload_fixture` records the attached bytes, but the
+receipt does not prove that application processing succeeded. The check still
+needs captured UI evidence. Judge and reviewer apply the same requirements.
 
 **Cause is required on a non-pass.** A `pass` always carries `NONE`. A non-pass
 whose declared cause is missing or unrecognised becomes `HARNESS_DEFECT` — an
@@ -85,8 +117,32 @@ reason the abstraction validator identifies a planned test by
 **(scenario, title)**: a title repeated across scenarios is not
 `test planned more than once`.
 
-## The matching ladder
+## Identity matching
 
+Judge plans use short IDs such as `chk_601fcd3083069661`. Each ID contains the
+first 16 hex characters of a SHA-256 hash of the source file, scenario ID, and
+source check ID, serialized as a JSON array. The title is the fallback when a
+source check ID is absent. Repeated runs, reordering, and adding unrelated tests
+do not change existing IDs. Changing an identity component does change the ID.
+Duplicate IDs, including hash collisions, stop the run before the agent starts.
+Source check IDs used by upload fixtures and abstraction stay unchanged.
+
+The judge and reviewer copy these opaque tokens; they do not generate IDs from
+titles. Reader version `2.2.0` invalidates older spec hashes so `nightly`
+regenerates cached plans and judgments with the current fixture requirements.
+The short-ID algorithm is unchanged from `2.1.0`; stored historical artifacts
+keep their original IDs.
+
+The pinned plan includes a Check identities table even when its prose comes from
+saved Markdown. The agent must echo `checks[].checkId`; matching titles cannot
+repair a missing or unknown ID. Duplicate reports and unplanned IDs prevent a
+green verdict. Coverage includes `missingCheckIds` and `unplannedCheckIds`, and
+the evidence manifest carries the run ID and each planned check ID. Reviewer
+recommendations also require IDs when the judgment has them.
+
+### Legacy title matching
+
+Direct callers that still supply string-only plans retain the matching ladder.
 Pairing a planned title with a reported `checks[].item` is a ladder, tried in
 order:
 
@@ -131,7 +187,8 @@ the runner-owned Playwright context, so the audited party cannot suppress them.
 A run that left the site under test can say nothing trustworthy about the
 target, hence `fail`. A write that landed on a read-only plan may have changed
 staging state, so a human has to look. A missing screenshot is not a product
-signal, so it is recorded and nothing more.
+signal, so the violation itself is recorded without changing the verdict.
+The evidence rule can still demote a pass if its supporting capture is missing.
 
 A plan is read-only unless it contains a test with `liveRunPolicy`
 `executable-interaction` or `judgment-interaction-no-confirm`.
@@ -209,11 +266,12 @@ unknown one. The flags are in [the CLI reference](../reference/cli.md).
 The downgrade-only principle applies a second time, to the reviewer. `review`
 is the independent check on the judge, and nothing it says is taken on trust.
 
-The `evidence-cited` criterion is re-computed in code: judged checks whose
-`detail` and `evidenceRefs` contain no quote, URL, number, or artifact filename
-are appended to the criterion's detail and its verdict is floored at `concern`,
-whatever the reviewer said. A reviewer that waves through an unevidenced pass
-loses the argument to the same predicate that gated the pass in the first place.
+The `evidence-cited` criterion is re-computed in code with the judge's evidence
+predicate. Checks without a valid reference to this run's captures or quotes
+verified against its ARIA snapshots are appended to the criterion's detail,
+and its verdict is floored at `concern`, whatever the reviewer said. Keep the
+captured files available for review: a reference to a deleted file no longer
+qualifies.
 
 `--samples=N` (1–9) runs the review N times over the same packet and takes a
 per-criterion majority. Ties go to the more severe verdict, and disagreement is

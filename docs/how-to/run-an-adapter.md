@@ -63,6 +63,20 @@ For a protected local page, run
 configure an existing `storageState`. Hermes attaches to the browser the runner
 provides. Each QA call uses a temporary Hermes home and disables memory tools.
 
+In runner-owned browse sessions, Hermes also receives `qa_checkpoint` and
+`qa_upload_fixture` through an isolated native plugin. A checkpoint saves the
+current screenshot and ARIA snapshot under the exact planned `checkId`; the
+agent should capture a dialog or progress state before it disappears. Uploads
+attach only the declared fixture bytes to one main-frame file input on an
+allowed page. The returned receipt records the filename, size, SHA-256 hash,
+and owning check ID. It proves attachment, so the agent must still observe and
+capture the application's result. An unknown upload outcome blocks automatic
+retry. Fixture preflight exercises the runner upload path and verifies the
+browser's file bytes without another model call. Only `executable-interaction`
+checks authorize attachment; a no-confirm policy may forbid even selecting a
+file because the application could submit it immediately. These tools are
+unavailable in text-only runs.
+
 **Run and verify:** use the [shared run sequence](#3-run-and-verify). `doctor`
 should identify `hermes` with `auth=cdp-attach`; the result should report
 `agentMeta.adapter: "hermes"` and `source: "hermes-agent"`.

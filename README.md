@@ -129,6 +129,24 @@ them; nothing else in the pipeline reads your test code.
 `// @qa-fixture: avatar=tests/fixtures/qa-avatar.png` names an upload file, at
 file, describe, or test level.
 
+When fixtures are declared, `judge` checks that they are readable files, then
+asks the selected agent to upload them into isolated file inputs before account
+detection or judging. The runner compares the uploaded names, sizes, and SHA-256
+hashes with the local files. A missing file, unsupported adapter, unavailable
+upload tool, or failed upload stops the run as an environment error, without
+producing a product verdict or retrying the judge. This requires a `cdp-attach`
+adapter; terminal-based upload tools are allowed. No application upload is
+submitted by the probe. Passing proves the tools worked for that probe, not
+that every application upload flow will succeed.
+
+`doctor` checks files and adapter compatibility offline and warns when actual
+upload has not been verified. Run `doctor --page=<slug> --check-upload` to run
+the same upload probe. Hermes checks the runner's upload bridge without a model
+call; external adapters use model calls. Browserbase also allocates a temporary
+billable session. `--check-network` alone does not run this probe.
+`judge --dry-run` checks files but does not call the agent. Runs without
+fixtures do not incur an upload probe.
+
 Three rules account for most annotations that "did not work":
 
 1. An annotation must be the **whole comment line**. Prose that quotes one — as
@@ -167,12 +185,19 @@ Full walkthrough: [docs/how-to/close-the-loop.md](docs/how-to/close-the-loop.md)
 
 ## Commands
 
-Fourteen commands. The pipeline is `spec`, `abstract-ai`, `judge`, `review`, and
+Fifteen commands. The pipeline is `spec`, `abstract-ai`, `judge`, `review`, and
 the optional notifiers `slack` and `issues`; `nightly` runs them over one page or
 every page. `login` gives the judge a session, `doctor` preflights the setup, and
 `show`, `report`, and `ack` triage what came back. `handoff` turns a verdict into
 a fix-planning task you can pipe into a coding agent. `demo` runs the whole
-pipeline offline.
+pipeline offline. `benchmark` checks frozen verdict cases without a model:
+
+```bash
+npm run qa:benchmark -- --repeat=3 --output=benchmark.json
+```
+
+See [the benchmark guide](docs/how-to/benchmark.md) for evidence-only adapter
+comparisons and metric limits.
 
 Run `<command> --help` for its flags, or read
 [docs/reference/cli.md](docs/reference/cli.md) for the full reference.
@@ -312,6 +337,10 @@ Other tools are summarised briefly from their stated purpose — check their own
   is refused unless you opt in: the body carries the staging URL and page structure.
 - **Runner evidence is separate from agent claims.** Available trace, HAR,
   screenshots, and ARIA snapshots come from the runner's Playwright context.
+  Judge and reviewer require a nonempty captured file registered in the run,
+  or quoted text verified against a captured ARIA snapshot. A quote or URL in
+  the agent's prose alone is insufficient. This checks provenance, not whether
+  the evidence proves the claim; see [the verdict rules](docs/explanation/how-verdicts-are-decided.md#per-check-floors).
   Capture availability varies by provider and session path. Text redaction does
   not remove sensitive application data from screenshots or traces; protect them
   as private artifacts.

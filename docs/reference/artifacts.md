@@ -149,6 +149,22 @@ limits](../how-to/browserbase.md#evidence-and-safety-limits).
 An adapter that drives its own browser (`auth: "self-prelogin"`) leaves
 `evidence/` empty: there is no runner-owned context to record.
 
+### Intermediate checkpoints and uploads
+
+Hermes browse runs can capture intermediate states through `qa_checkpoint`.
+`runnerEvidence.checkpoints` records each checkpoint's `checkId`, URL, and
+screenshot/ARIA `evidenceRefs`. An intermediate artifact owned by another check
+cannot satisfy a check's evidence requirement. Final snapshots remain available
+for checks without intermediate captures.
+
+`runnerEvidence.uploads` contains runner-issued fixture receipts, including
+`receiptId`, `checkId`, fixture name and path, filename, size, SHA-256 hash, and
+URL. With an evidence directory, each receipt also has a JSON `receiptPath`.
+A check that explicitly declares an upload fixture needs its own matching
+receipt and separate UI evidence to pass; a model-supplied `uploadRefs` entry
+cannot substitute for a runner receipt. Global fixture defaults are available
+inventory and do not require every read-only check to upload.
+
 ### Launched versus attached
 
 | Capture                                    | Launched | Attached (`--cdp-url=`) |

@@ -1,5 +1,7 @@
 # The pipeline
 
+Last updated: 2026-09-22
+
 This page is for someone who has run the tool once and wants to know why a
 single QA run is split into five commands instead of one. It explains what each
 stage consumes and produces, what the split buys, and the trade-off the whole
@@ -161,11 +163,13 @@ Two properties of a real deployment break spec replay:
   all move between runs. Equality assertions over them produce failures that
   carry no information about the product.
 
-The cost is that a judgment is not a proof. A model reads the page and reports,
-and the harness can only check that the report is supported by evidence it
-captured itself. That is why the verdict is decided by the harness rather than
-the agent, why ambiguity resolves to `manual_review` rather than to a forced
-pass, and why one run is not treated as settled — see
+The cost is that a judgment is not a proof. A model reads the page and reports.
+The harness requires a pass to cite a nonempty captured file registered in
+this run, or to quote text found in a registered ARIA snapshot. The judge and
+reviewer share this check. It establishes the source of the evidence, but does
+not prove that an artifact or matching quote supports the check's meaning or
+belongs to the relevant step. Ambiguity resolves to `manual_review`, and one
+run is not treated as settled. See
 [how a verdict is decided](./how-verdicts-are-decided.md).
 
 Deterministic Playwright tests still belong in CI. This pipeline is the layer
@@ -206,6 +210,12 @@ taken through an explicit `capture(label)` call rather than on a timer, because
 a timer cannot fire while the event loop is blocked and would silently capture
 nothing. `close()` calls it once for the settled end state; an adapter that
 leaves the loop free can call it between steps.
+
+A final-state ARIA snapshot may not contain a modal or intermediate screen
+seen earlier. If quoted text is absent from the captures and the check cites
+no other valid artifact, the harness demotes a reported pass to `manual_review`.
+Keep captures alongside the judgment through review; file references are
+checked against the run's registry and the files still on disk.
 
 Writing a backend of your own is covered in
 [the add-an-adapter how-to](../how-to/add-an-adapter.md); the built-in
