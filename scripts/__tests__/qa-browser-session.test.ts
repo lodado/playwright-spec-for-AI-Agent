@@ -61,7 +61,9 @@ function fakeChromium(page: ReturnType<typeof fakePage>) {
     routeHandler?: (route: any) => Promise<void>;
     tracingStopped: string[];
     closed: number;
-  } = { tracingStopped: [], closed: 0 };
+    cookiesAdded: any[][];
+    addCookiesError?: Error;
+  } = { tracingStopped: [], closed: 0, cookiesAdded: [] };
   const context = {
     pages: () => [page],
     tracing: {
@@ -76,6 +78,10 @@ function fakeChromium(page: ReturnType<typeof fakePage>) {
     },
     async close() {
       calls.closed += 1;
+    },
+    async addCookies(cookies: any[]) {
+      if (calls.addCookiesError) throw calls.addCookiesError;
+      calls.cookiesAdded.push(cookies);
     },
     once() {},
     async cookies() {
@@ -223,6 +229,31 @@ describe("runner-owned evidence", () => {
     });
     return { session, calls };
   }
+
+  it("adds origin cookies to the final persistent context unchanged", async () => {
+    const root = makeRoot();
+    ensurePrivateProfileDir(root);
+    const cookie = { name: "session", value: "secret", domain: "staging.example", path: "/", expires: -1 };
+    const { session, calls } = await launch(root, {
+      session: { sessionCookies: [cookie] },
+    });
+    expect(calls.cookiesAdded).toEqual([[cookie]]);
+    await session.close();
+  });
+
+  it("closes the final context when cookie injection fails", async () => {
+    const root = makeRoot();
+    ensurePrivateProfileDir(root);
+    const page = fakePage({});
+    const { calls, chromium } = fakeChromium(page);
+    calls.addCookiesError = new Error("cookie injection failed");
+    await expect(launchAuthenticatedBrowser({
+      root,
+      chromiumFactory: chromium,
+      sessionCookies: [{ name: "session", value: "secret", expires: -1 }],
+    })).rejects.toThrow("cookie injection failed");
+    expect(calls.closed).toBe(1);
+  });
 
   it("returns the full evidence summary from close()", async () => {
     const root = makeRoot();

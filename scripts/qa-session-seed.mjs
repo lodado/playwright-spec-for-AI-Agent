@@ -162,11 +162,18 @@ export async function seedProfileSession({
 
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: true,
+    serviceWorkers: "block",
   });
   try {
     if (cookies.length) await context.addCookies(cookies);
     if (items.length) {
       const page = context.pages()[0] ?? (await context.newPage());
+      // Restore storage before app code can clear cookies or redirect to another origin.
+      await page.route("**/*", route => route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: "<!doctype html><title>QA session seed</title>",
+      }));
       await page.goto(origin);
       await page.evaluate(entries => {
         for (const item of entries) localStorage.setItem(item.name, item.value);

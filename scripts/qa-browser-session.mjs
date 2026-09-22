@@ -233,6 +233,7 @@ export async function launchAuthenticatedBrowser({
   blockMutations = false,
   label = "session",
   chromiumFactory = importChromium,
+  sessionCookies = [],
 } = {}) {
   const profileDir = assertPrivateProfileDir(root);
   const chromium = await chromiumFactory();
@@ -263,6 +264,15 @@ export async function launchAuthenticatedBrowser({
     ...(recordVideoDir ? { recordVideo: { dir: recordVideoDir } } : {}),
     ...(evidence.harPath ? { recordHar: { path: evidence.harPath } } : {}),
   });
+
+  if (sessionCookies.length > 0) {
+    try {
+      await context.addCookies(sessionCookies);
+    } catch (error) {
+      await context.close().catch(() => {});
+      throw error;
+    }
+  }
 
   if (allowedOrigins.length > 0 || blockMutations) {
     await installRequestGuards(context, {
@@ -339,7 +349,7 @@ export async function launchAuthenticatedBrowser({
     return evidence;
   }
 
-  return { cdpUrl: `http://127.0.0.1:${port}`, capture, close, evidence };
+  return { cdpUrl: `http://127.0.0.1:${port}`, context, capture, close, evidence };
 }
 
 /**

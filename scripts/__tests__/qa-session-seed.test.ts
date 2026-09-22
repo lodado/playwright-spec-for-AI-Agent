@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { EnvironmentError, UsageError } from "../errors.mjs";
 import {
   assertSeedableCookies,
@@ -9,6 +9,7 @@ import {
   buildLocalStorageEntries,
   cookiesForOrigin,
   readStorageState,
+  seedProfileSession,
 } from "../qa-session-seed.mjs";
 
 const dirs: string[] = [];
@@ -74,6 +75,50 @@ describe("origin scoping", () => {
       { name: "device-id", value: "demo" },
     ]);
     expect(buildLocalStorageEntries(STATE.origins, "http://other:3000")).toEqual([]);
+  });
+});
+
+
+
+describe("profile session seeding", () => {
+  it("restores storage without running the target app or following its login redirect", async () => {
+    const file = stateFile(STATE);
+    let cookies: unknown[] = [];
+    let routeHandler: ((route: unknown) => Promise<void>) | undefined;
+    let inertDocument = false;
+    const fulfill = vi.fn(async () => { inertDocument = true; });
+    const page = {
+      route: vi.fn(async (_pattern: string, handler: typeof routeHandler) => { routeHandler = handler; }),
+      goto: vi.fn(async () => {
+        await routeHandler?.({ fulfill });
+        if (!inertDocument) {
+          cookies = [];
+          throw new Error("Target app ran before localStorage was restored and cleared authentication.");
+        }
+      }),
+      evaluate: vi.fn(async () => {}),
+    };
+    const context = {
+      addCookies: vi.fn(async (items: unknown[]) => { cookies = items; }),
+      pages: () => [page],
+      close: vi.fn(async () => {}),
+    };
+    const chromium = { launchPersistentContext: vi.fn(async () => context) };
+    const result = await seedProfileSession({
+      storageStatePath: file, origin: "http://localhost:3000",
+      root: dirs.at(-1), chromiumFactory: async () => chromium,
+    });
+    expect(chromium.launchPersistentContext).toHaveBeenCalledWith(
+      expect.any(String), expect.objectContaining({ serviceWorkers: "block" }),
+    );
+    expect(page.route).toHaveBeenCalledWith("**/*", expect.any(Function));
+    expect(fulfill).toHaveBeenCalledWith(expect.objectContaining({
+      status: 200, contentType: "text/html",
+    }));
+    expect(cookies).toHaveLength(1);
+    expect(result.cookies).toBe(1);
+    expect(page.evaluate).toHaveBeenCalledWith(expect.any(Function), STATE.origins[0].localStorage);
+    expect(context.close).toHaveBeenCalledOnce();
   });
 });
 
