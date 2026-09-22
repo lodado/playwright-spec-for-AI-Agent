@@ -9,6 +9,7 @@
  */
 import { AgentOutputError } from "./errors.mjs";
 import { hashText } from "./spec-hash.mjs";
+import { hasConcreteEvidence } from "./judge-verdict.mjs";
 
 /**
  * The rubric. Order is part of the contract — panel merging aligns samples by
@@ -58,19 +59,6 @@ const VERDICT_SEVERITY = { pass: 0, concern: 1, fail: 2 };
 const ALLOWED_OVERALL = new Set(["approved", "flagged"]);
 const ALLOWED_CHECK_RESULTS = ["pass", "fail", "skip", "manual_review"];
 
-/**
- * A concrete observation is something a second person could go and re-check:
- * quoted text, a URL or path, a number, or a file the runner captured. Prose
- * like "the page looked correct" matches none of them.
- */
-const CITATION_PATTERNS = [
-  /["'“”‘’`][^"'“”‘’`]{2,}["'“”‘’`]/,
-  /https?:\/\/\S+/i,
-  /(^|\s)\/[A-Za-z0-9][\w./-]*/,
-  /\d/,
-  /\.(png|ya?ml|har|zip|webm|jpe?g|json)\b/i,
-];
-
 function toStringArray(value) {
   return Array.isArray(value) ? value.map(String) : [];
 }
@@ -88,15 +76,38 @@ function judgedChecks(judgment) {
  *
  * @returns {string[]}
  */
-export function findUncitedChecks(judgment) {
+export function findUncitedChecks(judgment, { readText } = {}) {
+  const options = { readText, ariaCache: new Map() };
   return judgedChecks(judgment)
-    .filter(check => {
-      const surface = [check?.detail, ...toStringArray(check?.evidenceRefs)]
-        .filter(Boolean)
-        .join(" ");
-      return !CITATION_PATTERNS.some(pattern => pattern.test(surface));
-    })
+    .filter(check => !hasConcreteEvidence(check, judgment?.runnerEvidence, options))
     .map(check => String(check?.item ?? "Untitled check"));
+}
+
+/** Runner-owned coverage and IDs are hard floors; reviewer prose cannot repair them. */
+function findCoverageIssues(judgment) {
+  const coverage = judgment?.coverage;
+  if (!coverage || typeof coverage !== "object") return [];
+  const planned = Number(coverage.planned);
+  const addressed = Number(coverage.addressed);
+  const missing = Array.isArray(coverage.missing) ? coverage.missing : [];
+  if (!Number.isInteger(planned) || !Number.isInteger(addressed) || !Array.isArray(coverage.missing)) {
+    return ["coverage has an invalid shape"];
+  }
+  return planned < 0 || addressed < 0 || addressed > planned || missing.length > 0 || addressed !== planned - missing.length
+    ? [`coverage planned=${planned}, addressed=${addressed}, missing=${missing.length}`]
+    : [];
+}
+
+function findCheckIdIssues(judgment) {
+  const checks = Array.isArray(judgment?.checks) ? judgment.checks : [];
+  const ids = checks.map(check => check?.checkId).filter(id => typeof id === "string" && id);
+  if (!ids.length) return [];
+  const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
+  const missing = checks.filter(check => typeof check?.checkId !== "string" || !check.checkId).length;
+  return [
+    ...(new Set(duplicates).size ? [`duplicate checkId(s): ${[...new Set(duplicates)].join(", ")}`] : []),
+    ...(missing ? [`${missing} check(s) missing checkId`] : []),
+  ];
 }
 
 /** Runner-captured files, read defensively: an older judgment has none. */
@@ -212,42 +223,34 @@ function worst(a, b) {
 }
 
 function normalizeRecommendations(raw, judgment) {
-  const results = new Map(
-    (Array.isArray(judgment?.checks) ? judgment.checks : []).map(check => [
-      String(check?.item ?? ""),
-      String(check?.result ?? ""),
-    ])
-  );
+  const checks = Array.isArray(judgment?.checks) ? judgment.checks : [];
+  const identified = checks.some(check => typeof check?.checkId === "string" && check.checkId);
   const warnings = [];
   const recommendations = [];
-
-  for (const entry of Array.isArray(raw?.recommendations)
-    ? raw.recommendations
-    : []) {
+  for (const entry of Array.isArray(raw?.recommendations) ? raw.recommendations : []) {
     const item = String(entry?.item ?? "").trim();
+    const checkId = typeof entry?.checkId === "string" ? entry.checkId.trim() : "";
+    const matches = checks.filter(check => identified
+      ? checkId && check.checkId === checkId
+      : String(check?.item ?? "") === item);
     const suggestedResult = String(entry?.suggestedResult ?? "").trim();
-    if (!results.has(item)) {
-      warnings.push(
-        `Dropped recommendation naming ${JSON.stringify(item)}: no such check in the judgment.`
-      );
+    if (matches.length !== 1) {
+      warnings.push(`Dropped recommendation naming ${JSON.stringify(identified ? checkId : item)}: no such check or ambiguous identity in the judgment.`);
       continue;
     }
     if (!ALLOWED_CHECK_RESULTS.includes(suggestedResult)) {
-      warnings.push(
-        `Dropped recommendation for ${JSON.stringify(item)}: suggestedResult ${JSON.stringify(suggestedResult)} is not one of ${ALLOWED_CHECK_RESULTS.join(", ")}.`
-      );
+      warnings.push(`Dropped recommendation for ${JSON.stringify(item)}: suggestedResult ${JSON.stringify(suggestedResult)} is not one of ${ALLOWED_CHECK_RESULTS.join(", ")}.`);
       continue;
     }
+    const check = matches[0];
     recommendations.push({
-      // The judgment is the authority on what the current result is; the
-      // reviewer only proposes the new one.
-      item,
-      currentResult: results.get(item),
+      ...(identified ? { checkId: check.checkId } : {}),
+      item: String(check.item ?? ""),
+      currentResult: String(check.result ?? ""),
       suggestedResult,
       reason: String(entry?.reason ?? ""),
     });
   }
-
   return { recommendations, warnings };
 }
 
@@ -260,6 +263,8 @@ export function normalizeJudgeReview(raw, judgment, { packetSha256 = null } = {}
   assertPacketEcho(raw, packetSha256);
 
   const uncited = findUncitedChecks(judgment);
+  const coverageIssues = findCoverageIssues(judgment);
+  const checkIdIssues = findCheckIdIssues(judgment);
   const incoming = Array.isArray(raw?.criteria) ? raw.criteria : [];
 
   const criteria = REVIEW_CRITERIA.map(({ id, question }) => {
@@ -274,10 +279,20 @@ export function normalizeJudgeReview(raw, judgment, { packetSha256 = null } = {}
     // this criterion exists to catch, so the machine check overrides it.
     if (id === "evidence-cited" && uncited.length > 0) {
       verdict = worst(verdict, "concern");
-      detail = `${detail} [harness] ${uncited.length} judged check(s) cite no quote, URL, count, or artifact filename: ${uncited.join(", ")}.`;
+      detail = `${detail} [harness] ${uncited.length} judged check(s) cite no available runner-owned artifact or quote verified in captured ARIA: ${uncited.join(", ")}.`;
       for (const item of uncited) {
         if (!affectedChecks.includes(item)) affectedChecks.push(item);
       }
+    }
+
+    if (id === "coverage-complete" && coverageIssues.length > 0) {
+      verdict = worst(verdict, "concern");
+      detail = `${detail} [harness] ${coverageIssues.join("; ")}.`;
+    }
+
+    if (id === "verdict-follows-evidence" && checkIdIssues.length > 0) {
+      verdict = worst(verdict, "concern");
+      detail = `${detail} [harness] ${checkIdIssues.join("; ")}.`;
     }
 
     return {

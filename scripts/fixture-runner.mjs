@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { finalizeAgentRun, writeAgentQueryArtifact } from "./agent-output.mjs";
-import { EnvironmentError } from "./errors.mjs";
+import { AgentOutputError, EnvironmentError } from "./errors.mjs";
 
 /**
  * Offline adapter: canned but shape-correct stage output, no network and no
@@ -157,13 +157,31 @@ function builtinFixture(stage, mode, query = "") {
     };
   }
 
-  const planned = plannedTitlesFromQuery(query);
+  const identities = String(query).match(/^## Check identities\s*\n+```json\s*\n([\s\S]*?)\n```/m);
+  let planned;
+  if (identities) {
+    try {
+      planned = JSON.parse(identities[1]);
+    } catch (cause) {
+      throw new AgentOutputError("Fixture check identities must contain valid JSON.", { cause });
+    }
+    if (!Array.isArray(planned) || !planned.every(check =>
+      check && typeof check === "object" && !Array.isArray(check) &&
+      typeof check.checkId === "string" && check.checkId.trim() &&
+      typeof check.item === "string" && check.item.trim()
+    )) {
+      throw new AgentOutputError("Fixture check identities must be an array of nonempty checkId/item pairs.");
+    }
+  } else {
+    planned = plannedTitlesFromQuery(query).map(item => ({ item }));
+  }
   return {
     status: "manual_review",
     cause: "HARNESS_DEFECT",
     summary:
       "Fixture adapter output — nothing was browsed or verified. Not a real verdict.",
-    checks: (planned.length ? planned : ["Fixture check"]).map(item => ({
+    checks: (planned.length ? planned : [{ item: "Fixture check" }]).map(({ checkId, item }) => ({
+      ...(checkId ? { checkId } : {}),
       detail: `Fixture adapter ran in ${mode} mode without a model or browser, so nothing about this check was observed.`,
       item,
       result: "manual_review",

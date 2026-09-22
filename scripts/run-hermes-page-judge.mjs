@@ -14,9 +14,11 @@ import {
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prepareAdapter, runAgentAsync } from "./ai-agent-adapter.mjs";
+import { inspectUploadFixtures, assertUploadAdapter, preflightUploads } from "./qa-upload-preflight.mjs";
 import { writeAgentQueryArtifact } from "./agent-output.mjs";
 import { browserbaseOptions, resolveBrowserProvider, readBrowserbaseContext, launchBrowserbaseSession } from "./browser-provider.mjs";
 import { runBrowserbaseAgent } from "./browserbase-agent-runner.mjs";
+import { startQaBrowserTools } from "./qa-browser-tools.mjs";
 import { withSchema } from "./artifact-schema.mjs";
 import {
   AgentOutputError,
@@ -32,6 +34,7 @@ import {
   getHooks,
   getProjectConfig,
   getStorageStatePath,
+  resolveFixturePaths,
   isPlaceholderBaseUrl,
 } from "./hermes-qa-project-config.mjs";
 import {
@@ -149,12 +152,15 @@ export function buildBrowseHermesQuery({
     "",
     "## Your task",
     accessInstruction,
-    "The test plan uses **Given / When / Then** — not JSON. Use the exact test **titles** from the plan in your verdict `checks[].item` field.",
+    "The test plan uses **Given / When / Then**. Copy each exact `checkId` from Check identities into `checks[].checkId` and its title into `checks[].item`. Titles alone do not identify a check.",
+    "Treat checkId as an opaque token: copy it byte-for-byte. Never translate it or derive it from a title. Return every provided ID exactly once, with no other IDs.",
     "Report one check per test in the plan. A test you did not execute is still a check — report it with `skip` and say why.",
     "",
     "## Rules",
     "- After every navigation or interaction, wait until the page settles before judging: content stops changing and no skeleton, spinner, or placeholder is still loading (give it up to ~5 seconds).",
     "- Never treat a loading, skeleton, or mid-transition state as evidence that something is missing — re-observe once settled before marking `fail`.",
+    "- When a test explicitly checks a transient progress/loading state, capture it immediately while visible, then separately observe completion.",
+    "- A failed click or stale element ref is not a product defect. Refresh the snapshot, identify the exact row by a unique document/task ID or href, confirm the action succeeded, then compare the selected row, header, viewer and result. Same-named rows are not interchangeable; ambiguous selection is manual_review.",
     "- Pick **one** scenario that matches the live account, plus every **Always run** scenario.",
     "- Never mutate subscription or billing (no checkout, cancel, or confirm on destructive dialogs).",
     "- For **Safe interaction** tests: follow Playwright source in the plan; dismiss risky dialogs with Esc only.",
@@ -173,11 +179,16 @@ export function buildBrowseHermesQuery({
     "- If blocked on live → **skip**.",
     "",
     "## Evidence rules (enforced after you answer)",
-    "- Every `pass` must quote something you actually observed in its `detail`: exact on-screen text in quotes, a URL/path, or a number with its unit.",
+    "- When qa_checkpoint is available, call it with the exact checkId and current full URL immediately after each check, BEFORE closing a dialog, navigating away or changing state. Copy its evidenceRefs into the result.",
+    "- Only executable-interaction checks with a declared upload fixture may call qa_upload_fixture with checkId, current full URL, the fixture name (usually upload), and an exact file-input selector if needed. A judgment-interaction-no-confirm does not authorize file attachment: selection can auto-submit, so judge that path without uploading. The tool attaches approved bytes even to a hidden input. Do not skip an authorized upload merely because browser tools lack file upload. Never upload through terminal scripts or manufacture file content.",
+    "- An upload receipt proves attachment only, not processing success. Verify completion/failure in the UI and capture that state separately. Return uploadRefs containing the receiptId; receipts are bound to one checkId and cannot satisfy another check, even for the same file. Do not repeat an upload after an unknown outcome.",
+    "- Every `pass` needs a runner-captured artifact or exact on-screen text in quotes that can be verified in a captured ARIA snapshot. A URL or number alone is not evidence.",
     "- A `pass` whose `detail` cites nothing concrete, or whose `confidence` is `low`, is downgraded to `manual_review` automatically. Do not pad — report what you saw.",
-    "- `evidenceRefs` may name captured artifact files (screenshots, aria snapshots) when you have them; leave it `[]` otherwise.",
+    "- `evidenceRefs` may name artifacts captured by the runner in this run; never invent paths or cite earlier runs. Leave it `[]` when unknown; verified ARIA quotes will be linked automatically. Final snapshots may not retain earlier screens, so report unavailable evidence honestly.",
     "",
     "## Cause classification",
+    "- For asynchronous actions, respect the source observation timeout and keep observing the same document until completion/error or that budget expires. Re-snapshot after processing changes before deciding a later step is blocked.",
+    "- A displayed zero credit balance is not proof that a request was blocked. Require a rejected request or an explicit blocking error before blaming credits or assigning ENVIRONMENT_DEFECT; successful job/result responses contradict that explanation.",
     "Every non-pass check, and the top-level verdict, needs a `cause` from exactly these:",
     "- `PRODUCT_DEFECT` — the application under test is wrong.",
     "- `SPEC_GAP` — the test plan does not cover what the page actually does.",
@@ -204,7 +215,7 @@ export function buildBrowseHermesQuery({
     "## Response format (JSON only for your final message)",
     "After browsing, reply with **only** one raw JSON object (no markdown fences).",
     "`detail` comes before `result` on purpose: write down what you observed, then decide.",
-    '{ "status": "pass"|"fail"|"manual_review", "cause": "PRODUCT_DEFECT"|"SPEC_GAP"|"ENVIRONMENT_DEFECT"|"HARNESS_DEFECT"|"NONE", "summary": "...", "checks": [{ "item": "<exact test title>", "detail": "what you observed, quoting exact values", "result": "pass"|"fail"|"skip"|"manual_review", "confidence": "high"|"medium"|"low", "cause": "PRODUCT_DEFECT"|"SPEC_GAP"|"ENVIRONMENT_DEFECT"|"HARNESS_DEFECT"|"NONE", "evidenceRefs": ["..."] }], "evidence": ["..."], "recommendedAction": "...", "source": "hermes-agent" }',
+    '{ "status": "pass"|"fail"|"manual_review", "cause": "PRODUCT_DEFECT"|"SPEC_GAP"|"ENVIRONMENT_DEFECT"|"HARNESS_DEFECT"|"NONE", "summary": "...", "checks": [{ "checkId": "<exact ID from Check identities>", "item": "<exact test title>", "detail": "what you observed, quoting exact values", "result": "pass"|"fail"|"skip"|"manual_review", "confidence": "high"|"medium"|"low", "cause": "PRODUCT_DEFECT"|"SPEC_GAP"|"ENVIRONMENT_DEFECT"|"HARNESS_DEFECT"|"NONE", "evidenceRefs": ["..."], "uploadRefs": ["<runner receiptId when uploading>"] }], "evidence": ["..."], "recommendedAction": "...", "source": "hermes-agent" }',
     "",
     "---",
     "",
@@ -453,6 +464,7 @@ export function prepareJudgePlan({
 
   const specSourceFiles = loadSpecSourceFiles(resolveSpecDir(page));
   const uploadFixtures = buildUploadFixturesPayload(scopedSpec, page);
+  inspectUploadFixtures(uploadFixtures);
   const hasScenarios = Array.isArray(scopedSpec?.scenarios);
   const alwaysRunScenarioIds = hasScenarios
     ? listAlwaysRunScenarios(scopedSpec).map(scenario => scenario.scenarioId)
@@ -462,7 +474,11 @@ export function prepareJudgePlan({
   // planned once per scenario and the agent reports one check per block, so
   // deduplicating here made `coverage.planned` disagree with the very document
   // the agent was handed — which the review stage then flags, correctly.
-  const plannedChecks = checklist.map(test => test.title);
+  const plannedChecks = checklist.map(({ checkId, title, scenarioId, sourceFile, fixtures, requiredUploadFixtures, liveRunPolicy }) => ({
+    checkId, item: title, scenarioId, sourceFile, liveRunPolicy,
+    uploadFixtures: { ...uploadFixtures.defaults, ...resolveFixturePaths(fixtures) },
+    requiredUploadFixtures: liveRunPolicy === "executable-interaction" ? resolveFixturePaths(requiredUploadFixtures) : {},
+  }));
 
   const savedPlanMarkdown = existsSync(paths.specLiveMd)
     ? scopePlanMarkdown(
@@ -474,6 +490,7 @@ export function prepareJudgePlan({
   const { document: judgeDocument, planSource } = buildJudgeBrowseDocument({
     page,
     spec: scopedSpec,
+    plannedChecks,
     specLiveMarkdown: savedPlanMarkdown,
     planSource: savedPlanMarkdown ? "spec-live.md" : null,
     stagingLogin: {
@@ -502,6 +519,7 @@ export function prepareJudgePlan({
       stagingLogin,
       preauthenticated,
     }),
+    uploadFixtures,
     secrets: [config.email, config.password].filter(Boolean),
     stagingLogin,
     specPath: resolved.path,
@@ -547,7 +565,10 @@ async function launchRunnerBrowser({
   blockMutations,
 }) {
   const storageStatePath = getStorageStatePath(page);
+  let sessionCookies = [];
   if (storageStatePath) {
+    const state = readStorageState(storageStatePath);
+    sessionCookies = cookiesForOrigin(state.cookies, new URL(plan.stagingLogin.targetUrl).origin);
     const seeded = await seedProfileSession({
       storageStatePath,
       origin: new URL(plan.stagingLogin.targetUrl).origin,
@@ -562,6 +583,7 @@ async function launchRunnerBrowser({
     label: `${paths.slug}-${runId}`,
     allowedOrigins,
     blockMutations,
+    sessionCookies,
   });
 }
 
@@ -603,7 +625,7 @@ async function executeJudge({
   // blocking adapter (spawnSync) freezes it for the whole run — enabling the
   // guards there deadlocks the browser. Blocking adapters get the same coverage
   // from the recorded HAR, inspected after the run.
-  const liveInterception = adapter.capabilities.blocksEventLoop === false;
+  const liveInterception = adapter.capabilities.blocksEventLoop === false || adapter.name === "hermes";
   const usesRunnerBrowser = adapter.capabilities.auth === "cdp-attach";
   const session = remoteSession ?? (!usesRunnerBrowser
     ? null
@@ -630,21 +652,33 @@ async function executeJudge({
 
   let raw;
   let runnerEvidence = null;
+  let checkpoint = 0;
+  let browserTools;
   try {
+    if (session && adapter.name === "hermes") {
+      browserTools = await startQaBrowserTools({ session, plannedChecks: plan.plannedChecks,
+        allowedOrigins, evidenceDir: paths.evidenceDir, label: `${paths.slug}-${runId}`, secrets: plan.secrets });
+    }
     const options = {
       paths,
       secrets: [...plan.secrets, ...(remoteSession?.secrets ?? [])],
       requiredKeys: ["status"],
       mode: "browse",
+      ...(browserTools ? { browserTools: { url: browserTools.url, token: browserTools.token } } : session && !remoteSession ? {
+        captureEvidence: () => session.capture(`${paths.slug}-${runId}-checkpoint-${++checkpoint}`),
+      } : {}),
     };
-    raw = remoteSession
-      ? await runBrowserbaseAgent(remoteSession, plan.query, plan.maxTurns, options)
+    raw = remoteSession || browserTools
+      ? await runBrowserbaseAgent(session, plan.query, plan.maxTurns, options)
       : await runAgentAsync(plan.query, plan.maxTurns, options);
   } finally {
-    if (session && !remoteSession) {
-      if (previousCdp === undefined) delete process.env.BROWSER_CDP_URL;
-      else process.env.BROWSER_CDP_URL = previousCdp;
-      runnerEvidence = await session.close();
+    try { await browserTools?.close(); }
+    finally {
+      if (session && !remoteSession) {
+        if (previousCdp === undefined) delete process.env.BROWSER_CDP_URL;
+        else process.env.BROWSER_CDP_URL = previousCdp;
+        runnerEvidence = await session.close();
+      }
     }
   }
 
@@ -859,9 +893,11 @@ export async function main(argv = process.argv.slice(2)) {
   let remoteSession = null;
   try {
     try {
+    const preflightPlan = prepareJudgePlan({ page, target, targetUrl, paths, config, adapter, preauthenticated, accountState: parseStateOverride(argv) });
+    if (inspectUploadFixtures(preflightPlan.uploadFixtures).length) assertUploadAdapter(adapter);
+    if (!cloud) await preflightUploads(preflightPlan.uploadFixtures, { adapter });
     if (cloud) {
       // Validate the plan before allocating a billable remote browser.
-      prepareJudgePlan({ page, target, targetUrl, paths, config, adapter, preauthenticated, accountState: parseStateOverride(argv) });
       const state = seedable ? readStorageState(getStorageStatePath(page)) : null;
       remoteSession = await launchBrowserbaseSession({
         ...cloudIdentity, contextId: state ? null : cloudContext?.contextId ?? null,
@@ -870,6 +906,7 @@ export async function main(argv = process.argv.slice(2)) {
       });
       console.log(`Browserbase session: ${remoteSession.metadata.sessionId}`);
       console.log(`Session dashboard: https://www.browserbase.com/sessions/${encodeURIComponent(remoteSession.metadata.sessionId)}`);
+      await preflightUploads(preflightPlan.uploadFixtures, { adapter, session: remoteSession });
       try {
         if (state) {
           await remoteSession.context.addCookies(cookiesForOrigin(state.cookies, cloudIdentity.origin));
@@ -1046,6 +1083,7 @@ export async function main(argv = process.argv.slice(2)) {
           page,
           generatedAt: judgment.judgedAt,
           ...buildEvidenceManifest({
+          runId,
             plannedChecks: plan.plannedChecks,
             checks: decision.checks,
             runnerEvidence: result.runnerEvidence,

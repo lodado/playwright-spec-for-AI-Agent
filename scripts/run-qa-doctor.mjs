@@ -15,7 +15,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { delimiter, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EXIT_ENVIRONMENT, runMain } from "./errors.mjs";
-import { describeAdapter, resolveAdapterName } from "./ai-agent-adapter.mjs";
+import { describeAdapter, resolveAdapterName, prepareAdapter } from "./ai-agent-adapter.mjs";
+import { buildUploadFixturesPayload } from "./qa-spec-artifacts.mjs";
+import { inspectUploadFixtures, assertUploadAdapter, preflightUploads } from "./qa-upload-preflight.mjs";
 import { resolveStagehandDependency, resolveStagehandModel, resolveStagehandRequest } from "./stagehand-runner.mjs";
 import {
   readHermesModelConfig,
@@ -39,7 +41,7 @@ import { parseSpecDirectory } from "./spec-annotation-reader.mjs";
 import { buildJudgeTargetUrl, redactEmail } from "./staging-qa-config.mjs";
 import { hasSessionProfile } from "./qa-browser-session.mjs";
 import { verifyLedger } from "./qa-run-ledger.mjs";
-import { browserbaseOptions, readBrowserbaseContext, resolveBrowserProvider } from "./browser-provider.mjs";
+import { browserbaseOptions, readBrowserbaseContext, resolveBrowserProvider, launchBrowserbaseSession } from "./browser-provider.mjs";
 import { createBrowserbaseClient } from "./browserbase-client.mjs";
 
 const NETWORK_TIMEOUT_MS = 10_000;
@@ -54,6 +56,8 @@ Options:
   --json             Machine-readable report on stdout
   --check-network    Also fetch each target URL (HEAD/GET, 10s timeout)
                      Browserbase: also validate saved Context existence, never allocate a session
+  --check-upload     Verify fixture uploads (external adapters use model calls;
+                     Browserbase also allocates a temporary billable session)
   --browser-provider=local|browserbase  Browser backend (or QA_BROWSER_PROVIDER)
   --browserbase-profile=<name>          Saved Context profile (default: default)
   --browserbase-timeout=<seconds>       Validate remote session timeout (60-21600)
@@ -238,12 +242,7 @@ function adapterChecks() {
   return checks;
 }
 
-/**
- * A configured model is not a usable one: Hermes reads its provider from the
- * same config and refuses to start when that provider's key is missing. Without
- * this check `doctor` passes and the failure only appears mid-run, one agent
- * invocation later.
- */
+/** Hermes owns authentication; provider names do not determine env key names. */
 function hermesProviderCheck() {
   const configPath = join(homedir(), ".hermes", "config.yaml");
   if (!existsSync(configPath)) {
@@ -256,19 +255,11 @@ function hermesProviderCheck() {
     return check("adapter provider", "skip", provider ?? "not set");
   }
 
-  // Hermes derives the variable name from the provider verbatim.
-  const key = `${provider.toUpperCase()}_API_KEY`;
-  const hermesEnv = join(homedir(), ".hermes", ".env");
-  const inHermesEnv =
-    existsSync(hermesEnv) && new RegExp(`^${key}=`, "m").test(readFileSync(hermesEnv, "utf8"));
-  if (process.env[key] || inHermesEnv) {
-    return check("adapter provider", "pass", `${provider} (${key} set)`);
-  }
   return check(
     "adapter provider",
-    "fail",
-    `${provider} configured but ${key} is unset — hermes-agent will refuse to start`,
-    `Export ${key}, put it in ~/.hermes/.env, or switch provider with \`hermes model\`.`
+    "warn",
+    `${provider} — ${provider === "openai-codex" ? "OAuth via Hermes; no provider API key required" : "authentication managed by Hermes"}; credentials not verified offline`,
+    "Use `hermes model` to configure or sign in to the provider. doctor --check-upload verifies the upload bridge and browser bytes, not Hermes model authentication."
   );
 }
 
@@ -644,6 +635,34 @@ async function networkChecks(pages) {
   return checks;
 }
 
+async function uploadCheck(page, argv, browserbase) {
+  const name = `${page} · upload fixtures`;
+  try {
+    const parsed = parseSpecDirectory(resolveSpecDir(page));
+    const payload = buildUploadFixturesPayload({ scenarios: parsed.scenarios.filter(scenario => !scenario.liveSkip) }, page);
+    const fixtures = inspectUploadFixtures(payload);
+    if (!fixtures.length) return check(name, "skip", "No upload fixtures declared.");
+    const adapter = await prepareAdapter();
+    assertUploadAdapter(adapter);
+    if (!argv.includes("--check-upload")) return check(name, "warn",
+      `${fixtures.length} readable file(s); actual agent upload tools are NOT verified.`,
+      "Run doctor --check-upload (external adapters use model calls). Judge always runs this probe before judging.");
+    const { profile, timeoutSeconds } = browserbaseOptions(argv);
+    await preflightUploads(payload, {
+      adapter,
+      ...(browserbase ? { createSession: () => launchBrowserbaseSession({
+        root: getProjectConfig().root,
+        projectId: process.env.BROWSERBASE_PROJECT_ID?.trim(),
+        origin: new URL(targetUrlForPage(page).url).origin,
+        profile, timeoutSeconds, persist: false,
+      }) } : {}),
+    });
+    return check(name, "pass", `${fixtures.length} fixture(s) attached through the upload probe; bytes verified independently.`);
+  } catch (error) {
+    return check(name, "fail", error.message, error.hint || "Fix the fixture annotations and upload environment.");
+  }
+}
+
 export function parseDoctorArgs(argv = []) {
   const pageArg = argv.find(arg => arg.startsWith("--page="));
   return {
@@ -689,6 +708,7 @@ export async function collectDoctorReport(argv = []) {
 
   for (const page of pages) {
     checks.push(...specChecks(page), ...targetChecks(page), ...artifactChecks(page));
+    checks.push(await uploadCheck(page, argv, browserbase));
   }
 
   checks.push(...adapterChecks(),

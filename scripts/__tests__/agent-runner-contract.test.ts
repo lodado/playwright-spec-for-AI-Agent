@@ -110,6 +110,21 @@ export function runAdapterContractSuite(
       expect(written).not.toContain(SECRET);
     });
 
+    if (name === "hermes") {
+      it("merges caller and env disabled toolsets without loosening baseline", () => {
+        vi.stubEnv("HERMES_QA_DISABLED_TOOLSETS", "terminal");
+        spawnSyncMock.mockReturnValue(spawnResult());
+        run("q", 5, { paths: paths(), mode: "text-only", disabledToolsets: "browser,web,terminal" });
+        const argv = spawnSyncMock.mock.calls.at(-1)[1] as string[];
+        expect(argv).toContain('--disabled_toolsets="browser,web,terminal,memory"');
+      });
+      it("honors an additional caller disable in browse mode", () => {
+        spawnSyncMock.mockReturnValue(spawnResult());
+        run("q", 5, { paths: paths(), mode: "browse", disabledToolsets: "custom-tool" });
+        const argv = spawnSyncMock.mock.calls.at(-1)[1] as string[];
+        expect(argv).toContain('--disabled_toolsets="custom-tool,memory"');
+      });
+    }
     it("throws when required keys are missing from the output", () => {
       spawnSyncMock.mockReturnValue(spawnResult());
       expect(() =>

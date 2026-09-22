@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import * as projectConfig from "./hermes-qa-project-config.mjs";
 import { UsageError } from "./errors.mjs";
+import { hashJson } from "./spec-hash.mjs";
 
 /**
  * Reads QA annotations out of Playwright spec files.
@@ -40,7 +41,7 @@ import { UsageError } from "./errors.mjs";
  * was removed: artifacts from 1.x carry `expectations` fields that no longer
  * exist, and must not be reused.
  */
-export const SPEC_READER_VERSION = "2.0.0";
+export const SPEC_READER_VERSION = "2.2.0";
 
 export const QA_LIVE_POLICY_MAP = {
   readonly: {
@@ -593,17 +594,32 @@ export function buildBrowseChecklist(spec) {
   const alwaysRunIds = new Set(
     listAlwaysRunScenarios(spec).map(scenario => scenario.scenarioId)
   );
-
+  const ids = new Set();
   return spec.scenarios
     .filter(scenario => !scenario.liveSkip)
     .flatMap(scenario =>
-      scenario.tests.map(test => ({
-        scenarioId: scenario.scenarioId,
-        alwaysRun: alwaysRunIds.has(scenario.scenarioId),
-        title: test.title,
-        liveRunPolicy: test.liveRunPolicy,
-        stagingMode: test.stagingMode,
-      }))
+      scenario.tests.map(test => {
+        const identity = [scenario.sourceFile ?? "", scenario.scenarioId, test.checkId ?? test.title]
+          .map(value => String(value ?? ""));
+        const checkId = hashJson(identity).replace("sha256:", "chk_").slice(0, 20);
+        if (ids.has(checkId)) {
+          throw new UsageError(`Duplicate check identity ${JSON.stringify(checkId)} for ${JSON.stringify(test.title)}.`, {
+            hint: "Give colliding tests distinct titles/check IDs or distinct source files and scenarios.",
+          });
+        }
+        ids.add(checkId);
+        return {
+          checkId,
+          ...(scenario.fixtures || test.fixtures ? { fixtures: { ...scenario.fixtures, ...test.fixtures } } : {}),
+          ...(test.fixtures ? { requiredUploadFixtures: test.fixtures } : {}),
+          sourceFile: scenario.sourceFile ?? "",
+          scenarioId: scenario.scenarioId,
+          alwaysRun: alwaysRunIds.has(scenario.scenarioId),
+          title: test.title,
+          liveRunPolicy: test.liveRunPolicy,
+          stagingMode: test.stagingMode,
+        };
+      })
     );
 }
 

@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   analyzeHarViolations,
   buildCoverage,
@@ -10,14 +13,30 @@ import {
   resolveJudgeTurnBudget,
 } from "../judge-verdict.mjs";
 
-/** A pass that survives the evidence floor. */
+let evidenceDir: string;
+let evidenceFile: string;
+let ariaFile: string;
+
+beforeAll(() => {
+  evidenceDir = mkdtempSync(join(tmpdir(), "judge-verdict-"));
+  evidenceFile = join(evidenceDir, "capture.png");
+  ariaFile = join(evidenceDir, "page.yaml");
+  writeFileSync(evidenceFile, "capture");
+  writeFileSync(ariaFile, "- name: Pro plan\n- name: 98%\n");
+});
+
+afterAll(() => rmSync(evidenceDir, { recursive: true, force: true }));
+
+const runnerEvidence = () => ({ screenshots: [evidenceFile], ariaSnapshots: [ariaFile] });
+
+/** A pass that survives the evidence floor when runner evidence is supplied. */
 function passing(item: string, detail = 'header reads "Pro plan"') {
-  return { item, detail, result: "pass", confidence: "high" };
+  return { item, detail, result: "pass", confidence: "high", evidenceRefs: [evidenceFile] };
 }
 
 describe("verdict floor", () => {
   it("passes when every check passes with concrete evidence", () => {
-    expect(normalizeBrowseDecision({ checks: [passing("a")] }).status).toBe(
+    expect(normalizeBrowseDecision({ checks: [passing("a")] }, { runnerEvidence: runnerEvidence() }).status).toBe(
       "pass",
     );
   });
@@ -29,7 +48,9 @@ describe("verdict floor", () => {
           passing("a"),
           { item: "b", result: "skip", detail: "blocked on live" },
         ],
-      }).status,
+      },
+      { runnerEvidence: runnerEvidence() },
+    ).status,
     ).toBe("pass");
   });
 
@@ -81,7 +102,7 @@ describe("scenario coverage", () => {
   it("counts planned checks the agent never addressed and forces manual_review", () => {
     const decision = normalizeBrowseDecision(
       { status: "pass", checks: [passing("shows health score")] },
-      { plannedChecks: ["shows health score", "shows renewal date"] },
+      { plannedChecks: ["shows health score", "shows renewal date"], runnerEvidence: runnerEvidence() },
     );
 
     expect(decision.coverage).toEqual({
@@ -135,7 +156,7 @@ describe("scenario coverage", () => {
   it("stays pass when every planned check is addressed", () => {
     const decision = normalizeBrowseDecision(
       { checks: [passing("shows health score")] },
-      { plannedChecks: ["shows health score"] },
+      { plannedChecks: ["shows health score"], runnerEvidence: runnerEvidence() },
     );
     expect(decision.status).toBe("pass");
     expect(decision.coverage.missing).toEqual([]);
@@ -143,17 +164,18 @@ describe("scenario coverage", () => {
 });
 
 describe("evidence-or-demote", () => {
-  it("accepts a quoted observed value", () => {
+  it("accepts a quoted observed value found in captured ARIA", () => {
     expect(
-      hasConcreteEvidence({ detail: 'plan badge reads "Pro"', evidenceRefs: [] }),
+      hasConcreteEvidence(
+        { detail: 'plan badge reads "Pro"', evidenceRefs: [] },
+        { ariaSnapshots: [ariaFile] },
+      ),
     ).toBe(true);
   });
 
-  it("accepts a URL path and a number with a unit", () => {
-    expect(hasConcreteEvidence({ detail: "landed on /dashboard/billing" })).toBe(
-      true,
-    );
-    expect(hasConcreteEvidence({ detail: "score rendered as 98%" })).toBe(true);
+  it("rejects URL and number prose without runner evidence", () => {
+    expect(hasConcreteEvidence({ detail: "landed on /dashboard/billing" })).toBe(false);
+    expect(hasConcreteEvidence({ detail: "score rendered as 98%" })).toBe(false);
   });
 
   it("rejects vague prose", () => {
@@ -165,9 +187,8 @@ describe("evidence-or-demote", () => {
   it("accepts an evidenceRef that resolves to a captured artifact", () => {
     expect(
       hasConcreteEvidence(
-        { detail: "looked fine", evidenceRefs: ["dashboard-final.png"] },
-        { screenshots: ["/tmp/evidence/dashboard-final.png"] },
-        { fileExists: () => false },
+        { detail: "looked fine", evidenceRefs: [evidenceFile] },
+        { screenshots: [evidenceFile] },
       ),
     ).toBe(true);
   });
@@ -210,9 +231,10 @@ describe("evidence-or-demote", () => {
   });
 
   it("treats a missing confidence as medium, not low", () => {
-    const decision = normalizeBrowseDecision({
-      checks: [{ item: "a", result: "pass", detail: 'reads "Pro"' }],
-    });
+    const decision = normalizeBrowseDecision(
+      { checks: [{ item: "a", result: "pass", detail: 'reads "Pro"' }] },
+      { runnerEvidence: runnerEvidence() },
+    );
     expect(decision.status).toBe("pass");
     expect(decision.checks[0].confidence).toBe("medium");
   });
@@ -231,7 +253,7 @@ describe("cause classification", () => {
   });
 
   it("reports NONE for a green run", () => {
-    expect(normalizeBrowseDecision({ checks: [passing("a")] }).cause).toBe(
+    expect(normalizeBrowseDecision({ checks: [passing("a")] }, { runnerEvidence: runnerEvidence() }).cause).toBe(
       "NONE",
     );
   });
@@ -351,6 +373,7 @@ describe("HAR violation analysis", () => {
         violations: [
           { kind: "off-origin-navigation", detail: "https://evil.example.net/" },
         ],
+        runnerEvidence: runnerEvidence(),
       },
     );
 
@@ -361,7 +384,7 @@ describe("HAR violation analysis", () => {
   it("forces manual_review on an unexpected mutation", () => {
     const decision = normalizeBrowseDecision(
       { status: "pass", checks: [passing("a")] },
-      { violations: [{ kind: "unexpected-mutation", detail: "POST /api/x" }] },
+      { violations: [{ kind: "unexpected-mutation", detail: "POST /api/x" }], runnerEvidence: runnerEvidence() },
     );
 
     expect(decision.status).toBe("manual_review");
@@ -370,7 +393,7 @@ describe("HAR violation analysis", () => {
   it("records a capture failure without moving the verdict", () => {
     const decision = normalizeBrowseDecision(
       { checks: [passing("a")] },
-      { violations: [{ kind: "capture-failed", detail: "tracing.stop" }] },
+      { violations: [{ kind: "capture-failed", detail: "tracing.stop" }], runnerEvidence: runnerEvidence() },
     );
 
     expect(decision.status).toBe("pass");

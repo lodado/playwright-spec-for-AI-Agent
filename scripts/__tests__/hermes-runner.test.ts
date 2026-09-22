@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,7 @@ import {
   buildHermesAgentArgs,
   extractHermesFinalResponseText,
   extractJsonFromHermesOutput,
+  installEphemeralHermesBrowserTools,
   prepareEphemeralHermesHome,
   prepareHermesJsonParseSurface,
   unwrapHermesEnvelope,
@@ -46,6 +47,82 @@ describe("prepareEphemeralHermesHome", () => {
       cleanup();
     }
     expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe("installEphemeralHermesBrowserTools", () => {
+  it("creates an opt-in plugin without persisting the endpoint token", () => {
+    const { path, cleanup } = prepareEphemeralHermesHome();
+    try {
+      installEphemeralHermesBrowserTools(path, {
+        url: "http://127.0.0.1:4319/qa-tools",
+        token: "test-secret-token",
+      });
+
+      const config = readFileSync(`${path}/config.yaml`, "utf8");
+      const manifest = readFileSync(
+        `${path}/plugins/qa_browser_tools/plugin.yaml`,
+        "utf8",
+      );
+      const source = readFileSync(
+        `${path}/plugins/qa_browser_tools/__init__.py`,
+        "utf8",
+      );
+      expect(config).toContain("- qa-browser-tools");
+      expect(config).toContain("disabled: []");
+      expect(manifest).toContain("qa_checkpoint");
+      expect(manifest).toContain("qa_upload_fixture");
+      expect(source).toContain('name="qa_checkpoint"');
+      expect(source).toContain('name="qa_upload_fixture"');
+      expect(source).not.toContain("test-secret-token");
+      expect(source).not.toContain("127.0.0.1:4319");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("replaces quoted, inline, and duplicate plugin sections across comments", () => {
+    const { path, cleanup } = prepareEphemeralHermesHome();
+    try {
+      writeFileSync(`${path}/config.yaml`, [
+        "model:",
+        "  default: preserved-model",
+        "'plugins':",
+        "  enabled: [unsafe-plugin]",
+        "# a comment does not end this mapping",
+        "  disabled: [qa-browser-tools]",
+        '"plugins": {enabled: [another-plugin]}',
+        "plugins:",
+        "  enabled: [last-plugin]",
+        "agent:",
+        "  max_turns: 17",
+        "",
+      ].join("\n"));
+      installEphemeralHermesBrowserTools(path, {
+        url: "http://127.0.0.1:4319/",
+        token: "test-token",
+      });
+      const config = readFileSync(`${path}/config.yaml`, "utf8");
+      expect(config).toContain("model:\n  default: preserved-model");
+      expect(config).toContain("agent:\n  max_turns: 17");
+      expect(config.match(/^plugins:/gm)).toHaveLength(1);
+      expect(config).toContain("enabled:\n    - qa-browser-tools");
+      expect(config).toContain("disabled: []");
+      expect(config).not.toMatch(/unsafe-plugin|another-plugin|last-plugin|disabled: \[qa-browser-tools\]/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("rejects incomplete browser tool credentials", () => {
+    const { path, cleanup } = prepareEphemeralHermesHome();
+    try {
+      expect(() =>
+        installEphemeralHermesBrowserTools(path, { url: "http://localhost" }),
+      ).toThrow(/url and token/);
+    } finally {
+      cleanup();
+    }
   });
 });
 

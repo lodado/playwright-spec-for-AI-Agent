@@ -5,5 +5,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["scripts/__tests__/**/*.test.ts"],
+    // These suites spawn browsers and CLI processes; one worker avoids CPU-contention timeouts.
+    maxWorkers: 1,
   },
 });

@@ -14,7 +14,7 @@ vi.mock("../ai-agent-adapter.mjs", () => ({
 import { resetProjectConfigForTests } from "../hermes-qa-project-config.mjs";
 import { REVIEW_CRITERIA } from "../normalize-judge-review.mjs";
 import { readLedger } from "../qa-run-ledger.mjs";
-import { readRecordedSpecHash, run } from "../run-hermes-judge-review.mjs";
+import { buildJudgeReviewHermesQuery, readRecordedSpecHash, run } from "../run-hermes-judge-review.mjs";
 
 const SPEC_HASH = `sha256:${"a".repeat(64)}`;
 const OTHER_HASH = `sha256:${"d".repeat(64)}`;
@@ -37,7 +37,7 @@ function judgment(overrides: Record<string, unknown> = {}) {
         result: "fail",
         detail: 'Title read "Invoice" at /billing.',
         cause: "PRODUCT_DEFECT",
-        evidenceRefs: ["evidence/judge-1.png"],
+        evidenceRefs: [join(outputDir, "judge-1.yaml")],
       },
     ],
     coverage: { planned: 1, addressed: 1, missing: [] },
@@ -46,8 +46,8 @@ function judgment(overrides: Record<string, unknown> = {}) {
       tracePath: "evidence/trace.zip",
       harPath: null,
       videoPath: null,
-      screenshots: ["evidence/judge-1.png"],
-      ariaSnapshots: [],
+      screenshots: [],
+      ariaSnapshots: [join(outputDir, "judge-1.yaml")],
       violations: [],
     },
     ...overrides,
@@ -65,7 +65,7 @@ function agentPayload(query: string, verdicts: Record<string, string> = {}) {
       verdict: verdicts[criterion.id] ?? "pass",
       detail: `${criterion.id} ok`,
       affectedChecks: [],
-      citations: ["evidence/judge-1.png"],
+      citations: [join(outputDir, "judge-1.yaml")],
     })),
     recommendations: [],
     source: "fixture",
@@ -94,6 +94,7 @@ beforeEach(() => {
   resetProjectConfigForTests();
   runAgentMock.mockReset();
   outputDir = mkdtempSync(join(tmpdir(), "qa-review-"));
+  writeFileSync(join(outputDir, "judge-1.yaml"), '- heading "Invoice"\n');
   argv = ["--page=dashboard", `--project-root=${outputDir}`, `--output-dir=${outputDir}`];
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -122,6 +123,19 @@ describe("readRecordedSpecHash", () => {
     expect(readRecordedSpecHash(`- **Spec hash:** \`${SPEC_HASH}\``)).toBe(SPEC_HASH);
     expect(readRecordedSpecHash(`<!-- specHash: ${SPEC_HASH} -->`)).toBe(SPEC_HASH);
     expect(readRecordedSpecHash("# plan with no hash")).toBeNull();
+  });
+});
+
+describe("review evidence contract", () => {
+  it("tells the reviewer that model prose cannot satisfy the runner-owned evidence floor", () => {
+    const query = buildJudgeReviewHermesQuery({
+      packetText: "judgment detail: the model says it saw the correct state",
+      packetSha256: SPEC_HASH,
+    });
+
+    expect(query).toContain("Runner-owned evidence is the authority");
+    expect(query).toContain("not evidence by itself");
+    expect(query).toContain("never promote a pass from prose alone");
   });
 });
 

@@ -2,15 +2,14 @@
  * Verdict logic for the judge stage — the only place a "pass" is allowed to
  * survive.
  *
- * Everything here is pure (the one filesystem touch is injectable) so the rules
- * that decide whether a run is green can be tested without a browser, an agent,
- * or a network. The entry script stays orchestration.
+ * Rules can be tested against captured files without a browser, agent, or
+ * network. The entry script handles orchestration.
  *
  * Every rule is a FLOOR: normalization may lower the agent's own verdict, never
  * raise it. An agent that says `fail` is believed; an agent that says `pass`
  * has to show its work.
  */
-import { existsSync } from "node:fs";
+import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
 
 export const CAUSES = [
@@ -70,57 +69,73 @@ export function normalizeCause(value, { result = "fail" } = {}) {
   return CAUSES.includes(raw) && raw !== "NONE" ? raw : "HARNESS_DEFECT";
 }
 
-const QUOTED_VALUE = /(?:"[^"]{2,}"|'[^']{2,}'|“[^”]{2,}”)/;
-const URL_PATH = /(?:https?:\/\/\S+|(?:^|[\s(,])\/[A-Za-z0-9][^\s,)]*)/;
-const NUMBER_WITH_UNIT =
-  /(?:[$€£₩]\s?\d|\b\d[\d.,]*\s*(?:%|ms\b|s\b|px\b|kb\b|mb\b|items?\b|rows?\b|results?\b|credits?\b|점|개|원))/i;
-
-/** Every file the runner actually captured, by full path and by basename. */
+/** Paths recorded by the runner for this run, never agent-supplied paths. */
 export function collectEvidenceArtifacts(runnerEvidence) {
-  const files = [
+  return new Set([
     runnerEvidence?.tracePath,
     runnerEvidence?.harPath,
     runnerEvidence?.videoPath,
-    ...(runnerEvidence?.screenshots ?? []),
-    ...(runnerEvidence?.ariaSnapshots ?? []),
-  ].filter(Boolean);
-  const set = new Set();
-  for (const file of files) {
-    set.add(String(file));
-    set.add(basename(String(file)));
-  }
-  return set;
+    ...(Array.isArray(runnerEvidence?.screenshots) ? runnerEvidence.screenshots : []),
+    ...(Array.isArray(runnerEvidence?.ariaSnapshots) ? runnerEvidence.ariaSnapshots : []),
+  ].filter(file => typeof file === "string" && file.length > 0));
 }
 
-/**
- * "I checked it and it was fine" is not evidence. Concrete means either an
- * `evidenceRefs` entry that resolves to a file the runner really captured, or a
- * `detail` that quotes something observed: a quoted string, a URL/path, or a
- * number carrying a unit.
- */
-export function hasConcreteEvidence(
-  check,
-  runnerEvidence = null,
-  { fileExists = existsSync } = {}
-) {
-  const artifacts = collectEvidenceArtifacts(runnerEvidence);
-  for (const ref of check?.evidenceRefs ?? []) {
-    const value = String(ref ?? "").trim();
-    if (!value) continue;
-    if (artifacts.has(value) || artifacts.has(basename(value))) return true;
+/** Resolve citations against this run's captures; prose alone is not evidence. */
+function resolveEvidenceRefs(check, runnerEvidence, {
+  ariaCache = new Map(),
+  readText = file => readFileSync(file, "utf8"),
+  fileExists = file => {
+    const stat = statSync(file);
+    if (!stat.isFile() || stat.size === 0) return false;
+    accessSync(file, constants.R_OK);
+    return true;
+  },
+} = {}) {
+  const foreignCheckpoints = new Set((runnerEvidence?.checkpoints ?? [])
+    .filter(checkpoint => checkpoint.checkId !== check?.checkId)
+    .flatMap(checkpoint => checkpoint.evidenceRefs ?? []));
+  const artifacts = [...collectEvidenceArtifacts(runnerEvidence)].filter(file => !foreignCheckpoints.has(file));
+  const cited = new Set();
+  const refs = Array.isArray(check?.evidenceRefs) ? check.evidenceRefs : [];
+  for (const ref of refs) {
+    if (typeof ref !== "string" || !ref.trim()) continue;
+    const value = ref.trim();
+    const matches = artifacts.filter(file =>
+      file === value || (value === basename(value) && basename(file) === value)
+    );
     try {
-      if (fileExists(value)) return true;
+      if (matches.length === 1 && fileExists(matches[0])) cited.add(matches[0]);
     } catch {
-      // An unusable path is simply not evidence.
+      // An unreadable capture cannot support a pass.
     }
   }
+  if (cited.size) return [...cited];
 
-  const detail = String(check?.detail ?? "");
-  return (
-    QUOTED_VALUE.test(detail) ||
-    URL_PATH.test(detail) ||
-    NUMBER_WITH_UNIT.test(detail)
-  );
+  const quotes = [...String(check?.detail ?? "").matchAll(/"([^"\n]*)"|'([^'\n]*)'|“([^”\n]*)”/g)]
+    .map(match => (match[1] ?? match[2] ?? match[3]).replace(/\s+/g, " ").trim());
+  if (!quotes.length || quotes.some(quote => quote.length < 2)) return [];
+  const patterns = quotes.map(quote => new RegExp(
+    "(^|[^\\p{L}\\p{N}_])" + quote.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?=$|[^\\p{L}\\p{N}_])",
+    "u"
+  ));
+  for (const file of Array.isArray(runnerEvidence?.ariaSnapshots) ? runnerEvidence.ariaSnapshots : []) {
+    if (!artifacts.includes(file)) continue;
+    if (!ariaCache.has(file)) {
+      ariaCache.set(file, null);
+      try {
+        if (fileExists(file)) ariaCache.set(file, readText(file).replace(/\s+/g, " "));
+      } catch {
+        // Cache unavailable evidence too, but never across normalization calls.
+      }
+    }
+    const snapshot = ariaCache.get(file);
+    if (snapshot !== null && patterns.every(pattern => pattern.test(snapshot))) return [file];
+  }
+  return [];
+}
+
+export function hasConcreteEvidence(check, runnerEvidence = null, options = {}) {
+  return resolveEvidenceRefs(check, runnerEvidence, options).length > 0;
 }
 
 /**
@@ -145,7 +160,7 @@ function containsEitherWay(a, b) {
  * this: when they used different rungs, a paraphrased title counted as covered
  * in one and as never-reported in the other.
  *
- * @returns {{ pairs: Map<string, object>, missing: string[], unplanned: object[] }}
+ * @returns {{ pairs: Map<number, object>, missing: string[], unplanned: object[] }}
  */
 export function pairPlannedChecks(plannedChecks = [], checks = []) {
   const reported = checks.map(check => ({
@@ -154,48 +169,64 @@ export function pairPlannedChecks(plannedChecks = [], checks = []) {
     norm: normalizeItem(check?.item),
     used: false,
   }));
-  const pairs = new Map();
-  const missing = [];
-
-  for (const item of plannedChecks) {
-    const norm = normalizeItem(item);
-    let hit =
-      reported.find(entry => !entry.used && entry.raw === item) ??
-      reported.find(entry => !entry.used && entry.norm === norm);
-    if (!hit) {
-      // Several candidates is not ambiguity worth failing on — the same title
-      // is judged once per scenario. Take the closest in length; consumption
-      // still stops one vague line from covering the rest of the plan.
-      hit = reported
-        .filter(entry => !entry.used && containsEitherWay(entry.norm, norm))
-        .sort(
-          (a, b) =>
-            Math.abs(a.norm.length - norm.length) -
-            Math.abs(b.norm.length - norm.length)
-        )[0];
-    }
-    if (hit) {
-      hit.used = true;
-      pairs.set(item, hit.check);
-    } else {
-      missing.push(item);
+  const byId = new Map();
+  for (const entry of reported) {
+    const id = entry.check?.checkId;
+    if (typeof id === "string" && id) byId.set(id, byId.has(id) ? null : entry);
+  }
+  const planCounts = new Map();
+  for (const planned of plannedChecks) {
+    if (typeof planned?.checkId === "string" && planned.checkId) {
+      planCounts.set(planned.checkId, (planCounts.get(planned.checkId) ?? 0) + 1);
     }
   }
-
+  const pairs = new Map();
+  const missing = [];
+  const missingCheckIds = [];
+  plannedChecks.forEach((planned, index) => {
+    const identified = typeof planned !== "string";
+    const item = identified ? String(planned?.item ?? "") : planned;
+    const id = identified ? planned?.checkId : null;
+    let hit;
+    if (identified) {
+      if (typeof id === "string" && id && planCounts.get(id) === 1) hit = byId.get(id);
+    } else {
+      const norm = normalizeItem(item);
+      hit = reported.find(entry => !entry.used && entry.raw === item)
+        ?? reported.find(entry => !entry.used && entry.norm === norm);
+      if (!hit) {
+        hit = reported
+          .filter(entry => !entry.used && containsEitherWay(entry.norm, norm))
+          .sort((a, b) => Math.abs(a.norm.length - norm.length) - Math.abs(b.norm.length - norm.length))[0];
+      }
+    }
+    if (hit && !hit.used) {
+      hit.used = true;
+      pairs.set(index, hit.check);
+    } else {
+      missing.push(item);
+      if (identified) missingCheckIds.push(typeof id === "string" ? id : null);
+    }
+  });
   return {
     pairs,
     missing,
+    missingCheckIds,
     unplanned: reported.filter(entry => !entry.used).map(entry => entry.check),
   };
 }
 
 /** @returns {{ planned: number, addressed: number, missing: string[] }} */
 export function buildCoverage(plannedChecks = [], checks = []) {
-  const { missing } = pairPlannedChecks(plannedChecks, checks);
+  const { missing, missingCheckIds, unplanned } = pairPlannedChecks(plannedChecks, checks);
   return {
     planned: plannedChecks.length,
     addressed: plannedChecks.length - missing.length,
     missing,
+    ...(plannedChecks.some(check => typeof check !== "string") ? {
+      missingCheckIds,
+      unplannedCheckIds: unplanned.map(check => check.checkId ?? null),
+    } : {}),
   };
 }
 
@@ -312,7 +343,7 @@ function deriveCause({ status, declared, checks, violations }) {
 
 /**
  * @param {object} raw agent JSON
- * @param {{ plannedChecks?: string[], runnerEvidence?: object|null,
+ * @param {{ plannedChecks?: Array<string|{checkId: string, item: string}>, runnerEvidence?: object|null,
  *           violations?: Array<{kind:string,detail?:string}>,
  *           fileExists?: (path: string) => boolean }} [options]
  */
@@ -322,16 +353,23 @@ export function normalizeBrowseDecision(raw = {}, options = {}) {
     runnerEvidence = null,
     violations = [],
     fileExists,
+    readText,
   } = options;
-  const evidenceOptions = fileExists ? { fileExists } : {};
+  const evidenceOptions = { fileExists, readText, ariaCache: new Map() };
+  const plannedById = new Map(plannedChecks.filter(check => check?.checkId).map(check => [check.checkId, check]));
   const floorNotes = [];
 
   const checks = (Array.isArray(raw.checks) ? raw.checks : []).map(check => {
-    const item = String(check?.item ?? "Untitled check");
+    const checkId = typeof check?.checkId === "string" ? check.checkId.trim() : "";
+    const item = String(plannedById.get(checkId)?.item ?? check?.item ?? "Untitled check");
     const detail = String(check?.detail ?? "");
-    const evidenceRefs = Array.isArray(check?.evidenceRefs)
-      ? check.evidenceRefs.map(String)
-      : [];
+    const plannedCheck = plannedById.get(checkId);
+    const requiredUploads = Object.values(plannedCheck?.requiredUploadFixtures ?? plannedCheck?.uploadFixtures ?? {});
+    const uploadRefs = (Array.isArray(runnerEvidence?.uploads) ? runnerEvidence.uploads : [])
+      .filter(receipt => requiredUploads.includes(receipt.path) && receipt.sha256 &&
+        receipt.checkId === checkId)
+      .map(receipt => receipt.receiptId);
+    const evidenceRefs = resolveEvidenceRefs(check, runnerEvidence, evidenceOptions);
     // A missing `confidence` is not a claim of low confidence — the evidence
     // predicate below already gates the pass. Only an explicit `low` demotes.
     const confidence = CONFIDENCES.has(check?.confidence)
@@ -345,9 +383,11 @@ export function normalizeBrowseDecision(raw = {}, options = {}) {
         result = "manual_review";
         demotedFrom = "pass";
         floorNotes.push(`"${item}" passed with low confidence`);
-      } else if (
-        !hasConcreteEvidence({ detail, evidenceRefs }, runnerEvidence, evidenceOptions)
-      ) {
+      } else if (requiredUploads.some(path => !(runnerEvidence?.uploads ?? []).some(receipt => receipt.path === path && uploadRefs.includes(receipt.receiptId)))) {
+        result = "manual_review";
+        demotedFrom = "pass";
+        floorNotes.push(`"${item}" passed without a runner upload receipt`);
+      } else if (evidenceRefs.length === 0) {
         result = "manual_review";
         demotedFrom = "pass";
         floorNotes.push(`"${item}" passed without citing concrete evidence`);
@@ -355,12 +395,14 @@ export function normalizeBrowseDecision(raw = {}, options = {}) {
     }
 
     return {
+      ...(checkId ? { checkId } : {}),
       item,
       detail,
       result,
       confidence,
       cause: normalizeCause(check?.cause, { result }),
       evidenceRefs,
+      ...(requiredUploads.length ? { uploadRefs } : {}),
       ...(demotedFrom ? { demotedFrom } : {}),
     };
   });
@@ -385,6 +427,11 @@ export function normalizeBrowseDecision(raw = {}, options = {}) {
       `${coverage.missing.length} planned check(s) unaddressed: ${coverage.missing.join(", ")}`
     );
   }
+  if (coverage.unplannedCheckIds?.length) {
+    derived = worst(derived, "manual_review");
+    floorNotes.push("Unplanned, missing, or duplicate check IDs were reported");
+  }
+
   for (const violation of uniqueViolations) {
     const floor = violationFloor(violation.kind);
     if (floor !== "pass") {
@@ -426,16 +473,20 @@ export function normalizeBrowseDecision(raw = {}, options = {}) {
  * are listed too, with `planned: false`.
  */
 export function buildEvidenceManifest({
+  runId = null,
   plannedChecks = [],
   checks = [],
   runnerEvidence = null,
 } = {}) {
   const { pairs, unplanned } = pairPlannedChecks(plannedChecks, checks);
 
-  const items = plannedChecks.map(item => {
-    const check = pairs.get(item);
+  const items = plannedChecks.map((planned, index) => {
+    const item = typeof planned === "string" ? planned : String(planned?.item ?? "");
+    const identity = typeof planned?.checkId === "string" ? { checkId: planned.checkId } : {};
+    const check = pairs.get(index);
     if (!check) {
       return {
+        ...identity,
         item,
         planned: true,
         addressed: false,
@@ -446,6 +497,7 @@ export function buildEvidenceManifest({
       };
     }
     return {
+      ...identity,
       item,
       planned: true,
       addressed: true,
@@ -458,6 +510,7 @@ export function buildEvidenceManifest({
 
   for (const check of unplanned) {
     items.push({
+      ...(check.checkId ? { checkId: check.checkId } : {}),
       item: check.item,
       planned: false,
       addressed: true,
@@ -468,7 +521,7 @@ export function buildEvidenceManifest({
     });
   }
 
-  return { items, runnerEvidence: runnerEvidence ?? null };
+  return { ...(runId ? { runId } : {}), items, runnerEvidence: runnerEvidence ?? null };
 }
 
 /**

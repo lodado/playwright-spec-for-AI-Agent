@@ -1,8 +1,10 @@
 import {
   cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
+  writeFileSync,
   rmSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -55,7 +57,124 @@ export const HERMES_QA_TEXT_ONLY_DISABLED_TOOLSETS =
  * long-term memory that would carry into a later run — QA judgments must boot
  * fresh each time, never learned from prior runs.
  */
+export const HERMES_QA_TEXT_ONLY_BASELINE_DISABLED_TOOLSETS = "browser,web,terminal";
+
+export function mergeDisabledToolsets(...values) {
+  const merged = [];
+  for (const value of values) {
+    for (const toolset of String(value ?? "").split(",")) {
+      const normalized = toolset.trim();
+      if (normalized && !merged.includes(normalized)) merged.push(normalized);
+    }
+  }
+  return merged.join(",");
+}
+
 export const HERMES_QA_STATELESS_DISABLED_TOOLSETS = "memory";
+
+const HERMES_QA_BROWSER_PLUGIN_NAME = "qa-browser-tools";
+const HERMES_QA_BROWSER_PLUGIN_DIR = "qa_browser_tools";
+const HERMES_QA_BROWSER_PLUGIN_MANIFEST = `name: ${HERMES_QA_BROWSER_PLUGIN_NAME}
+version: 1.0.0
+description: "Ephemeral QA browser evidence tools"
+author: playwright-spec-for-ai-agent
+provides_tools:
+  - qa_checkpoint
+  - qa_upload_fixture
+`;
+const HERMES_QA_BROWSER_PLUGIN_SOURCE = `"""Ephemeral bridge to the local QA browser tools server."""
+import json
+import os
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+
+def _post(payload):
+    endpoint = os.environ.get("QA_BROWSER_TOOLS_URL", "").strip()
+    token = os.environ.get("QA_BROWSER_TOOLS_TOKEN", "")
+    if not endpoint or not token:
+        return {"error": "QA browser tools are not configured"}
+    request = Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=30) as response:
+            body = response.read().decode("utf-8")
+        try:
+            return json.loads(body)
+        except (TypeError, ValueError):
+            return {"error": "QA browser tools returned invalid JSON"}
+    except HTTPError as error:
+        # The loopback server returns only validated, redacted error messages.
+        try:
+            detail = json.loads(error.read(8192).decode("utf-8")).get("error", "")
+            return {"error": str(detail).replace(token, "[redacted]") or "QA browser tools request failed"}
+        except (AttributeError, TypeError, ValueError, OSError):
+            return {"error": "QA browser tools request failed"}
+    except (URLError, TimeoutError, OSError):
+        return {"error": "QA browser tools request failed; refresh state before retrying an upload"}
+
+
+def _checkpoint(args, **kwargs):
+    return json.dumps(_post({
+        "action": "capture",
+        "checkId": args["checkId"],
+        "url": args["url"],
+    }))
+
+
+def _upload_fixture(args, **kwargs):
+    payload = {
+        "action": "upload",
+        "checkId": args["checkId"],
+        "url": args["url"],
+        "fixture": args["fixture"],
+    }
+    if args.get("selector") is not None:
+        payload["selector"] = args["selector"]
+    return json.dumps(_post(payload))
+
+
+def register(ctx):
+    ctx.register_tool(
+        name="qa_checkpoint",
+        toolset="qa_browser_tools",
+        schema={"name": "qa_checkpoint", "description": "Capture runner-owned evidence before changing the current page.", "parameters": {
+            "type": "object",
+            "properties": {
+                "checkId": {"type": "string"},
+                "url": {"type": "string"},
+            },
+            "required": ["checkId", "url"],
+            "additionalProperties": False,
+        }},
+        handler=_checkpoint,
+        description="Capture a QA browser checkpoint for the current page.",
+    )
+    ctx.register_tool(
+        name="qa_upload_fixture",
+        toolset="qa_browser_tools",
+        schema={"name": "qa_upload_fixture", "description": "Attach approved fixture bytes to the current page. Returns a receipt, not a product verdict.", "parameters": {
+            "type": "object",
+            "properties": {
+                "checkId": {"type": "string"},
+                "url": {"type": "string"},
+                "fixture": {"type": "string"},
+                "selector": {"type": "string"},
+            },
+            "required": ["checkId", "url", "fixture"],
+            "additionalProperties": False,
+        }},
+        handler=_upload_fixture,
+        description="Upload a symbolic QA fixture through the browser tools server.",
+    )
+`;
 
 /** Boot-critical files copied into the ephemeral home. Never memories/sessions. */
 const HERMES_HOME_BOOT_FILES = ["auth.json", "config.yaml", ".env", "SOUL.md"];
@@ -79,6 +198,50 @@ export function prepareEphemeralHermesHome() {
       rmSync(path, { recursive: true, force: true });
     },
   };
+}
+
+function replaceTopLevelYamlSection(text, section, replacement) {
+  const lines = text.split(/\r?\n/);
+  const key = new RegExp(`^(?:${section}|"${section}"|'${section}')\\s*:`);
+  // YAML comments do not end an indented mapping.
+  for (let start = lines.length - 1; start >= 0; start -= 1) {
+    if (!key.test(lines[start])) continue;
+    let end = start + 1;
+    while (end < lines.length && (lines[end].trim() === "" || /^\s|^#/.test(lines[end]))) end += 1;
+    lines.splice(start, end - start);
+  }
+  return `${lines.join("\n").trimEnd()}\n${replacement}\n`;
+}
+
+function isolateEphemeralHermesPluginConfig(hermesHome, enabledPlugins) {
+  const configPath = join(hermesHome, "config.yaml");
+  const config = existsSync(configPath) ? readFileSync(configPath, "utf8") : "";
+  const enabled = enabledPlugins.map(name => `    - ${name}`).join("\n");
+  const isolatedPlugins = `plugins:\n  enabled:${enabled ? `\n${enabled}` : " []"}\n  disabled: []`;
+  writeFileSync(
+    configPath,
+    replaceTopLevelYamlSection(config, "plugins", isolatedPlugins),
+    "utf8",
+  );
+}
+
+/** Install only the QA bridge in an ephemeral Hermes home. */
+export function installEphemeralHermesBrowserTools(hermesHome, browserTools) {
+  if (!browserTools || typeof browserTools !== "object") {
+    throw new UsageError("browserTools must include url and token");
+  }
+  const url = typeof browserTools.url === "string" ? browserTools.url.trim() : "";
+  const token = typeof browserTools.token === "string" ? browserTools.token : "";
+  if (!url || !token) {
+    throw new UsageError("browserTools must include url and token");
+  }
+
+  const pluginDir = join(hermesHome, "plugins", HERMES_QA_BROWSER_PLUGIN_DIR);
+  mkdirSync(pluginDir, { recursive: true });
+  writeFileSync(join(pluginDir, "plugin.yaml"), HERMES_QA_BROWSER_PLUGIN_MANIFEST, "utf8");
+  writeFileSync(join(pluginDir, "__init__.py"), HERMES_QA_BROWSER_PLUGIN_SOURCE, "utf8");
+
+  isolateEphemeralHermesPluginConfig(hermesHome, [HERMES_QA_BROWSER_PLUGIN_NAME]);
 }
 
 export function resolveHermesAgentInvocation() {
@@ -197,6 +360,8 @@ export function runHermes(
     requiredKeys = ["status"],
     requiredKeyGroups = null,
     mode = "browse",
+    disabledToolsets: callerDisabledToolsets = null,
+    browserTools = null,
   } = {}
 ) {
   if (HERMES_QA_COMMAND !== REQUIRED_HERMES_AGENT_BIN) {
@@ -205,12 +370,12 @@ export function runHermes(
     );
   }
 
-  const disabledToolsets = [
+  const disabledToolsets = mergeDisabledToolsets(
+    mode === "text-only" ? HERMES_QA_TEXT_ONLY_BASELINE_DISABLED_TOOLSETS : null,
     mode === "text-only" ? HERMES_QA_TEXT_ONLY_DISABLED_TOOLSETS : null,
+    callerDisabledToolsets,
     HERMES_QA_STATELESS_DISABLED_TOOLSETS,
-  ]
-    .filter(Boolean)
-    .join(",");
+  );
 
   const invocation = resolveHermesAgentInvocation();
   writeAgentQueryArtifact(paths, query, secrets);
@@ -221,6 +386,24 @@ export function runHermes(
   const timeout = resolveHermesTimeoutMs();
   let result;
   try {
+    const browserToolsEnabled = mode === "browse" && browserTools !== null;
+    if (browserToolsEnabled) {
+      installEphemeralHermesBrowserTools(hermesHome.path, browserTools);
+    } else {
+      isolateEphemeralHermesPluginConfig(hermesHome.path, []);
+    }
+    const childEnv = {
+      ...process.env,
+      HERMES_HOME: hermesHome.path,
+      // Project plugins are not part of this run's isolated tool surface.
+      HERMES_ENABLE_PROJECT_PLUGINS: "",
+    };
+    delete childEnv.QA_BROWSER_TOOLS_URL;
+    delete childEnv.QA_BROWSER_TOOLS_TOKEN;
+    if (browserToolsEnabled) {
+      childEnv.QA_BROWSER_TOOLS_URL = browserTools.url.trim();
+      childEnv.QA_BROWSER_TOOLS_TOKEN = browserTools.token;
+    }
     result = spawnSync(
       invocation.command,
       [
@@ -231,7 +414,7 @@ export function runHermes(
         shell: false,
         encoding: "utf8",
         maxBuffer: 1024 * 1024 * 10,
-        env: { ...process.env, HERMES_HOME: hermesHome.path },
+        env: childEnv,
         timeout,
       }
     );

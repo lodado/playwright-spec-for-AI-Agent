@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetProjectConfigForTests } from "../hermes-qa-project-config.mjs";
+import { buildBrowseChecklist } from "../spec-annotation-reader.mjs";
 import { AgentOutputError, EnvironmentError } from "../errors.mjs";
+import * as uploadPreflight from "../qa-upload-preflight.mjs";
 
 const mocks = vi.hoisted(() => ({
   runAgent: vi.fn(),
@@ -11,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   launchAuthenticatedBrowser: vi.fn(),
   hasSessionProfile: vi.fn(() => false),
   resolveSpecForJudge: vi.fn(),
+  uploadFixtures: {} as Record<string, string>,
   capabilities: {
     auth: "credentials-in-prompt",
     supportsMaxTurns: true,
@@ -42,7 +45,7 @@ vi.mock("../qa-spec-artifacts.mjs", () => ({
   loadSpecSourceFiles: () => ({}),
   buildUploadFixturesPayload: () => ({
     projectRoot: "/tmp",
-    defaults: {},
+    defaults: mocks.uploadFixtures,
     byCheckId: {},
   }),
 }));
@@ -83,6 +86,7 @@ function agentPayload(overrides: Record<string, unknown> = {}) {
     summary: "ok",
     checks: [
       {
+        checkId: buildBrowseChecklist(SPEC)[0].checkId,
         item: "shows health score",
         detail: 'score reads "98%"',
         result: "pass",
@@ -136,6 +140,7 @@ beforeEach(() => {
     blocksEventLoop: true,
   };
   mocks.runAgent.mockReset().mockReturnValue(agentPayload());
+  mocks.uploadFixtures = {};
   mocks.prelogin.mockReset();
   mocks.launchAuthenticatedBrowser.mockReset();
   mocks.hasSessionProfile.mockReset().mockReturnValue(false);
@@ -163,6 +168,35 @@ function readJudgment() {
   );
 }
 
+it('stops before any agent call or retries when a fixture is missing', async () => {
+  mocks.uploadFixtures = { document: join(root, 'missing.pdf') };
+  await expect(main(ARGV)).rejects.toThrow(/Upload fixture/);
+  expect(mocks.runAgent).not.toHaveBeenCalled();
+  expect(readLedgerKinds().some(event => event.kind === 'judge-retry')).toBe(false);
+  expect(existsSync(join(outputDir, 'dashboard-hermes-judgment.json'))).toBe(false);
+});
+
+it('quarantines unsupported upload tooling before judging', async () => {
+  const file = join(root, 'fixture.txt');
+  writeFileSync(file, 'fixture');
+  mocks.uploadFixtures = { document: file };
+  await expect(main(ARGV)).rejects.toThrow(/cdp-attach/);
+  expect(mocks.runAgent).not.toHaveBeenCalled();
+  expect(readLedgerKinds().at(-1)).toMatchObject({ status: 'error', cause: 'ENVIRONMENT_DEFECT' });
+});
+
+it('does not retry or call the judge when the actual upload probe fails', async () => {
+  const file = join(root, 'fixture.txt');
+  writeFileSync(file, 'fixture');
+  mocks.uploadFixtures = { document: file };
+  mocks.capabilities.auth = 'cdp-attach';
+  const probe = vi.spyOn(uploadPreflight, 'preflightUploads').mockRejectedValue(new EnvironmentError('Upload preflight failed'));
+  await expect(main(ARGV)).rejects.toThrow('Upload preflight failed');
+  expect(probe).toHaveBeenCalledOnce();
+  expect(mocks.runAgent).not.toHaveBeenCalled();
+  expect(readLedgerKinds().some(event => event.kind === 'judge-retry')).toBe(false);
+});
+
 function readLedgerKinds() {
   const path = join(outputDir, "dashboard-qa-runs.jsonl");
   if (!existsSync(path)) return [];
@@ -173,12 +207,14 @@ function readLedgerKinds() {
 }
 
 function sessionStub(evidence: Record<string, unknown> = {}) {
+  const snapshot = join(outputDir, "captured-aria.yaml");
+  writeFileSync(snapshot, "- text: 98%\n");
   const captured = {
     tracePath: null,
     harPath: null,
     videoPath: null,
     screenshots: [],
-    ariaSnapshots: [],
+    ariaSnapshots: [snapshot],
     violations: [],
     ...evidence,
   };
@@ -191,6 +227,20 @@ function sessionStub(evidence: Record<string, unknown> = {}) {
 }
 
 describe("judge wiring", () => {
+  it("demotes an agent-only pass without runner-owned evidence", async () => {
+    await main(ARGV);
+    expect(readJudgment()).toMatchObject({
+      status: "manual_review",
+      cause: "HARNESS_DEFECT",
+      runnerEvidence: null,
+      checks: [{
+        result: "manual_review",
+        demotedFrom: "pass",
+        evidenceRefs: [],
+      }],
+    });
+  });
+
   it("dry-run stops before the agent and reports the resolved plan", async () => {
     const code = await main([...ARGV, "--dry-run"]);
 
@@ -270,6 +320,9 @@ describe("judge wiring", () => {
   });
 
   it("stamps run identity, coverage, and the spec hash into the judgment", async () => {
+    mocks.capabilities.auth = "cdp-attach";
+    mocks.hasSessionProfile.mockReturnValue(true);
+    mocks.launchAuthenticatedBrowser.mockResolvedValue(sessionStub());
     const code = await main(ARGV);
 
     expect(code).toBe(0);
@@ -324,6 +377,9 @@ describe("judge wiring", () => {
   });
 
   it("appends the judgment to GITHUB_STEP_SUMMARY and calls the onJudgment hook", async () => {
+    mocks.capabilities.auth = "cdp-attach";
+    mocks.hasSessionProfile.mockReturnValue(true);
+    mocks.launchAuthenticatedBrowser.mockResolvedValue(sessionStub());
     const summaryPath = join(root, "step-summary.md");
     const hookMarker = join(root, "hook.json");
     process.env.GITHUB_STEP_SUMMARY = summaryPath;
@@ -445,6 +501,38 @@ describe("judge wiring", () => {
     );
   });
 
+  it("registers runner-owned intermediate captures before the final page changes", async () => {
+    mocks.capabilities.auth = "cdp-attach";
+    mocks.hasSessionProfile.mockReturnValue(true);
+    const session = sessionStub();
+    const checkpoint = join(outputDir, "checkpoint.yaml");
+    writeFileSync(checkpoint, '- dialog "Upload documents"\n');
+    session.capture.mockImplementation(async () => {
+      session.evidence.ariaSnapshots.push(checkpoint);
+      return { ...session.evidence, ariaSnapshots: [checkpoint] };
+    });
+    mocks.launchAuthenticatedBrowser.mockResolvedValue(session);
+    mocks.runAgent.mockImplementation(async (_query, _turns, options) => {
+      const first = await options.captureEvidence();
+      await options.captureEvidence();
+      return agentPayload({ checks: [{
+        ...agentPayload().checks[0],
+        detail: 'Observed "Upload documents" before closing the dialog.',
+        evidenceRefs: first.ariaSnapshots,
+      }] });
+    });
+    expect(await main(ARGV)).toBe(0);
+    const judgment = readJudgment();
+    expect(judgment.status).toBe("pass");
+    expect(judgment.checks[0].evidenceRefs).toContain(checkpoint);
+    expect(judgment.runnerEvidence.ariaSnapshots).toContain(checkpoint);
+    expect(session.capture.mock.calls.map(call => call[0])).toEqual([
+      `dashboard-${judgment.runId}-checkpoint-1`,
+      `dashboard-${judgment.runId}-checkpoint-2`,
+    ]);
+    expect(session.close).toHaveBeenCalledOnce();
+  });
+
   it("keeps the runner session open until async agent output resolves", async () => {
     mocks.capabilities.auth = "cdp-attach";
     mocks.hasSessionProfile.mockReturnValue(true);
@@ -552,6 +640,10 @@ describe("buildBrowseHermesQuery", () => {
       },
     });
 
+    expect(query).toContain("Only executable-interaction checks with a declared upload fixture may call qa_upload_fixture");
+    expect(query).toContain("judgment-interaction-no-confirm does not authorize file attachment");
+    expect(query).toContain("A displayed zero credit balance is not proof");
+    expect(query).toContain("respect the source observation timeout");
     expect(query).toContain("## Annotation guide");
     expect(query).toContain("`mock-judgment` -> `judgment-mock-api`");
     expect(query).toContain("If `blocked-*`, mark `skip`.");

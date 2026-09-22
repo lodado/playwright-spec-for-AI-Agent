@@ -104,7 +104,7 @@ function writeAbstractFixture() {
   );
 }
 
-function writeProject() {
+function writeProject(withUploadFixture = false) {
   const specDir = join(root, "src", "page", PAGE, "__tests__");
   mkdirSync(specDir, { recursive: true });
   // `spec` refuses a @qa-fixture path that is not on disk.
@@ -133,7 +133,7 @@ test.describe("Dashboard", () => {
   });
 
   // @qa-live-policy: safe-interaction
-  // @qa-fixture: avatar=tests/fixtures/qa-avatar.png
+  ${withUploadFixture ? '// @qa-fixture: avatar=tests/fixtures/qa-avatar.png' : '// Upload tooling is exercised separately; the offline adapter cannot upload.'}
   test(${JSON.stringify(CHECKS[1])}, async ({ page }) => {
     await page.getByTestId("avatar-input").setInputFiles("tests/fixtures/qa-avatar.png");
   });
@@ -177,6 +177,13 @@ function runPipeline() {
   ).toBe(0);
   return cli(["judge", `--page=${PAGE}`, "--non-interactive"]);
 }
+
+it('refuses declared uploads with the offline adapter instead of faking a verdict', () => {
+  writeProject(true);
+  const result = runPipeline();
+  expect(result.status).toBe(3);
+  expect(result.output).toContain('cdp-attach');
+});
 
 /**
  * The judge preflights its target with `fetch`, and every stage here runs under

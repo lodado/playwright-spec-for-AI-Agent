@@ -387,6 +387,7 @@ export function renderFriendlyQaSpecMarkdown(
 export function buildJudgeBrowseDocument({
   page,
   spec,
+  plannedChecks = [],
   specLiveMarkdown = null,
   planSource = null,
   stagingLogin = null,
@@ -423,6 +424,7 @@ export function buildJudgeBrowseDocument({
       "",
       DATA_BEGIN,
       "",
+      ...(plannedChecks.length ? ["## Check identities", "", "```json", stripDataMarkers(JSON.stringify(plannedChecks)), "```", ""] : []),
       stripDataMarkers(body),
       ...(appendices ? ["", stripDataMarkers(appendices)] : []),
       "",

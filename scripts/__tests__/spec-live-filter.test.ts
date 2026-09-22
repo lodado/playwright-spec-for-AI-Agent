@@ -207,7 +207,7 @@ describe("spec stage artifact", () => {
     const spec = read("dashboard-qa-spec.json");
     expect(spec.artifactKind).toBe("qa-spec");
     expect(spec.specSourcesHash).toMatch(/^sha256:/);
-    expect(spec.parserVersion).toBe("2.0.0");
+    expect(spec.parserVersion).toBe("2.2.0");
     expect(spec.unparsedTestCount).toBe(0);
     expect(spec.excluded).toEqual([
       {

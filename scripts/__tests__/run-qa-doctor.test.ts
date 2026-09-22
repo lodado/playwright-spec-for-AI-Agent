@@ -5,6 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetProjectConfigForTests } from "../hermes-qa-project-config.mjs";
 import { collectDoctorReport, formatDoctorReport } from "../run-qa-doctor.mjs";
 
+vi.mock('node:os', async importOriginal => ({
+  ...await importOriginal<typeof import('node:os')>(),
+  homedir: () => root,
+}));
+
 const SPEC = `// @qa-page: demo
 // @qa-scenario: ACTIVE
 
@@ -71,9 +76,52 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
   delete process.env.QA_AI_ADAPTER;
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("collectDoctorReport", () => {
+  it.each(['openai-codex', 'openai-api', 'custom-provider'])('does not invent an API key requirement for %s', async provider => {
+    const args = project();
+    vi.stubEnv('QA_AI_ADAPTER', 'hermes');
+    mkdirSync(join(root, '.hermes'));
+    writeFileSync(join(root, '.hermes/config.yaml'), `model:\n  provider: ${provider}\n  default: test-model\n`);
+    const report = await collectDoctorReport(args);
+    const auth = find(report, 'adapter provider');
+    expect(auth.status).toBe('warn');
+    expect(auth.detail).toContain('not verified');
+    expect(auth.detail + auth.hint).not.toContain(`${provider.toUpperCase()}_API_KEY`);
+    if (provider === 'openai-codex') expect(auth.detail).toContain('OAuth');
+  });
+
+  it('reports unverified upload as a warning without an opt-in model call', async () => {
+    const args = project();
+    vi.stubEnv('QA_AI_ADAPTER', 'exec');
+    vi.stubEnv('QA_AGENT_AUTH', 'cdp-attach');
+    writeFileSync(join(root, 'fixture.txt'), 'fixture');
+    writeFileSync(join(root, 'specs/demo.spec.ts'), '// @qa-fixture: document=fixture.txt\n' + SPEC);
+    const report = await collectDoctorReport(args);
+    expect(find(report, 'demo · upload fixtures')).toMatchObject({ status: 'warn' });
+    expect(find(report, 'demo · upload fixtures').detail).toContain('NOT verified');
+  });
+
+  it('fails on a missing declared upload fixture', async () => {
+    const args = project();
+    writeFileSync(join(root, 'specs/demo.spec.ts'), '// @qa-fixture: document=missing.pdf\n' + SPEC);
+    const report = await collectDoctorReport(args);
+    expect(report.ok).toBe(false);
+    expect(find(report, 'demo · upload fixtures')).toMatchObject({ status: 'fail' });
+    expect(find(report, 'demo · upload fixtures').detail).toContain('missing.pdf');
+  });
+
+  it('does not treat readable files as working upload tools', async () => {
+    const args = project();
+    writeFileSync(join(root, 'fixture.txt'), 'fixture');
+    writeFileSync(join(root, 'specs/demo.spec.ts'), '// @qa-fixture: document=fixture.txt\n' + SPEC);
+    const report = await collectDoctorReport(args);
+    expect(find(report, 'demo · upload fixtures')).toMatchObject({ status: 'fail' });
+    expect(find(report, 'demo · upload fixtures').detail).toContain('cdp-attach');
+  });
+
   it("passes a complete setup and counts annotated and live-skipped specs", async () => {
     const report = await collectDoctorReport(project());
 
