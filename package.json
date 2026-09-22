@@ -65,6 +65,7 @@
     "qa:report": "node bin/playwright-spec-for-ai-agent.mjs report",
     "qa:show": "node bin/playwright-spec-for-ai-agent.mjs show",
     "test": "vitest run",
+    "qa:benchmark": "node bin/playwright-spec-for-ai-agent.mjs benchmark",
     "prepublishOnly": "npm test"
   },
   "peerDependencies": {

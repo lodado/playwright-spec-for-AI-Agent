@@ -93,6 +93,28 @@ describe("unknown command", () => {
   });
 });
 
+describe("benchmark", () => {
+  it("runs offline through the public CLI with space-separated options", () => {
+    const output = join(tempDir(), "benchmark.json");
+    const result = runBin(["benchmark", "--repeat", "2", "--output", output], {
+      env: { QA_AI_ADAPTER: "must-not-be-called" },
+    });
+    expect(result.status).toBe(0);
+    const report = JSON.parse(readFileSync(output, "utf8"));
+    expect(report.mode).toBe("offline-harness-validation");
+    expect(report.repeat).toBe(2);
+    expect(report.falsePassRate).toBe(0);
+  });
+
+  it("documents the offline default and rejects invalid repetitions", () => {
+    expect(runBin(["benchmark", "--help", "--adapter=must-not-be-called"]).status).toBe(0);
+    expect(runBin(["benchmark", "--unknown"]).status).toBe(2);
+    expect(runBin(["benchmark", "--output"]).status).toBe(2);
+    expect(runBin(["benchmark", "--repeat=1.5"]).status).toBe(2);
+    expect(runBin(["benchmark", "--repeat", "0"]).status).not.toBe(0);
+  });
+});
+
 describe("space-separated flags", () => {
   it("forwards `--page dashboard` to the stage script as --page=dashboard", () => {
     const result = runBin(["spec", "--page", "dashboard"]);

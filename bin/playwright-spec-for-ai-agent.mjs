@@ -164,6 +164,10 @@ const COMMANDS = {
     script: "page-qa-ack.mjs",
     summary: "Acknowledge a verdict so the next run can compare against it",
   },
+  benchmark: {
+    script: "qa-benchmark.mjs",
+    summary: "Evaluate frozen QA cases and report accuracy/latency (offline by default)",
+  },
   demo: {
     script: "run-qa-demo.mjs",
     summary: "Run the pipeline end to end against bundled sample specs",
@@ -233,6 +237,9 @@ const FLAG_HELP = {
  * gate on the default instead, and report a manual_review run as green.
  */
 const VALUE_FLAGS = new Set([
+  "--repeat",
+  "--output",
+  "--adapter",
   "--browser-provider",
   "--browserbase-profile",
   "--browserbase-timeout",
