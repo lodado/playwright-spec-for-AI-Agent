@@ -11,6 +11,15 @@ const shouldMaintainReleasePr = (ref: string, message?: string) =>
   );
 
 describe("quiet release policy", () => {
+  it("installs Chromium before browser regression tests in CI and publication", () => {
+    const ci = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+    for (const source of [ci, workflow]) {
+      const install = source.indexOf("- run: npx playwright install --with-deps chromium");
+      expect(install).toBeGreaterThan(source.indexOf("- run: npm ci"));
+      expect(install).toBeLessThan(source.indexOf("- run: npm test"));
+    }
+    expect(workflow).toContain("- run: npx playwright install --with-deps chromium\n        if: steps.check.outputs.publish == 'true'");
+  });
   it("does not publish GitHub Release announcements", () => {
     expect(config.packages["."]["skip-github-release"]).toBe(true);
   });

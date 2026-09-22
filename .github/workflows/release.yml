@@ -91,6 +91,9 @@ jobs:
       - run: npm ci
         if: steps.check.outputs.publish == 'true'
 
+      - run: npx playwright install --with-deps chromium
+        if: steps.check.outputs.publish == 'true'
+
       # Gate the publish on the same suite CI runs; a tag push skips CI otherwise.
       - run: npm test
         if: steps.check.outputs.publish == 'true'
