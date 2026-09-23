@@ -120,6 +120,8 @@ describe("stable check identity", () => {
     });
     const review = buildJudgeReviewHermesQuery({ packetText: "# Packet", packetSha256: "sha256:abc" });
     expect(query).toContain("opaque");
+    expect(query).toContain("unique titles do not need a `checkId`");
+    expect(query).not.toContain("Titles alone do not identify a check");
     expect(review).toContain("opaque");
   });
 
@@ -151,6 +153,42 @@ describe("stable check identity", () => {
   ])("rejects unusable fixture identity data: %s", json => {
     const query = "## Check identities\n\n```json\n" + json + "\n```";
     expect(() => runFixture(query, 1)).toThrow(AgentOutputError);
+  });
+
+  it("links ID-free results by an exact unique title without mutating the report", () => {
+    const plannedChecks = plan.map((check, i) => ({ ...check, item: `score ${i}` }));
+    const reported = plannedChecks.map(({ item }) => ({ item, result: "pass", detail: 'Observed "98 pts"' })).reverse();
+    const decision = normalizeBrowseDecision({ checks: reported }, { plannedChecks, runnerEvidence });
+    expect(decision.status).toBe("pass");
+    expect(decision.checks.map(check => check.checkId)).toEqual([...plannedChecks].reverse().map(check => check.checkId));
+    expect(reported.every(check => !("checkId" in check))).toBe(true);
+  });
+
+  it.each([
+    { item: "shows score", checkId: "unknown" },
+    { item: "shows score", checkId: 123 },
+    { item: "shows" },
+    { item: "Shows score" },
+  ])("does not guess an identity for an invalid report: %j", report => {
+    const decision = normalizeBrowseDecision({ checks: [{ ...checks[0], ...report, checkId: report.checkId }] },
+      { plannedChecks: [plan[0]], runnerEvidence });
+    expect(decision.status).toBe("manual_review");
+  });
+
+  it("keeps checkpoint and upload ownership when a result omits its ID", () => {
+    const plannedChecks = [{ ...plan[0], uploadFixtures: { upload: "/approved.pdf" } }];
+    const reported = [{ item: plan[0].item, result: "pass", detail: 'Observed "98 pts"', evidenceRefs: [snapshot] }];
+    const receipt = { path: "/approved.pdf", sha256: "verified", receiptId: "receipt-one", checkId: plan[0].checkId };
+    const evidence = { ...runnerEvidence, uploads: [receipt],
+      checkpoints: [{ checkId: plan[0].checkId, evidenceRefs: [snapshot] }] };
+    expect(normalizeBrowseDecision({ checks: reported }, { plannedChecks, runnerEvidence: evidence }).status).toBe("pass");
+    for (const foreign of [
+      { ...evidence, uploads: [{ ...receipt, checkId: plan[1].checkId }] },
+      { ...evidence, checkpoints: [{ checkId: plan[1].checkId, evidenceRefs: [snapshot] }] },
+    ]) {
+      expect(normalizeBrowseDecision({ checks: reported }, { plannedChecks, runnerEvidence: foreign }).status).toBe("manual_review");
+    }
+    expect(normalizeBrowseDecision({ checks: [...reported, ...reported] }, { plannedChecks, runnerEvidence: evidence }).status).toBe("manual_review");
   });
 
   it("keeps same-title results and evidence separate by ID", () => {

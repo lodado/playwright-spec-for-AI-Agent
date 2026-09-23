@@ -127,16 +127,18 @@ do not change existing IDs. Changing an identity component does change the ID.
 Duplicate IDs, including hash collisions, stop the run before the agent starts.
 Source check IDs used by upload fixtures and abstraction stay unchanged.
 
-The judge and reviewer copy these opaque tokens; they do not generate IDs from
-titles. Reader version `2.2.0` invalidates older spec hashes so `nightly`
+When an ID is needed, the judge and reviewer copy it from the plan. Reader version
+`2.2.0` invalidates older spec hashes so `nightly`
 regenerates cached plans and judgments with the current fixture requirements.
 The short-ID algorithm is unchanged from `2.1.0`; stored historical artifacts
 keep their original IDs.
 
 The pinned plan includes a Check identities table even when its prose comes from
-saved Markdown. The agent must echo `checks[].checkId`; matching titles cannot
-repair a missing or unknown ID. Duplicate reports and unplanned IDs prevent a
-green verdict. Coverage includes `missingCheckIds` and `unplannedCheckIds`, and
+saved Markdown. The judge may omit `checks[].checkId` when `checks[].item` exactly
+matches one planned title. The runner attaches the internal ID before checking
+evidence and upload ownership. Repeated titles still require IDs; an unknown or
+malformed ID is never replaced using the title. Duplicate reports and unplanned
+IDs prevent a green verdict. Coverage includes `missingCheckIds` and `unplannedCheckIds`, and
 the evidence manifest carries the run ID and each planned check ID. Reviewer
 recommendations also require IDs when the judgment has them.
 

@@ -357,10 +357,18 @@ export function normalizeBrowseDecision(raw = {}, options = {}) {
   } = options;
   const evidenceOptions = { fileExists, readText, ariaCache: new Map() };
   const plannedById = new Map(plannedChecks.filter(check => check?.checkId).map(check => [check.checkId, check]));
+  const plannedByItem = new Map();
+  for (const planned of plannedChecks) {
+    if (typeof planned?.item === "string" && planned.item && planned.checkId) {
+      plannedByItem.set(planned.item, plannedByItem.has(planned.item) ? null : planned);
+    }
+  }
   const floorNotes = [];
 
   const checks = (Array.isArray(raw.checks) ? raw.checks : []).map(check => {
-    const checkId = typeof check?.checkId === "string" ? check.checkId.trim() : "";
+    const checkId = check?.checkId == null
+      ? plannedByItem.get(check?.item)?.checkId ?? ""
+      : typeof check.checkId === "string" ? check.checkId.trim() : "";
     const item = String(plannedById.get(checkId)?.item ?? check?.item ?? "Untitled check");
     const detail = String(check?.detail ?? "");
     const plannedCheck = plannedById.get(checkId);
@@ -369,7 +377,7 @@ export function normalizeBrowseDecision(raw = {}, options = {}) {
       .filter(receipt => requiredUploads.includes(receipt.path) && receipt.sha256 &&
         receipt.checkId === checkId)
       .map(receipt => receipt.receiptId);
-    const evidenceRefs = resolveEvidenceRefs(check, runnerEvidence, evidenceOptions);
+    const evidenceRefs = resolveEvidenceRefs({ ...check, checkId }, runnerEvidence, evidenceOptions);
     // A missing `confidence` is not a claim of low confidence — the evidence
     // predicate below already gates the pass. Only an explicit `low` demotes.
     const confidence = CONFIDENCES.has(check?.confidence)

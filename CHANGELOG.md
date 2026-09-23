@@ -13,6 +13,14 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [7.5.1](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.5.0...v7.5.1) (2026-09-23)
+
+### Fixes
+
+* Let judge results omit check IDs when the exact test title is unique. The runner restores the internal ID before checking evidence and upload ownership.
+* Keep duplicate-title checks, unknown IDs, duplicate reports, and foreign evidence from being accepted through title matching.
+* Remove the requirement to copy a check ID into every result. Checkpoint and upload tools still use IDs to enforce per-check ownership.
+
 ## [7.5.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.4.0...v7.5.0) (2026-09-22)
 
 ### Features
