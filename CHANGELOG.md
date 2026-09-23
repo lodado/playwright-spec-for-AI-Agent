@@ -13,6 +13,14 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [7.5.2](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.5.1...v7.5.2) (2026-09-23)
+
+### Fixes
+
+* Send bounded, redacted ARIA snapshot contents to the text-only reviewer so it can inspect captured evidence.
+* Attach readable, registered checkpoints to their own check when citations are missing. Unverified observations still require manual review.
+* Keep approved interactions executable during plan abstraction, reject active tests rewritten as `Then: skip`, and regenerate plans cached under the older prompt.
+
 ## [7.5.1](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.5.0...v7.5.1) (2026-09-23)
 
 ### Fixes

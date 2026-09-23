@@ -39,6 +39,20 @@ const validPlan = plan(
 );
 
 describe("normalizeAbstractAiResult", () => {
+  it.each(["skip", "SKIPPED", "**skip**", "skip."])("rejects an executable upload rewritten as %s", then => {
+    const spec = {
+      ...baseSpec,
+      scenarios: [{ scenarioId: "ACTIVE", tests: [{
+        ...baseSpec.scenarios[0].tests[0],
+        liveRunPolicy: "executable-interaction",
+        fixtures: { upload: "qa/fixtures/upload.png" },
+      }] }],
+    };
+    expect(() => normalizeAbstractAiResult(spec, {
+      livePlan: validPlan.replace("Then: a numeric score is displayed", `Then: ${then}`),
+    })).toThrow(/executable test.*skip/i);
+  });
+
   it("accepts a plan that covers every test with a Never clause", () => {
     const result = normalizeAbstractAiResult(baseSpec, { livePlan: validPlan });
 
@@ -338,7 +352,15 @@ describe("abstract-ai stage", () => {
     expect(markdown).toContain(`promptRev: ${ABSTRACT_PROMPT_REV}`);
     expect(markdown).toContain("Never:");
 
-    // Second run: same input, so the agent must not be called again.
+    // An old prompt revision must regenerate even when the source is unchanged.
+    writeFileSync(join(outputDir, "dashboard-qa-spec-live.json"), JSON.stringify({ ...live, promptRev: "4.1.0" }));
+    rmSync(rawOutputPath());
+    resetProjectConfigForTests();
+    await runAbstractAi(argv());
+    expect(existsSync(rawOutputPath())).toBe(true);
+    expect(read("dashboard-qa-spec-live.json").promptRev).toBe(ABSTRACT_PROMPT_REV);
+
+    // Same input and current revision must reuse without another agent call.
     rmSync(rawOutputPath());
     resetProjectConfigForTests();
     await runAbstractAi(argv());

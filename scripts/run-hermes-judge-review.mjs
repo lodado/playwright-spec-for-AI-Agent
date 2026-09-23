@@ -10,10 +10,11 @@
  * Usage:
  *   npx playwright-spec-for-ai-agent review --page=dashboard [--samples=3]
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prepareAdapter, runAgentAsync } from "./ai-agent-adapter.mjs";
+import { redactSensitiveText } from "./agent-output.mjs";
 import { readArtifact, withSchema } from "./artifact-schema.mjs";
 import { EXIT_VERDICT_FAIL, runMain, UsageError } from "./errors.mjs";
 import { getHooks } from "./hermes-qa-project-config.mjs";
@@ -43,6 +44,57 @@ const RECORDED_SPEC_HASH = /spec\s*hash\W{0,4}\s*`?(sha256:[0-9a-f]{64})/i;
 
 export function readRecordedSpecHash(planMarkdown) {
   return String(planMarkdown ?? "").match(RECORDED_SPEC_HASH)?.[1] ?? null;
+}
+
+const MAX_INLINE_ARIA_FILES = 20;
+const MAX_INLINE_ARIA_CHARS = 12_000;
+const MAX_INLINE_ARIA_TOTAL = 100_000;
+const INLINE_ARIA_EXTENSIONS = new Set([".yaml", ".yml", ".txt"]);
+
+function configuredReviewSecrets() {
+  return Object.entries(process.env)
+    .filter(([key, value]) => /secret|token|password|api[_-]?key/i.test(key) && value)
+    .map(([, value]) => value);
+}
+
+/** Read only runner-owned text snapshots inside the run evidence directory. */
+export function readRunnerAriaSnapshots({ runnerEvidence, evidenceDir, secrets = configuredReviewSecrets() }) {
+  let root;
+  try {
+    root = realpathSync(evidenceDir);
+  } catch (error) {
+    return [{ path: String(evidenceDir), status: `unavailable: ${error?.code ?? "evidence directory missing"}` }];
+  }
+  const paths = Array.isArray(runnerEvidence?.ariaSnapshots) ? runnerEvidence.ariaSnapshots : [];
+  let total = 0;
+  const snapshots = paths.slice(0, MAX_INLINE_ARIA_FILES).map((rawPath) => {
+    const displayPath = String(rawPath);
+    const candidate = isAbsolute(displayPath) ? displayPath : resolve(evidenceDir, displayPath);
+    if (!INLINE_ARIA_EXTENSIONS.has(extname(candidate).toLowerCase())) {
+      return { path: displayPath, status: "omitted: unsupported text extension" };
+    }
+    try {
+      const real = realpathSync(candidate);
+      const rel = relative(root, real);
+      if (rel.startsWith("..") || isAbsolute(rel)) return { path: displayPath, status: "omitted: outside evidence directory" };
+      if (total >= MAX_INLINE_ARIA_TOTAL) return { path: displayPath, status: "omitted: inline content limit reached" };
+      const stat = statSync(real);
+      if (!stat.isFile()) return { path: displayPath, status: "omitted: not a regular file" };
+      if (stat.size > MAX_INLINE_ARIA_TOTAL) return { path: displayPath, status: "omitted: file exceeds inline content limit" };
+      const raw = readFileSync(real, "utf8");
+      const remaining = Math.min(MAX_INLINE_ARIA_CHARS, MAX_INLINE_ARIA_TOTAL - total);
+      const redacted = redactSensitiveText(raw, secrets);
+      const text = redacted.slice(0, remaining);
+      total += text.length;
+      return { path: displayPath, status: redacted.length > remaining ? "truncated" : "ok", text };
+    } catch (error) {
+      return { path: displayPath, status: `unreadable: ${error?.code ?? "read failed"}` };
+    }
+  });
+  if (paths.length > MAX_INLINE_ARIA_FILES) {
+    snapshots.push({ path: "(additional ARIA snapshots)", status: `omitted: ${paths.length - MAX_INLINE_ARIA_FILES} additional snapshot(s)` });
+  }
+  return snapshots;
 }
 
 export function parseSamplesArg(argv) {
@@ -245,6 +297,7 @@ export async function run(argv) {
     planMarkdown,
     judgment,
     evidenceFiles: listRunnerEvidenceFiles(judgment.runnerEvidence),
+    ariaSnapshots: readRunnerAriaSnapshots({ runnerEvidence: judgment.runnerEvidence, evidenceDir: paths.evidenceDir }),
     suspiciousAria: listSuspiciousAria(judgment.runnerEvidence),
     ledgerEntries: judgment.runId
       ? readLedger(paths.runsLedger).filter(

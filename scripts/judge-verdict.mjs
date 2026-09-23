@@ -378,6 +378,15 @@ export function normalizeBrowseDecision(raw = {}, options = {}) {
         receipt.checkId === checkId)
       .map(receipt => receipt.receiptId);
     const evidenceRefs = resolveEvidenceRefs({ ...check, checkId }, runnerEvidence, evidenceOptions);
+    // Attach owned captures for review; only the verified refs above can support a pass.
+    const checkpointRefs = plannedCheck && !evidenceRefs.length
+      ? resolveEvidenceRefs({
+        checkId,
+        evidenceRefs: (runnerEvidence?.checkpoints ?? [])
+          .filter(checkpoint => checkpoint.checkId === checkId)
+          .flatMap(checkpoint => checkpoint.evidenceRefs ?? []),
+      }, runnerEvidence, evidenceOptions)
+      : [];
     // A missing `confidence` is not a claim of low confidence — the evidence
     // predicate below already gates the pass. Only an explicit `low` demotes.
     const confidence = CONFIDENCES.has(check?.confidence)
@@ -398,7 +407,9 @@ export function normalizeBrowseDecision(raw = {}, options = {}) {
       } else if (evidenceRefs.length === 0) {
         result = "manual_review";
         demotedFrom = "pass";
-        floorNotes.push(`"${item}" passed without citing concrete evidence`);
+        floorNotes.push(checkpointRefs.length
+          ? `"${item}" has runner checkpoints but no verified observation`
+          : `"${item}" passed without citing concrete evidence`);
       }
     }
 
@@ -409,7 +420,7 @@ export function normalizeBrowseDecision(raw = {}, options = {}) {
       result,
       confidence,
       cause: normalizeCause(check?.cause, { result }),
-      evidenceRefs,
+      evidenceRefs: evidenceRefs.length ? evidenceRefs : checkpointRefs,
       ...(requiredUploads.length ? { uploadRefs } : {}),
       ...(demotedFrom ? { demotedFrom } : {}),
     };

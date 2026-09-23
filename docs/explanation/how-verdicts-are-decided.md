@@ -1,6 +1,6 @@
 # How a verdict is decided
 
-Last updated: 2026-09-22
+Last updated: 2026-09-23
 
 This page is for someone reading a judgment that says something other than what
 the agent claimed, and wanting to know which rule intervened and why. It
@@ -63,6 +63,16 @@ with a unit does not qualify on its own. Accepted references are stored using
 the runner's registered paths. When inline quotes match an ARIA snapshot, that
 snapshot's path is added to `evidenceRefs`. Missing or empty captures cannot
 support a pass; unreadable snapshots cannot verify quoted text.
+
+If a planned check omits usable citations, the runner attaches readable,
+registered checkpoints owned by that check to `evidenceRefs` for review. This
+attachment does not validate the observation or lift `manual_review`: the pass
+floor is evaluated before attaching those captures.
+
+The text-only reviewer receives bounded, redacted ARIA snapshot contents as
+untrusted page data. Missing, excluded, or truncated captures are marked
+explicitly. Screenshot and trace paths remain references, not images the reviewer
+has seen.
 
 Within one normalization or review call, each ARIA file is read at most once,
 including failed reads. The cache is discarded after that call, so a later

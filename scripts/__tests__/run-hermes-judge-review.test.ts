@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +14,7 @@ vi.mock("../ai-agent-adapter.mjs", () => ({
 import { resetProjectConfigForTests } from "../hermes-qa-project-config.mjs";
 import { REVIEW_CRITERIA } from "../normalize-judge-review.mjs";
 import { readLedger } from "../qa-run-ledger.mjs";
-import { buildJudgeReviewHermesQuery, readRecordedSpecHash, run } from "../run-hermes-judge-review.mjs";
+import { buildJudgeReviewHermesQuery, readRecordedSpecHash, readRunnerAriaSnapshots, run } from "../run-hermes-judge-review.mjs";
 
 const SPEC_HASH = `sha256:${"a".repeat(64)}`;
 const OTHER_HASH = `sha256:${"d".repeat(64)}`;
@@ -47,7 +47,7 @@ function judgment(overrides: Record<string, unknown> = {}) {
       harPath: null,
       videoPath: null,
       screenshots: [],
-      ariaSnapshots: [join(outputDir, "judge-1.yaml")],
+      ariaSnapshots: [join(outputDir, "evidence", "judge-1.yaml")],
       violations: [],
     },
     ...overrides,
@@ -94,7 +94,8 @@ beforeEach(() => {
   resetProjectConfigForTests();
   runAgentMock.mockReset();
   outputDir = mkdtempSync(join(tmpdir(), "qa-review-"));
-  writeFileSync(join(outputDir, "judge-1.yaml"), '- heading "Invoice"\n');
+  mkdirSync(join(outputDir, "evidence"));
+  writeFileSync(join(outputDir, "evidence", "judge-1.yaml"), '- heading "Invoice"\n');
   argv = ["--page=dashboard", `--project-root=${outputDir}`, `--output-dir=${outputDir}`];
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -189,6 +190,8 @@ describe("review stage wiring", () => {
     expect(review.agentMeta).toEqual({ adapter: "fixture", model: null, durationMs: 3 });
     expect(review.samples).toBe(1);
     expect(readPacket()).toContain(review.packetSha256);
+    expect(runAgentMock.mock.calls[0][0]).toContain('- heading "Invoice"');
+    expect(runAgentMock.mock.calls[0][0]).not.toContain("TOPSECRET");
 
     const events = readLedger(join(outputDir, "dashboard-qa-runs.jsonl"));
     expect(events).toHaveLength(1);
@@ -259,5 +262,50 @@ describe("review stage wiring", () => {
   it("fails with a usable message when no plan exists at all", async () => {
     writeArtifacts({});
     await expect(run(argv)).rejects.toThrow(/qa-judge-plan\.md/);
+  });
+});
+
+
+describe("readRunnerAriaSnapshots", () => {
+  it("bounds redacts and confines runner-owned snapshots", () => {
+    const root = mkdtempSync(join(tmpdir(), "review-evidence-"));
+    const outsideRoot = mkdtempSync(join(tmpdir(), "review-outside-"));
+    try {
+      const inside = join(root, "page.yaml");
+      const outside = join(outsideRoot, "outside.yaml");
+      const boundarySecret = "BOUNDARY_SECRET_VALUE";
+      writeFileSync(inside, "x".repeat(11_995) + boundarySecret + "\n" + "y".repeat(20_000));
+      writeFileSync(outside, "name: outside");
+      const snapshots = readRunnerAriaSnapshots({
+        runnerEvidence: { ariaSnapshots: [inside, outside] },
+        evidenceDir: root,
+        secrets: [boundarySecret],
+      });
+      expect(snapshots[0].status).toBe("truncated");
+      expect(snapshots[0].text).not.toContain(boundarySecret);
+      expect(snapshots[0].text.length).toBeLessThanOrEqual(12_000);
+      expect(snapshots[1].status).toContain("outside evidence directory");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("reports missing roots, symlink escapes, and omitted snapshots", () => {
+    const root = mkdtempSync(join(tmpdir(), "review-evidence-"));
+    const outsideRoot = mkdtempSync(join(tmpdir(), "review-outside-"));
+    try {
+      const outside = join(outsideRoot, "secret.yaml");
+      writeFileSync(outside, "name: outside");
+      symlinkSync(outside, join(root, "escape.yaml"));
+      const paths = [join(root, "escape.yaml"), ...Array.from({ length: 20 }, (_, i) => join(root, `missing-${i}.yaml`))];
+      const snapshots = readRunnerAriaSnapshots({ runnerEvidence: { ariaSnapshots: paths }, evidenceDir: root });
+      expect(snapshots[0].status).toContain("outside evidence directory");
+      expect(snapshots.at(-1)?.status).toContain("additional snapshot");
+      expect(readRunnerAriaSnapshots({ runnerEvidence: { ariaSnapshots: [] }, evidenceDir: join(root, "missing") })[0].status).toContain("unavailable");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outsideRoot, { recursive: true, force: true });
+    }
   });
 });

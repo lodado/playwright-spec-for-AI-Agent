@@ -113,6 +113,13 @@ describe("buildAbstractHermesQuery", () => {
 });
 
 describe("buildAbstractHermesQuery safety rules", () => {
+  it("keeps approved interactions executable rather than turning uploads into skip", () => {
+    const query = buildAbstractHermesQuery({ task: "abstract-qa-spec-gwt" });
+    expect(query).toContain("`safe-interaction` authorizes");
+    expect(query).toContain("declared fixture uploads");
+    expect(query).toContain("Do not replace its expected outcome with `skip`");
+  });
+
   it("to forbid planning a confirm click for safe-interaction-no-confirm", () => {
     const query = buildAbstractHermesQuery({ task: "abstract-qa-spec-gwt" });
 

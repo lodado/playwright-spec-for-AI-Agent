@@ -14,6 +14,31 @@ const runnerEvidence = { ariaSnapshots: [snapshot] };
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("runner-owned evidence provenance", () => {
+  it("links same-check captures for review without turning an unverified claim into pass", () => {
+    const plannedChecks = [{ checkId: "score", item: "score" }];
+    const raw = { checks: [{ item: "score", result: "pass", detail: 'Observed "98 pts", not "Failed"' }] };
+    const evidence = { ...runnerEvidence, checkpoints: [{ checkId: "score", evidenceRefs: [snapshot] }] };
+    const decision = normalizeBrowseDecision(raw, { plannedChecks, runnerEvidence: evidence });
+    expect(decision.checks[0].evidenceRefs).toEqual([snapshot]);
+    expect(decision.checks[0].result).toBe("manual_review");
+    expect(decision.checks[0].demotedFrom).toBe("pass");
+    expect(normalizeBrowseDecision(decision, { plannedChecks, runnerEvidence: evidence }).status).toBe("manual_review");
+  });
+
+  it("does not link foreign, unregistered, or missing checkpoint files", () => {
+    const plannedChecks = [{ checkId: "score", item: "score" }];
+    for (const checkpoint of [
+      { checkId: "other", evidenceRefs: [snapshot] },
+      { checkId: "score", evidenceRefs: [unrelated] },
+      { checkId: "score", evidenceRefs: [join(dir, "missing.yaml")] },
+    ]) {
+      const decision = normalizeBrowseDecision({ checks: [{ item: "score", result: "pass", detail: "Looks fine" }] },
+        { plannedChecks, runnerEvidence: { ...runnerEvidence, checkpoints: [checkpoint] } });
+      expect(decision.checks[0].evidenceRefs).toEqual([]);
+      expect(decision.checks[0].result).toBe("manual_review");
+    }
+  });
+
   it.each([
     { detail: 'Observed "98 pts"' },
     { detail: "Observed 98%" },
