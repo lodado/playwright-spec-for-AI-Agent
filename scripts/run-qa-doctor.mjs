@@ -428,62 +428,68 @@ function artifactChecks(page) {
 
 function credentialChecks(pages) {
   const authPages = pages.filter(pageAuthRequired);
-  const email = process.env.STAGING_QA_EMAIL?.trim() ?? "";
-  const password = process.env.STAGING_QA_PASSWORD?.trim() ?? "";
-  const session = hasSessionProfile();
-  // A storage state or an attached browser IS the session, so a project using
-  // either needs no credentials at all — failing it here would send the
-  // operator hunting for a password the run never asks for.
-  const seeded = authPages.filter(page => getStorageStatePath(page));
-  const attachUrl = process.env.QA_BROWSER_CDP_URL?.trim() ?? "";
+  return credentialVerdicts({
+    authPages,
+    seededPages: authPages.filter(page => getStorageStatePath(page)),
+    email: process.env.STAGING_QA_EMAIL?.trim() ?? "",
+    password: process.env.STAGING_QA_PASSWORD?.trim() ?? "",
+    session: hasSessionProfile(),
+    attachUrl: process.env.QA_BROWSER_CDP_URL?.trim() ?? "",
+  });
+}
 
-  const checks = [
-    check(
-      "session profile",
-      session ? "pass" : "skip",
-      session
-        ? "pre-authenticated browser session present"
-        : "none — judge would need credentials in the prompt",
-      session ? "" : "Run `npx playwright-spec-for-ai-agent login` to create one."
-    ),
-  ];
+/**
+ * A storage state or an attached browser IS the session, so a project using
+ * either needs no credentials at all — failing it here would send the
+ * operator hunting for a password the run never asks for.
+ */
+function credentialVerdicts({ authPages, seededPages, email, password, session, attachUrl }) {
+  const sessionCheck = check(
+    "session profile",
+    session ? "pass" : "skip",
+    session
+      ? "pre-authenticated browser session present"
+      : "none — judge would need credentials in the prompt",
+    session ? "" : "Run `npx playwright-spec-for-ai-agent login` to create one."
+  );
 
   if (authPages.length === 0) {
-    checks.push(
-      check("credentials", "skip", "no configured page requires login")
-    );
-    return checks;
+    return [
+      sessionCheck,
+      check("credentials", "skip", "no configured page requires login"),
+    ];
   }
 
   if (attachUrl) {
-    checks.push(
+    return [
+      sessionCheck,
       check(
         "credentials",
         "skip",
         `QA_BROWSER_CDP_URL=${attachUrl} — judge attaches to your browser, no credentials needed`
-      )
-    );
-    return checks;
+      ),
+    ];
   }
 
-  if (seeded.length === authPages.length) {
-    checks.push(
+  if (seededPages.length === authPages.length) {
+    return [
+      sessionCheck,
       check(
         "credentials",
         "pass",
-        `storage state configured for: ${seeded.join(", ")} — no credentials needed`
-      )
-    );
-    return checks;
+        `storage state configured for: ${seededPages.join(", ")} — no credentials needed`
+      ),
+    ];
   }
 
   const have = email && password;
-  const needing = authPages.filter(page => !getStorageStatePath(page));
+  const needing = authPages.filter(page => !seededPages.includes(page));
   const detail = `${email ? redactEmail(email) : "STAGING_QA_EMAIL unset"} / ${
     password ? "password set" : "STAGING_QA_PASSWORD unset"
   } — required by: ${needing.join(", ")}`;
 
-  checks.push(
+  return [
+    sessionCheck,
     have || session
       ? check("credentials", have ? "pass" : "warn", detail,
           have ? "" : "The session profile covers judge runs; `login` still needs these.")
@@ -492,9 +498,16 @@ function credentialChecks(pages) {
           "fail",
           detail,
           "Export STAGING_QA_EMAIL and STAGING_QA_PASSWORD, or run `login` once to store a session."
-        )
-  );
-  return checks;
+        ),
+  ];
+}
+
+function browserbaseAuthCheck(page, { required, context, seeded, hint }) {
+  return check(`${page} · Browserbase auth`, !required ? "skip" : context || seeded ? "pass" : "fail",
+    !required ? "page does not require login" : context || seeded
+      ? `${context ? "saved Context present" : "storageState present"}; site login not verified live`
+      : "No saved Context or existing storageState for required login; site login not verified live",
+    required && !context && !seeded ? hint : "");
 }
 
 /** Presence and Context existence are not proof of an authenticated site session. */
@@ -510,10 +523,10 @@ async function browserbaseChecks(pages, argv, checkNetwork) {
         `Export ${name}.`)),
   ];
   const conflict = argv.some(arg => arg === "--cdp-url" || arg.startsWith("--cdp-url=") ||
-    arg === "--creds-in-prompt" || arg.startsWith("--creds-in-prompt=")) ||
+    arg === "--credentials-in-prompt") ||
     Boolean(process.env.QA_BROWSER_CDP_URL?.trim());
   checks.push(check("Browserbase options", conflict ? "fail" : "pass",
-    conflict ? "Browserbase does not support --cdp-url, QA_BROWSER_CDP_URL or --creds-in-prompt" : "no conflicting local browser options",
+    conflict ? "Browserbase does not support --cdp-url, QA_BROWSER_CDP_URL or --credentials-in-prompt" : "no conflicting local browser options",
     conflict ? "Remove the conflicting option or select --browser-provider=local." : ""));
   let attach = false;
   try { attach = describeAdapter().capabilities.auth === "cdp-attach"; } catch { /* adapterChecks reports the error */ }
@@ -536,13 +549,12 @@ async function browserbaseChecks(pages, argv, checkNetwork) {
       }
     }
     const storageState = getStorageStatePath(page);
-    const seeded = storageState && existsSync(storageState);
-    const required = pageAuthRequired(page);
-    checks.push(check(`${page} · Browserbase auth`, !required ? "skip" : context || seeded ? "pass" : "fail",
-      !required ? "page does not require login" : context || seeded
-        ? `${context ? "saved Context present" : "storageState present"}; site login not verified live`
-        : "No saved Context or existing storageState for required login; site login not verified live",
-      required && !context && !seeded ? hint : ""));
+    checks.push(browserbaseAuthCheck(page, {
+      required: pageAuthRequired(page),
+      context,
+      seeded: storageState && existsSync(storageState),
+      hint,
+    }));
 
     if (!checkNetwork) continue;
     const name = `${page} · Browserbase context remote`;

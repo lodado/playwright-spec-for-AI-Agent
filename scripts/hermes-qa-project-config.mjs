@@ -52,6 +52,7 @@ const TOP_LEVEL_KEYS = [
   "fixtures",
   "livePolicies",
   "hooks",
+  "github",
 ];
 const PATHS_KEYS = ["specDir", "outputDir"];
 const ACCOUNT_KEYS = [
@@ -74,6 +75,7 @@ const PAGE_KEYS = [
 ];
 const LIVE_POLICY_KEYS = ["liveRunPolicy", "stagingMode"];
 const HOOK_KEYS = ["onJudgment", "onReview"];
+const GITHUB_KEYS = ["issueFooter"];
 
 /** @type {Record<string, unknown> | null} */
 let activeConfig = null;
@@ -320,6 +322,8 @@ function validateFileConfig(raw) {
     }
   }
 
+  collectKeyIssues(issues, raw.github, GITHUB_KEYS, "github.");
+
   return issues;
 }
 
@@ -380,6 +384,7 @@ function normalizeFileConfig(raw, { strict = false } = {}) {
     fixtures,
     livePolicies: isPlainObject(raw.livePolicies) ? raw.livePolicies : {},
     hooks: isPlainObject(raw.hooks) ? raw.hooks : {},
+    github: isPlainObject(raw.github) ? raw.github : {},
   };
 }
 
@@ -402,6 +407,7 @@ function buildDefaultConfig(cwd, overrides = {}) {
     fixtures: {},
     livePolicies: {},
     hooks: {},
+    github: {},
     strict: Boolean(overrides.strict),
     cliOverrides: {
       specDir: overrides.specDir || "",
@@ -431,41 +437,39 @@ export async function loadProjectConfig(argv = process.argv.slice(2)) {
   }
 
   const cwd = process.cwd();
-  const configPath =
-    overrides.configPath || findConfigFile(overrides.root || cwd);
+  const found = overrides.configPath || findConfigFile(overrides.root || cwd);
+  const configPath = found ? resolve(found) : null;
+  const fileConfig = configPath
+    ? normalizeFileConfig(await importConfigModule(configPath), {
+        strict: overrides.strict,
+      })
+    : null;
 
-  let config = buildDefaultConfig(cwd, overrides);
-
-  if (configPath) {
-    const fileConfig = normalizeFileConfig(
-      await importConfigModule(resolve(configPath)),
-      { strict: overrides.strict }
-    );
-    config = deepMerge(config, fileConfig);
-    config.configPath = resolve(configPath);
-    if (!config.root) {
-      config.root = dirname(resolve(configPath));
-    }
-  }
-
-  if (overrides.root) {
-    config.root = resolve(overrides.root);
-  } else if (!config.root) {
-    config.root = cwd;
-  }
-
-  if (overrides.specDir) {
-    config.paths.specDir = overrides.specDir;
-    config.cliOverrides.specDir = overrides.specDir;
-  }
-  if (overrides.outputDir) {
-    config.paths.outputDir = overrides.outputDir;
-    config.cliOverrides.outputDir = overrides.outputDir;
-  }
-
-  activeConfig = config;
+  activeConfig = resolveProjectConfig({ cwd, overrides, configPath, fileConfig });
   activeOverrideSignature = signature;
   return activeConfig;
+}
+
+/**
+ * Layer built-in defaults, the config file, then CLI flags — each later layer
+ * wins. A file without `root` is rooted at its own directory.
+ */
+function resolveProjectConfig({ cwd, overrides, configPath, fileConfig }) {
+  const defaults = buildDefaultConfig(cwd, overrides);
+  const merged = fileConfig
+    ? { ...deepMerge(defaults, fileConfig), configPath }
+    : defaults;
+  const fileRoot = merged.root || (configPath ? dirname(configPath) : null);
+
+  return {
+    ...merged,
+    root: overrides.root ? resolve(cwd, overrides.root) : fileRoot || cwd,
+    paths: {
+      ...merged.paths,
+      ...(overrides.specDir ? { specDir: overrides.specDir } : {}),
+      ...(overrides.outputDir ? { outputDir: overrides.outputDir } : {}),
+    },
+  };
 }
 
 /**
@@ -500,6 +504,12 @@ export function getPageConfig(page) {
   const config = getProjectConfig();
   const pageConfig = config.pages?.[page];
   return isPlainObject(pageConfig) ? pageConfig : {};
+}
+
+/** A per-page value wins over the global `staging` block (monorepos). */
+function pageOrStaging(page, key) {
+  const pageConfig = page ? getPageConfig(page) : {};
+  return pageConfig[key] ?? getProjectConfig().staging?.[key];
 }
 
 export function resolveSpecDirForPage(page) {
@@ -621,10 +631,8 @@ function pageFromArgv(argv) {
  * @param {string} [page] defaults to `--page=` in argv
  */
 export function applyStagingUrlDefaults(config, argv = [], page = pageFromArgv(argv)) {
-  const project = getProjectConfig();
-  const global = project.staging ?? {};
-  const pageConfig = page ? getPageConfig(page) : {};
-  const pick = key => pageConfig[key] ?? global[key];
+  const global = getProjectConfig().staging ?? {};
+  const pick = key => pageOrStaging(page, key);
 
   const hasCli = prefix =>
     argv.some(arg => arg.startsWith(prefix));
@@ -653,9 +661,7 @@ export function applyStagingUrlDefaults(config, argv = [], page = pageFromArgv(a
 /** Effective staging origin for a page: env > page config > global config. */
 export function resolveBaseUrlForPage(page) {
   if (process.env.STAGING_QA_BASE_URL) return process.env.STAGING_QA_BASE_URL;
-  const project = getProjectConfig();
-  const pageConfig = page ? getPageConfig(page) : {};
-  const baseUrl = pageConfig.baseUrl ?? project.staging?.baseUrl;
+  const baseUrl = pageOrStaging(page, "baseUrl");
   return baseUrl ? String(baseUrl) : "";
 }
 
@@ -722,7 +728,6 @@ export function getAllowedOrigins(page) {
   }
 }
 
-/** Deploy-version endpoint used to skip judging an unchanged staging build. */
 /**
  * Path to a Playwright `storageState` file that already holds a valid session.
  * Apps whose e2e suite mints its session in code have no login form for the
@@ -730,11 +735,9 @@ export function getAllowedOrigins(page) {
  * signed in — and it keeps credentials out of this tool entirely.
  */
 export function getStorageStatePath(page) {
-  const project = getProjectConfig();
-  const pageConfig = page ? getPageConfig(page) : {};
-  const configured = pageConfig.storageState ?? project.staging?.storageState;
+  const configured = pageOrStaging(page, "storageState");
   if (!configured) return null;
-  return resolve(project.root, String(configured));
+  return resolve(getProjectConfig().root, String(configured));
 }
 
 /**
@@ -748,10 +751,9 @@ export function getGithubIssueConfig() {
   return { footer: footer ? String(footer) : "" };
 }
 
+/** Deploy-version endpoint used to skip judging an unchanged staging build. */
 export function getStagingVersionUrl(page) {
-  const project = getProjectConfig();
-  const pageConfig = page ? getPageConfig(page) : {};
-  const versionUrl = pageConfig.versionUrl ?? project.staging?.versionUrl;
+  const versionUrl = pageOrStaging(page, "versionUrl");
   return versionUrl ? String(versionUrl) : null;
 }
 

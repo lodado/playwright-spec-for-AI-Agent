@@ -13,6 +13,21 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [7.5.3](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.5.2...v7.5.3) (2026-09-24)
+
+### Fixes
+
+* `doctor` rejects the real `--credentials-in-prompt` flag under Browserbase instead of the misspelled `--creds-in-prompt`.
+* Accept the documented `github.issueFooter` config key under `--strict-config`, and carry it from the config file to `issues` (it was silently dropped).
+* Rewrite `--expected-account-state VALUE` and `--state VALUE` to their `=` form like every other value flag, instead of dropping them.
+* Stop offering upload fixtures to checks that cannot attach them: only `safe-interaction` checks see fixtures in the judge plan and the abstraction prompt, `spec` warns about a fixture on a `safe-interaction-no-confirm` test, and a no-confirm check that needs a file is classified `SPEC_GAP`.
+* Cite a checkpoint's ARIA snapshot along with its screenshot, and demote a pass whose cited snapshot contains none of its quoted observations.
+* Quote Playwright test bodies up to 3,200 characters so conditional branches reach the judge, list uploads once in the judge prompt, and tell the judge each upload check needs its own upload and checkpoint.
+
+### Refactoring
+
+* Split the judge, project-config, `doctor`, and CLI entry flows into named steps with their decisions in module-private pure functions; the preflight plan is no longer written to disk.
+
 ## [7.5.2](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.5.1...v7.5.2) (2026-09-23)
 
 ### Fixes

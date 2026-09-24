@@ -109,29 +109,67 @@ function resolveEvidenceRefs(check, runnerEvidence, {
       // An unreadable capture cannot support a pass.
     }
   }
-  if (cited.size) return [...cited];
-
-  const quotes = [...String(check?.detail ?? "").matchAll(/"([^"\n]*)"|'([^'\n]*)'|“([^”\n]*)”/g)]
-    .map(match => (match[1] ?? match[2] ?? match[3]).replace(/\s+/g, " ").trim());
-  if (!quotes.length || quotes.some(quote => quote.length < 2)) return [];
-  const patterns = quotes.map(quote => new RegExp(
-    "(^|[^\\p{L}\\p{N}_])" + quote.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?=$|[^\\p{L}\\p{N}_])",
-    "u"
-  ));
-  for (const file of Array.isArray(runnerEvidence?.ariaSnapshots) ? runnerEvidence.ariaSnapshots : []) {
-    if (!artifacts.includes(file)) continue;
-    if (!ariaCache.has(file)) {
-      ariaCache.set(file, null);
-      try {
-        if (fileExists(file)) ariaCache.set(file, readText(file).replace(/\s+/g, " "));
-      } catch {
-        // Cache unavailable evidence too, but never across normalization calls.
+  if (cited.size) {
+    // A checkpoint captures a screenshot and an ARIA snapshot together; the
+    // review stage can read only the snapshot, so citing one cites both.
+    for (const checkpoint of runnerEvidence?.checkpoints ?? []) {
+      if (checkpoint.checkId !== check?.checkId) continue;
+      const refs = checkpoint.evidenceRefs ?? [];
+      if (!refs.some(ref => cited.has(ref))) continue;
+      for (const ref of refs) {
+        try {
+          if (artifacts.includes(ref) && fileExists(ref)) cited.add(ref);
+        } catch {
+          // An unreadable capture cannot support a pass.
+        }
       }
     }
-    const snapshot = ariaCache.get(file);
-    if (snapshot !== null && patterns.every(pattern => pattern.test(snapshot))) return [file];
+    // A cited ARIA capture that contains none of the detail's quotes is from
+    // another moment than the one described. Not every quote must match:
+    // details also quote what was absent ("검수 필요" rather than "실패").
+    const citedAria = [...cited].filter(file => ARIA_EXTENSIONS.test(file));
+    const patterns = quotePatterns(check?.detail).filter(({ quote }) => quote.length >= 2);
+    if (citedAria.length && patterns.length) {
+      const text = citedAria.map(file => readAria(file, { ariaCache, readText, fileExists }) ?? "").join("\n");
+      if (!patterns.some(({ pattern }) => pattern.test(text))) return [];
+    }
+    return [...cited];
+  }
+
+  const patterns = quotePatterns(check?.detail);
+  if (!patterns.length || patterns.some(({ quote }) => quote.length < 2)) return [];
+  for (const file of Array.isArray(runnerEvidence?.ariaSnapshots) ? runnerEvidence.ariaSnapshots : []) {
+    if (!artifacts.includes(file)) continue;
+    const snapshot = readAria(file, { ariaCache, readText, fileExists });
+    if (snapshot !== null && patterns.every(({ pattern }) => pattern.test(snapshot))) return [file];
   }
   return [];
+}
+
+const ARIA_EXTENSIONS = /\.(ya?ml|txt)$/i;
+
+function quotePatterns(detail) {
+  return [...String(detail ?? "").matchAll(/"([^"\n]*)"|'([^'\n]*)'|“([^”\n]*)”/g)]
+    .map(match => (match[1] ?? match[2] ?? match[3]).replace(/\s+/g, " ").trim())
+    .map(quote => ({
+      quote,
+      pattern: new RegExp(
+        "(^|[^\\p{L}\\p{N}_])" + quote.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?=$|[^\\p{L}\\p{N}_])",
+        "u"
+      ),
+    }));
+}
+
+function readAria(file, { ariaCache, readText, fileExists }) {
+  if (!ariaCache.has(file)) {
+    ariaCache.set(file, null);
+    try {
+      if (fileExists(file)) ariaCache.set(file, readText(file).replace(/\s+/g, " "));
+    } catch {
+      // Cache unavailable evidence too, but never across normalization calls.
+    }
+  }
+  return ariaCache.get(file);
 }
 
 export function hasConcreteEvidence(check, runnerEvidence = null, options = {}) {

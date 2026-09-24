@@ -263,6 +263,8 @@ const VALUE_FLAGS = new Set([
   "--auth-required",
   "--expected-plan",
   "--expected-subscription-status",
+  "--expected-account-state",
+  "--state",
   "--account-notes",
   "--env-file",
   "--fail-on",
@@ -475,37 +477,52 @@ function runScript(scriptName, args) {
   process.exit(result.status ?? EXIT_ENVIRONMENT);
 }
 
-function main() {
-  const argv = normalizeFlags(process.argv.slice(2));
-  loadEnvFile(argv);
-  const args = argv.filter(arg => !arg.startsWith(ENV_FILE_PREFIX));
-
-  if (args.includes("--version") || args.includes("-V")) {
-    console.log(packageVersion());
-    process.exit(EXIT_OK);
-  }
+/**
+ * What an invocation asks for, decided from its arguments alone — `main`
+ * performs it. Help for a command wins over running it.
+ */
+function planInvocation(args) {
+  if (args.includes("--version") || args.includes("-V")) return { kind: "version" };
 
   const [command, ...rest] = args;
 
   if (command === undefined || command === "help" || command === "--help" || command === "-h") {
     const topic = rest.find(arg => !arg.startsWith("-"));
-    if (topic && COMMANDS[topic]) printCommandHelp(topic);
+    return topic && COMMANDS[topic]
+      ? { kind: "command-help", command: topic }
+      : { kind: "help" };
+  }
+  if (!COMMANDS[command]) {
+    return { kind: "unknown", command, suggestion: suggestCommand(command) };
+  }
+  if (rest.includes("--help") || rest.includes("-h")) {
+    return { kind: "command-help", command };
+  }
+  return { kind: "run", command, args: rest };
+}
+
+function main() {
+  const argv = normalizeFlags(process.argv.slice(2));
+  loadEnvFile(argv);
+  const invocation = planInvocation(argv.filter(arg => !arg.startsWith(ENV_FILE_PREFIX)));
+
+  if (invocation.kind === "version") {
+    console.log(packageVersion());
+    process.exit(EXIT_OK);
+  }
+  if (invocation.kind === "help") {
     printHelp();
     process.exit(EXIT_OK);
   }
-
-  const entry = COMMANDS[command];
-  if (!entry) {
-    console.error(`Unknown command: ${command}\n`);
-    const suggestion = suggestCommand(command);
-    if (suggestion) console.error(`Did you mean "${suggestion}"?\n`);
+  if (invocation.kind === "command-help") printCommandHelp(invocation.command);
+  if (invocation.kind === "unknown") {
+    console.error(`Unknown command: ${invocation.command}\n`);
+    if (invocation.suggestion) console.error(`Did you mean "${invocation.suggestion}"?\n`);
     printHelp();
     process.exit(EXIT_USAGE);
   }
 
-  if (rest.includes("--help") || rest.includes("-h")) printCommandHelp(command);
-
-  runScript(entry.script, rest);
+  runScript(COMMANDS[invocation.command].script, invocation.args);
 }
 
 main();

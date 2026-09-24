@@ -530,6 +530,14 @@ export function parseSpecFile(fileName, source) {
     } = declared;
 
     const fixtures = resolveTestFixtures(source, block.index, fileFixtures);
+    if (
+      liveRunPolicy === "judgment-interaction-no-confirm" &&
+      Object.keys(parseFixturesBeforeIndex(source, block.index)).length > 0
+    ) {
+      console.warn(
+        `[qa-spec] ${fileName}: "${block.title}" declares @qa-fixture but is safe-interaction-no-confirm — the judge never attaches files on that policy. Use safe-interaction if selecting a file cannot submit it.`
+      );
+    }
 
     return {
       title: block.title,

@@ -266,3 +266,59 @@ describe("Stagehand doctor", () => {
     expect(find(report, "stagehand limits").status).toBe("pass");
   });
 });
+
+// Oracle refactor-entry-flows O14 (P5): the `credentials` verdict per credential source.
+describe("credential readiness", () => {
+  const SOURCES = [
+    { source: "no-auth-page", credentials: "skip", sessionProfile: "skip" },
+    { source: "cdp-url", credentials: "skip", sessionProfile: "skip" },
+    { source: "all-seeded", credentials: "pass", sessionProfile: "skip" },
+    { source: "env-credentials", credentials: "pass", sessionProfile: "skip" },
+    { source: "session-profile-only", credentials: "warn", sessionProfile: "pass" },
+    { source: "nothing", credentials: "fail", sessionProfile: "skip" },
+  ] as const;
+
+  it.each(SOURCES)(
+    "[O14] $source → credentials $credentials",
+    async ({ source, credentials, sessionProfile }) => {
+      const specDir = join(root, "specs");
+      mkdirSync(specDir, { recursive: true });
+      writeFileSync(join(specDir, "demo.spec.ts"), SPEC);
+      const configPath = join(root, "playwright-spec-for-ai-agent.config.mjs");
+      writeFileSync(
+        configPath,
+        `export default ${JSON.stringify({
+          root,
+          paths: { specDir, outputDir: join(root, "__QA__") },
+          staging: {
+            authRequired: source !== "no-auth-page",
+            ...(source === "all-seeded" ? { storageState: "state.json" } : {}),
+          },
+          pages: { demo: { baseUrl: "https://staging.acme.test", targetPath: "/dashboard" } },
+        })};\n`,
+      );
+      if (source === "session-profile-only") {
+        mkdirSync(join(root, ".private", "qa-browser-profile"), { recursive: true });
+        writeFileSync(join(root, ".private", "qa-browser-profile", ".qa-session"), "{}");
+      }
+      vi.stubEnv("STAGING_QA_EMAIL", source === "env-credentials" ? "qa@acme.test" : "");
+      vi.stubEnv("STAGING_QA_PASSWORD", source === "env-credentials" ? "pw" : "");
+      vi.stubEnv("QA_BROWSER_CDP_URL", source === "cdp-url" ? "http://127.0.0.1:9222" : "");
+      vi.stubEnv("QA_BROWSER_PROVIDER", "");
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+      // The session profile lives under the working directory, as `login` writes it.
+      const previousCwd = process.cwd();
+      process.chdir(root);
+      try {
+        const report = await collectDoctorReport([`--config=${configPath}`, `--project-root=${root}`]);
+
+        expect(find(report, "credentials").status).toBe(credentials);
+        expect(find(report, "session profile").status).toBe(sessionProfile);
+        expect(fetchSpy).toHaveBeenCalledTimes(0);
+      } finally {
+        process.chdir(previousCwd);
+      }
+    },
+  );
+});

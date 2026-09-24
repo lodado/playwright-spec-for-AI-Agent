@@ -177,11 +177,12 @@ export function buildBrowseHermesQuery({
     "  - **skip** when the mocked precondition cannot exist on this account at all — the test needs `remaining_credits: 0` and you can see the account has 7, or it needs pay-as-you-go and this account is on Free. Quote what the account actually shows. This is not `manual_review`: nothing was ambiguous, the check simply had no way to run here.",
     "- For other semantic / abstracted expectations: same rule — reasonable for intent → pass; ambiguous → manual_review.",
     "- If blocked on live → **skip**.",
+    "- An excerpt ending in `// … excerpt truncated` is not the whole check: never `fail` on behaviour the excerpt does not show — use `manual_review`.",
     "",
     "## Evidence rules (enforced after you answer)",
-    "- When qa_checkpoint is available, call it with the exact checkId and current full URL immediately after each check, BEFORE closing a dialog, navigating away or changing state. Copy its evidenceRefs into the result.",
-    "- Only executable-interaction checks with a declared upload fixture may call qa_upload_fixture with checkId, current full URL, the fixture name (usually upload), and an exact file-input selector if needed. A judgment-interaction-no-confirm does not authorize file attachment: selection can auto-submit, so judge that path without uploading. The tool attaches approved bytes even to a hidden input. Do not skip an authorized upload merely because browser tools lack file upload. Never upload through terminal scripts or manufacture file content.",
-    "- An upload receipt proves attachment only, not processing success. Verify completion/failure in the UI and capture that state separately. Return uploadRefs containing the receiptId; receipts are bound to one checkId and cannot satisfy another check, even for the same file. Do not repeat an upload after an unknown outcome.",
+    "- When qa_checkpoint is available, call it with the exact checkId and current full URL immediately after each check, BEFORE closing a dialog, navigating away or changing state. Copy its evidenceRefs into the result. A pass may quote only text a checkpoint of that check captured: call qa_checkpoint again the moment each quoted state appears, including a transient one such as a processing indicator, before it changes.",
+    "- Only executable-interaction checks with a declared upload fixture may call qa_upload_fixture with checkId, current full URL, the fixture name (usually upload), and an exact file-input selector if needed. A judgment-interaction-no-confirm does not authorize file attachment: selection can auto-submit, so judge that path without uploading. A judgment-interaction-no-confirm check whose plan needs an attached file cannot run live: report it `skip` with cause `SPEC_GAP` (the annotation withholds the file its plan needs), never `HARNESS_DEFECT`. The tool attaches approved bytes even to a hidden input. Do not skip an authorized upload merely because browser tools lack file upload. Never upload through terminal scripts or manufacture file content.",
+    "- An upload receipt proves attachment only, not processing success. Verify completion/failure in the UI and capture that state separately. Return uploadRefs containing the receiptId; receipts are bound to one checkId and cannot satisfy another check, even for the same file. Each executable-interaction check that declares a fixture needs its own upload under its own checkId, even when an earlier check uploaded the same file; never reuse another check's upload or outcome. Within one check, do not repeat an upload after an unknown outcome.",
     "- Every `pass` needs a runner-captured artifact or exact on-screen text in quotes that can be verified in a captured ARIA snapshot. A URL or number alone is not evidence.",
     "- A `pass` whose `detail` cites nothing concrete, or whose `confidence` is `low`, is downgraded to `manual_review` automatically. Do not pad — report what you saw.",
     "- `evidenceRefs` may name artifacts captured by the runner in this run; never invent paths or cite earlier runs. Leave it `[]` when unknown; verified ARIA quotes will be linked automatically. Final snapshots may not retain earlier screens, so report unavailable evidence honestly.",
@@ -396,8 +397,20 @@ async function detectAccountState({
 /**
  * Everything needed to run (or dry-run) the judge: resolved plan, prompt, turn
  * budget, and the planned-check list the verdict floor is measured against.
+ * Writes the plan document `review` later reads.
  */
-export function prepareJudgePlan({
+export function prepareJudgePlan(inputs) {
+  const { plan, planMarkdown } = buildJudgePlan(inputs);
+  writeFileSync(inputs.paths.specJudgePlanMd, planMarkdown);
+  return plan;
+}
+
+/**
+ * The plan without writing it. The preflight plan uses this: it only has to
+ * prove the run is judgeable, and writing it would leave a plan on disk for a
+ * run that never reached the final one.
+ */
+function buildJudgePlan({
   page,
   target,
   targetUrl,
@@ -476,7 +489,11 @@ export function prepareJudgePlan({
   // the agent was handed — which the review stage then flags, correctly.
   const plannedChecks = checklist.map(({ checkId, title, scenarioId, sourceFile, fixtures, requiredUploadFixtures, liveRunPolicy }) => ({
     checkId, item: title, scenarioId, sourceFile, liveRunPolicy,
-    uploadFixtures: { ...uploadFixtures.defaults, ...resolveFixturePaths(fixtures) },
+    // Only executable-interaction may attach a file (qa_upload_fixture refuses
+    // the rest), so no other check is offered one.
+    uploadFixtures: liveRunPolicy === "executable-interaction"
+      ? { ...uploadFixtures.defaults, ...resolveFixturePaths(fixtures) }
+      : {},
     requiredUploadFixtures: liveRunPolicy === "executable-interaction" ? resolveFixturePaths(requiredUploadFixtures) : {},
   }));
 
@@ -503,35 +520,33 @@ export function prepareJudgePlan({
     specSourceFiles,
   });
 
-  // `review` re-checks this stamp against the judgment's `specHash` before it
-  // critiques anything. Stamping the value the judgment will carry is what
-  // makes that check real: the plan's own front matter records `sourceHash`
-  // (a different key, absent entirely when abstract-ai never ran), so the
-  // reviewer found nothing to compare and silently reviewed any revision.
-  writeFileSync(
-    paths.specJudgePlanMd,
-    `<!-- specHash: ${specHash} -->\n${judgeDocument}`
-  );
-
   return {
-    query: buildBrowseHermesQuery({
-      judgeDocument,
+    plan: {
+      query: buildBrowseHermesQuery({
+        judgeDocument,
+        stagingLogin,
+        preauthenticated,
+      }),
+      uploadFixtures,
+      secrets: [config.email, config.password].filter(Boolean),
       stagingLogin,
-      preauthenticated,
-    }),
-    uploadFixtures,
-    secrets: [config.email, config.password].filter(Boolean),
-    stagingLogin,
-    specPath: resolved.path,
-    specHash,
-    planSource,
-    plannedChecks,
-    notApplicable,
-    readOnly: isReadOnlyPlan(checklist),
-    // An adapter that cannot cap its turns ignores the budget entirely.
-    maxTurns: adapter.capabilities.supportsMaxTurns
-      ? resolveJudgeTurnBudget(plannedChecks.length)
-      : null,
+      specPath: resolved.path,
+      specHash,
+      planSource,
+      plannedChecks,
+      notApplicable,
+      readOnly: isReadOnlyPlan(checklist),
+      // An adapter that cannot cap its turns ignores the budget entirely.
+      maxTurns: adapter.capabilities.supportsMaxTurns
+        ? resolveJudgeTurnBudget(plannedChecks.length)
+        : null,
+    },
+    // `review` re-checks this stamp against the judgment's `specHash` before it
+    // critiques anything. Stamping the value the judgment will carry is what
+    // makes that check real: the plan's own front matter records `sourceHash`
+    // (a different key, absent entirely when abstract-ai never ran), so the
+    // reviewer found nothing to compare and silently reviewed any revision.
+    planMarkdown: `<!-- specHash: ${specHash} -->\n${judgeDocument}`,
   };
 }
 
@@ -779,17 +794,47 @@ function verdictExitCode(status, failOn) {
   return EXIT_OK;
 }
 
-export async function main(argv = process.argv.slice(2)) {
+/**
+ * Session-first: with an operator-authenticated browser the run needs no
+ * credentials anywhere, and --credentials-in-prompt forces the legacy flow
+ * (plaintext credentials inside the prompt). The matrix reads the adapter's
+ * declared auth capability, never its name. A configured storage state IS the
+ * session, so nothing needs to type credentials — demanding them anyway blocks
+ * exactly the apps this path exists for (no login form to drive at all).
+ */
+function decideAuthMode({ auth, credentialsInPrompt, cloud, attachUrl, sessionProfile, seedable }) {
+  const selfPrelogin = auth === "self-prelogin";
+  const cdpAttach = auth === "cdp-attach";
+  const attachable = cdpAttach && (cloud || Boolean(attachUrl) || sessionProfile);
+  return {
+    requireCredentials:
+      credentialsInPrompt || (!seedable && selfPrelogin) || (!seedable && !attachable),
+    // A session covers login; the run is preauthenticated only when the page
+    // also requires login.
+    sessionCoversLogin:
+      !credentialsInPrompt && (selfPrelogin || attachable || (seedable && cdpAttach)),
+  };
+}
+
+function assertBrowserbaseCompatible({ adapter, argv, attachUrl }) {
+  if (adapter.capabilities.auth !== "cdp-attach") {
+    throw new UsageError("Browserbase requires an AI adapter with auth=cdp-attach.", { hint: "Use hermes, or exec with QA_AGENT_AUTH=cdp-attach and a CDP-capable browser tool." });
+  }
+  if (attachUrl || argv.includes("--cdp-url")) throw new UsageError("--cdp-url / QA_BROWSER_CDP_URL cannot be combined with Browserbase.");
+  if (argv.includes("--credentials-in-prompt")) throw new UsageError("--credentials-in-prompt cannot be combined with Browserbase. Use Browserbase login or storageState.");
+}
+
+/**
+ * Everything a run is decided from — flags, config, adapter, target and auth
+ * mode — resolved before any browser or agent is touched.
+ */
+async function resolveJudgeRun(argv) {
   await ensureProjectConfig(argv);
   const adapter = await prepareAdapter();
   const browserProvider = resolveBrowserProvider(argv);
   const cloud = browserProvider === "browserbase";
   const cloudOptions = cloud ? browserbaseOptions(argv) : null;
-  if (cloud && adapter.capabilities.auth !== "cdp-attach") {
-    throw new UsageError("Browserbase requires an AI adapter with auth=cdp-attach.", { hint: "Use hermes, or exec with QA_AGENT_AUTH=cdp-attach and a CDP-capable browser tool." });
-  }
-  if (cloud && (resolveAttachUrl(argv) || argv.includes("--cdp-url"))) throw new UsageError("--cdp-url / QA_BROWSER_CDP_URL cannot be combined with Browserbase.");
-  if (cloud && argv.includes("--credentials-in-prompt")) throw new UsageError("--credentials-in-prompt cannot be combined with Browserbase. Use Browserbase login or storageState.");
+  if (cloud) assertBrowserbaseCompatible({ adapter, argv, attachUrl: resolveAttachUrl(argv) });
   const failOn = parseFailOn(argv);
   const dryRun = argv.includes("--dry-run");
   const page = parsePageArg(argv);
@@ -807,32 +852,25 @@ export async function main(argv = process.argv.slice(2)) {
     });
   }
 
-  // Session-first: with an operator-authenticated browser profile the run needs
-  // no credentials anywhere. --credentials-in-prompt forces the legacy flow
-  // (plaintext credentials inside the prompt). The matrix reads from the
-  // adapter's declared capabilities, never from its name.
-  const credentialsInPrompt = argv.includes("--credentials-in-prompt");
-  const selfPrelogin = adapter.capabilities.auth === "self-prelogin";
   const cdpAttach = adapter.capabilities.auth === "cdp-attach";
   const attachUrl = cdpAttach ? resolveAttachUrl(argv) : "";
-  const attachable = cdpAttach && (cloud || Boolean(attachUrl) || hasSessionProfile());
-  // A configured storage state IS the session, so nothing needs to type
-  // credentials — demanding them anyway blocks exactly the apps this path
-  // exists for (no login form to drive in the first place).
   const seedable = Boolean(getStorageStatePath(page));
-  const requireCredentials =
-    credentialsInPrompt || (!seedable && selfPrelogin) || (!seedable && !attachable);
+  const authMode = decideAuthMode({
+    auth: adapter.capabilities.auth,
+    credentialsInPrompt: argv.includes("--credentials-in-prompt"),
+    cloud,
+    attachUrl,
+    sessionProfile: cdpAttach && hasSessionProfile(),
+    seedable,
+  });
 
   const { config, target } = await resolveStagingQaConfig(argv, {
     stepLabel: `${page} Hermes judge`,
     target: judgeTarget,
     page,
-    requireCredentials,
+    requireCredentials: authMode.requireCredentials,
   });
-  const preauthenticated =
-    isAuthRequired(config) &&
-    !credentialsInPrompt &&
-    (selfPrelogin || attachable || (seedable && cdpAttach));
+  const preauthenticated = isAuthRequired(config) && authMode.sessionCoversLogin;
   if (isAuthRequired(config) && !preauthenticated) {
     assertStagingQaCredentials(config);
     console.warn(
@@ -841,7 +879,6 @@ export async function main(argv = process.argv.slice(2)) {
     );
   }
 
-  const targetPath = displayPathForJudgeTarget(target);
   const targetUrl = buildJudgeTargetUrl(target, config.baseUrl);
   if (isPlaceholderBaseUrl(targetUrl)) {
     throw new UsageError(
@@ -851,99 +888,143 @@ export async function main(argv = process.argv.slice(2)) {
       }
     );
   }
-  const allowedOrigins = getAllowedOrigins(page);
-  const runId = newRunId();
   const cloudIdentity = cloud ? { root: getProjectConfig().root, projectId: process.env.BROWSERBASE_PROJECT_ID?.trim(), origin: new URL(targetUrl).origin, profile: cloudOptions.profile } : null;
   const cloudContext = cloud && cloudIdentity.projectId ? readBrowserbaseContext(cloudIdentity) : null;
   if (cloud && isAuthRequired(config) && !cloudContext && !seedable) {
     throw new EnvironmentError("No saved Browserbase Context for this site and profile.", { hint: "Run login --browser-provider=browserbase --success-url=<signed-in-url>, or configure staging.storageState." });
   }
 
-  if (dryRun) {
-    const plan = prepareJudgePlan({
-      page,
-      target,
-      targetUrl,
-      paths,
-      config,
-      adapter,
-      preauthenticated,
-      accountState: parseStateOverride(argv),
-    });
-    writeAgentQueryArtifact(paths, plan.query, plan.secrets);
-    console.log(
-      [
-        `Dry run — no agent was called.`,
-        `  target:        ${targetUrl}`,
-        `  adapter:       ${adapter.name}`,
-        `  browser:       ${browserProvider}`,
-        `  auth mode:     ${preauthenticated ? `preauthenticated (${adapter.capabilities.auth})` : "credentials-in-prompt"}`,
-        `  plan source:   ${plan.planSource}`,
-        `  planned checks:${String(plan.plannedChecks.length).padStart(4)}`,
-        `  turn budget:   ${plan.maxTurns ?? "n/a (adapter ignores max turns)"}`,
-        `  judge plan:    ${paths.specJudgePlanMd}`,
-      ].join("\n")
-    );
-    return EXIT_OK;
-  }
+  return {
+    argv,
+    adapter,
+    browserProvider,
+    cloud,
+    cloudOptions,
+    cloudIdentity,
+    cloudContext,
+    failOn,
+    dryRun,
+    page,
+    paths,
+    config,
+    target,
+    targetPath: displayPathForJudgeTarget(target),
+    targetUrl,
+    allowedOrigins: getAllowedOrigins(page),
+    runId: newRunId(),
+    attachUrl,
+    seedable,
+    preauthenticated,
+  };
+}
 
-  let plan;
-  let result;
-  let accountState = null;
-  let remoteSession = null;
+function judgePlanInputs(run, accountState) {
+  const { page, target, targetUrl, paths, config, adapter, preauthenticated } = run;
+  return { page, target, targetUrl, paths, config, adapter, preauthenticated, accountState };
+}
+
+function formatDryRunSummary(run, plan) {
+  const { targetUrl, adapter, browserProvider, preauthenticated, paths } = run;
+  return [
+    `Dry run — no agent was called.`,
+    `  target:        ${targetUrl}`,
+    `  adapter:       ${adapter.name}`,
+    `  browser:       ${browserProvider}`,
+    `  auth mode:     ${preauthenticated ? `preauthenticated (${adapter.capabilities.auth})` : "credentials-in-prompt"}`,
+    `  plan source:   ${plan.planSource}`,
+    `  planned checks:${String(plan.plannedChecks.length).padStart(4)}`,
+    `  turn budget:   ${plan.maxTurns ?? "n/a (adapter ignores max turns)"}`,
+    `  judge plan:    ${paths.specJudgePlanMd}`,
+  ].join("\n");
+}
+
+function dryRunJudge(run) {
+  const plan = prepareJudgePlan(judgePlanInputs(run, parseStateOverride(run.argv)));
+  writeAgentQueryArtifact(run.paths, plan.query, plan.secrets);
+  // oracle:side-effect O3
+  console.log(formatDryRunSummary(run, plan));
+  return EXIT_OK;
+}
+
+async function launchRemoteSession({ cloudIdentity, cloudContext, cloudOptions, paths, runId }, state) {
+  const session = await launchBrowserbaseSession({
+    ...cloudIdentity, contextId: state ? null : cloudContext?.contextId ?? null,
+    persist: false, timeoutSeconds: cloudOptions.timeoutSeconds,
+    evidenceDir: paths.evidenceDir, label: `${paths.slug}-${runId}`,
+  });
+  // oracle:side-effect existing operator output moved unchanged out of main (P1 keeps stdout)
+  console.log(`Browserbase session: ${session.metadata.sessionId}`);
+  // oracle:side-effect existing operator output moved unchanged out of main (P1 keeps stdout)
+  console.log(`Session dashboard: https://www.browserbase.com/sessions/${encodeURIComponent(session.metadata.sessionId)}`);
+  return session;
+}
+
+/**
+ * DOMContentLoaded can precede client-side redirects and hydration. Recheck
+ * all markers together, rather than accepting stale URL success.
+ */
+async function waitForAuthMarkers(browserPage, cloudContext, origin) {
+  const deadline = Date.now() + 10_000;
+  const marker = cloudContext.successSelector
+    ? browserPage.locator(cloudContext.successSelector).first()
+    : null;
+  while (true) {
+    const visible = !marker || await marker.isVisible();
+    const observed = new URL(browserPage.url());
+    observed.search = "";
+    if (
+      visible && observed.origin === origin &&
+      (!cloudContext.successUrl || observed.href === cloudContext.successUrl)
+    ) return;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error("session auth markers timed out");
+    await new Promise(resolve => setTimeout(resolve, Math.min(100, remaining)));
+  }
+}
+
+/** Seed a storage state, or prove the saved Context is still signed in. */
+async function authenticateRemoteSession({ config, targetUrl, cloudIdentity, cloudContext }, remoteSession, state) {
+  const loginRequired = isAuthRequired(config);
   try {
-    try {
-    const preflightPlan = prepareJudgePlan({ page, target, targetUrl, paths, config, adapter, preauthenticated, accountState: parseStateOverride(argv) });
+    if (state) {
+      await remoteSession.context.addCookies(cookiesForOrigin(state.cookies, cloudIdentity.origin));
+      const items = buildLocalStorageEntries(state.origins, cloudIdentity.origin);
+      if (items.length) await remoteSession.context.addInitScript(({ origin, items }) => {
+        if (location.origin === origin) for (const item of items) localStorage.setItem(item.name, item.value);
+      }, { origin: cloudIdentity.origin, items });
+    }
+    const browserPage = remoteSession.context.pages()[0] || await remoteSession.context.newPage();
+    const authUrl = !state && loginRequired && cloudContext?.successUrl ? cloudContext.successUrl : targetUrl;
+    const response = await browserPage.goto(authUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+    if (response && response.status() >= 400) throw new Error("remote target unavailable");
+    if (!state && loginRequired && cloudContext) {
+      await waitForAuthMarkers(browserPage, cloudContext, cloudIdentity.origin);
+    }
+  } catch {
+    throw new EnvironmentError("Browserbase target could not be reached or its saved login is no longer valid.", { hint: "Check cloud network access and run login --browser-provider=browserbase again if the session expired." });
+  }
+}
+
+/**
+ * Preflight, account-state detection and the agent run. A remote session
+ * opened here is always released, and its evidence joins the result.
+ */
+async function judgeInSession(run) {
+  const { adapter, cloud, page, paths, targetUrl, config, preauthenticated, runId } = run;
+  let remoteSession = null;
+  let result;
+  try {
+    const { plan: preflightPlan } = buildJudgePlan(judgePlanInputs(run, parseStateOverride(run.argv)));
     if (inspectUploadFixtures(preflightPlan.uploadFixtures).length) assertUploadAdapter(adapter);
     if (!cloud) await preflightUploads(preflightPlan.uploadFixtures, { adapter });
     if (cloud) {
       // Validate the plan before allocating a billable remote browser.
-      const state = seedable ? readStorageState(getStorageStatePath(page)) : null;
-      remoteSession = await launchBrowserbaseSession({
-        ...cloudIdentity, contextId: state ? null : cloudContext?.contextId ?? null,
-        persist: false, timeoutSeconds: cloudOptions.timeoutSeconds,
-        evidenceDir: paths.evidenceDir, label: `${paths.slug}-${runId}`,
-      });
-      console.log(`Browserbase session: ${remoteSession.metadata.sessionId}`);
-      console.log(`Session dashboard: https://www.browserbase.com/sessions/${encodeURIComponent(remoteSession.metadata.sessionId)}`);
+      const state = run.seedable ? readStorageState(getStorageStatePath(page)) : null;
+      remoteSession = await launchRemoteSession(run, state);
       await preflightUploads(preflightPlan.uploadFixtures, { adapter, session: remoteSession });
-      try {
-        if (state) {
-          await remoteSession.context.addCookies(cookiesForOrigin(state.cookies, cloudIdentity.origin));
-          const items = buildLocalStorageEntries(state.origins, cloudIdentity.origin);
-          if (items.length) await remoteSession.context.addInitScript(({ origin, items }) => {
-            if (location.origin === origin) for (const item of items) localStorage.setItem(item.name, item.value);
-          }, { origin: cloudIdentity.origin, items });
-        }
-        const browserPage = remoteSession.context.pages()[0] || await remoteSession.context.newPage();
-        const authUrl = !state && isAuthRequired(config) && cloudContext?.successUrl ? cloudContext.successUrl : targetUrl;
-        const response = await browserPage.goto(authUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-        if (response && response.status() >= 400) throw new Error("remote target unavailable");
-        if (!state && isAuthRequired(config) && cloudContext) {
-          // DOMContentLoaded can precede client-side redirects and hydration.
-          // Recheck all markers together, rather than accepting stale URL success.
-          const deadline = Date.now() + 10_000;
-          const marker = cloudContext.successSelector
-            ? browserPage.locator(cloudContext.successSelector).first()
-            : null;
-          while (true) {
-            const visible = !marker || await marker.isVisible();
-            const observed = new URL(browserPage.url());
-            observed.search = "";
-            if (
-              visible && observed.origin === cloudIdentity.origin &&
-              (!cloudContext.successUrl || observed.href === cloudContext.successUrl)
-            ) break;
-            const remaining = deadline - Date.now();
-            if (remaining <= 0) throw new Error("session auth markers timed out");
-            await new Promise(resolve => setTimeout(resolve, Math.min(100, remaining)));
-          }
-        }
-      } catch {
-        throw new EnvironmentError("Browserbase target could not be reached or its saved login is no longer valid.", { hint: "Check cloud network access and run login --browser-provider=browserbase again if the session expired." });
-      }
+      await authenticateRemoteSession(run, remoteSession, state);
     }
-    accountState = await detectAccountState({
+    const accountState = await detectAccountState({
       page,
       paths,
       targetUrl,
@@ -951,19 +1032,10 @@ export async function main(argv = process.argv.slice(2)) {
       adapter,
       preauthenticated,
       runId,
-      override: parseStateOverride(argv),
+      override: parseStateOverride(run.argv),
       remoteSession,
     });
-    plan = prepareJudgePlan({
-      page,
-      target,
-      targetUrl,
-      paths,
-      config,
-      adapter,
-      preauthenticated,
-      accountState: accountState?.state ?? null,
-    });
+    const plan = prepareJudgePlan(judgePlanInputs(run, accountState?.state ?? null));
     appendRunEvent(paths.runsLedger, {
       runId,
       kind: "judge-start",
@@ -991,25 +1063,31 @@ export async function main(argv = process.argv.slice(2)) {
       adapter,
       config,
       preauthenticated,
-      allowedOrigins,
-      attachUrl,
+      allowedOrigins: run.allowedOrigins,
+      attachUrl: run.attachUrl,
       runId,
       remoteSession,
     });
-    } finally {
-      if (remoteSession) {
-        const evidence = await remoteSession.close();
-        if (result) {
-          result.runnerEvidence = evidence;
-          result.violations.push(...(evidence.violations ?? []));
-        }
+    return { plan, result, accountState };
+  } finally {
+    if (remoteSession) {
+      const evidence = await remoteSession.close();
+      if (result) {
+        result.runnerEvidence = evidence;
+        result.violations.push(...(evidence.violations ?? []));
       }
     }
+  }
+}
+
+async function judgeQuarantined(run) {
+  try {
+    return await judgeInSession(run);
   } catch (error) {
-    // Quarantine the run: partial artifacts (judge plan, raw output) may have
+    // Quarantine the run: partial artifacts (raw output, captures) may have
     // been written already; downstream commands must not report on them.
-    appendRunEvent(paths.runsLedger, {
-      runId,
+    appendRunEvent(run.paths.runsLedger, {
+      runId: run.runId,
       kind: "judge",
       status: "error",
       cause:
@@ -1020,10 +1098,23 @@ export async function main(argv = process.argv.slice(2)) {
       artifact: null,
       error: error.message,
     });
-    markRunInvalid(paths, error?.message ?? error);
+    markRunInvalid(run.paths, error?.message ?? error);
     throw error;
   }
+}
 
+function summarizeAccountState(accountState) {
+  if (!accountState) return null;
+  return {
+    state: accountState.state,
+    expected: accountState.expected ?? null,
+    mismatch: Boolean(accountState.mismatch),
+    source: accountState.source,
+    evidence: accountState.evidence || null,
+  };
+}
+
+function buildJudgment({ run, plan, result, accountState, judgedAt }) {
   const decision = normalizeBrowseDecision(result.raw, {
     plannedChecks: plan.plannedChecks,
     runnerEvidence: result.runnerEvidence,
@@ -1035,24 +1126,16 @@ export async function main(argv = process.argv.slice(2)) {
       : result.violations,
   });
 
-  const judgment = withSchema(
+  return withSchema(
     {
-      runId,
-      page,
-      judgedAt: new Date().toISOString(),
-      targetUrl,
-      targetPath,
+      runId: run.runId,
+      page: run.page,
+      judgedAt,
+      targetUrl: run.targetUrl,
+      targetPath: run.targetPath,
       planSource: plan.planSource,
       specHash: plan.specHash,
-      accountState: accountState
-        ? {
-            state: accountState.state,
-            expected: accountState.expected ?? null,
-            mismatch: Boolean(accountState.mismatch),
-            source: accountState.source,
-            evidence: accountState.evidence || null,
-          }
-        : null,
+      accountState: summarizeAccountState(accountState),
       notApplicable: plan.notApplicable,
       status: decision.status,
       cause: decision.cause,
@@ -1067,13 +1150,16 @@ export async function main(argv = process.argv.slice(2)) {
     },
     "judgment"
   );
+}
 
-  const markdown = renderMarkdown(judgment);
+/** Every artifact, ledger entry and notification a finished judgment produces. */
+async function publishJudgment({ run, plan, result, judgment }) {
+  const { runId, page, paths, target } = run;
   writeFileSync(
     paths.hermesJudgmentJson,
     `${JSON.stringify(judgment, null, 2)}\n`
   );
-  writeFileSync(paths.hermesJudgmentMd, markdown);
+  writeFileSync(paths.hermesJudgmentMd, renderMarkdown(judgment));
   writeFileSync(
     paths.evidenceManifestJson,
     `${JSON.stringify(
@@ -1085,7 +1171,7 @@ export async function main(argv = process.argv.slice(2)) {
           ...buildEvidenceManifest({
           runId,
             plannedChecks: plan.plannedChecks,
-            checks: decision.checks,
+            checks: judgment.checks,
             runnerEvidence: result.runnerEvidence,
           }),
         },
@@ -1126,7 +1212,9 @@ export async function main(argv = process.argv.slice(2)) {
     `Hermes ${page} QA judgment (browse): ${judgment.status} [${judgment.cause}] ` +
       `— ${judgment.coverage.addressed}/${judgment.coverage.planned} planned checks addressed (run ${runId})`
   );
+}
 
+function settleJudgment({ runId, paths, failOn }, judgment) {
   if (judgment.cause === "ENVIRONMENT_DEFECT") {
     // The environment, not the product, is what failed: quarantine so `review`
     // and `slack` cannot report this as a verdict on the app.
@@ -1142,6 +1230,22 @@ export async function main(argv = process.argv.slice(2)) {
 
   clearRunInvalid(paths);
   return verdictExitCode(judgment.status, failOn);
+}
+
+export async function main(argv = process.argv.slice(2)) {
+  const run = await resolveJudgeRun(argv);
+  if (run.dryRun) return dryRunJudge(run);
+
+  const { plan, result, accountState } = await judgeQuarantined(run);
+  const judgment = buildJudgment({
+    run,
+    plan,
+    result,
+    accountState,
+    judgedAt: new Date().toISOString(),
+  });
+  await publishJudgment({ run, plan, result, judgment });
+  return settleJudgment(run, judgment);
 }
 
 const isDirectRun =

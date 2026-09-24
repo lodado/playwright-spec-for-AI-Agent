@@ -506,7 +506,7 @@ flags work today and are absent from `--help`:
 
 | Flag                            | Accepted by                            | Note                                                                                        |
 | ------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `--expected-account-state=`     | `judge`                                | Current name for `--expected-subscription-status=`. **Only the `=` form works** — the router does not rewrite the space-separated form, which is silently dropped. |
+| `--expected-account-state=`     | `judge`                                | Current name for `--expected-subscription-status=`. |
 | `--dashboard-path=`             | `judge`, `login`                       | Default path used when building login context. The router rewrites the space form.          |
 | `--root=`                       | every config-loading command           | Alias of `--project-root=`.                                                                 |
 | `--target-path=`                | `slack`                                | `slack` resolves a target path and exits 2 when none resolves for the page.                 |

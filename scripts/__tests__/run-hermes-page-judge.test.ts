@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   runAgent: vi.fn(),
   prelogin: vi.fn(),
   launchAuthenticatedBrowser: vi.fn(),
+  connectExistingBrowser: vi.fn(),
   hasSessionProfile: vi.fn(() => false),
   resolveSpecForJudge: vi.fn(),
   uploadFixtures: {} as Record<string, string>,
@@ -38,7 +39,17 @@ vi.mock("../ai-agent-adapter.mjs", () => ({
 vi.mock("../qa-browser-session.mjs", () => ({
   hasSessionProfile: mocks.hasSessionProfile,
   launchAuthenticatedBrowser: mocks.launchAuthenticatedBrowser,
+  connectExistingBrowser: mocks.connectExistingBrowser,
   SESSION_PROFILE_DIR: ".private/qa-browser-profile",
+}));
+
+// Session seeding reads a real storageState file and drives a browser; the
+// auth-mode rows only need to know that a configured state was used.
+vi.mock("../qa-session-seed.mjs", async importOriginal => ({
+  ...(await importOriginal<typeof import("../qa-session-seed.mjs")>()),
+  readStorageState: () => ({ cookies: [], origins: [] }),
+  seedAsideSession: () => ({ cookies: 0 }),
+  seedProfileSession: async () => ({ cookies: 0 }),
 }));
 
 vi.mock("../qa-spec-artifacts.mjs", () => ({
@@ -143,6 +154,7 @@ beforeEach(() => {
   mocks.uploadFixtures = {};
   mocks.prelogin.mockReset();
   mocks.launchAuthenticatedBrowser.mockReset();
+  mocks.connectExistingBrowser.mockReset();
   mocks.hasSessionProfile.mockReset().mockReturnValue(false);
   mocks.resolveSpecForJudge.mockReset().mockReturnValue({
     path: join(outputDir, "dashboard-qa-spec.json"),
@@ -753,5 +765,321 @@ describe("judge prompt", () => {
 
     expect(query).toMatch(/\*\*skip\*\* when the mocked precondition cannot exist/);
     expect(query).toMatch(/not `manual_review`/);
+  });
+});
+
+// Oracle refactor-entry-flows O1/O21/O24: where staging credentials may appear
+// (docs/how-to/authentication.md). The expected decision below is the card's
+// O1 rule, not a copy of the production branches.
+describe("credential decision per adapter auth, session source, flag and env", () => {
+  const PASSWORD = "S3cret-pw-value";
+  const EMAIL = "qa-auth@test.internal";
+  const AUTHS = ["credentials-in-prompt", "self-prelogin", "cdp-attach"] as const;
+  const SESSIONS = ["none", "storage-state", "session-profile", "cdp-url"] as const;
+  const FLAGS = ["absent", "present"] as const;
+  const CREDS = ["set", "unset"] as const;
+  type Case = {
+    auth: (typeof AUTHS)[number];
+    session: (typeof SESSIONS)[number];
+    flag: (typeof FLAGS)[number];
+    creds: (typeof CREDS)[number];
+  };
+  const CASES: Case[] = AUTHS.flatMap(auth =>
+    SESSIONS.flatMap(session =>
+      FLAGS.flatMap(flag => CREDS.map(creds => ({ auth, session, flag, creds }))),
+    ),
+  );
+
+  // O1 Then: preauthenticated ⇔ F absent ∧ (A = self-prelogin ∨ (A = cdp-attach ∧ S ≠ none))
+  function preauthenticated({ auth, session, flag }: Case) {
+    return flag === "absent" && (auth === "self-prelogin" || (auth === "cdp-attach" && session !== "none"));
+  }
+  // O1 Then: with C = unset it rejects unless preauthenticated ∧ (A = cdp-attach ∨ S = storage-state)
+  function rejectsForMissingCredentials(c: Case) {
+    return c.creds === "unset" && !(preauthenticated(c) && (c.auth === "cdp-attach" || c.session === "storage-state"));
+  }
+
+  function arrange(c: Case) {
+    mocks.capabilities.auth = c.auth;
+    delete process.env.QA_BROWSER_CDP_URL;
+    if (c.creds === "set") {
+      process.env.STAGING_QA_EMAIL = EMAIL;
+      process.env.STAGING_QA_PASSWORD = PASSWORD;
+    } else {
+      delete process.env.STAGING_QA_EMAIL;
+      delete process.env.STAGING_QA_PASSWORD;
+    }
+    if (c.session === "storage-state") {
+      writeFileSync(
+        join(root, "playwright-spec-for-ai-agent.config.json"),
+        JSON.stringify({ staging: { storageState: "state.json" } }),
+      );
+      resetProjectConfigForTests();
+    }
+    mocks.hasSessionProfile.mockReturnValue(c.session === "session-profile");
+    mocks.launchAuthenticatedBrowser.mockResolvedValue(sessionStub());
+    mocks.connectExistingBrowser.mockResolvedValue(sessionStub());
+    const argv = [...ARGV];
+    if (c.session === "cdp-url") argv.push("--cdp-url=http://127.0.0.1:9222");
+    if (c.flag === "present") argv.push("--credentials-in-prompt");
+    return argv;
+  }
+
+  function securityWarnings() {
+    return vi.mocked(console.warn).mock.calls.filter(call => String(call[0]).startsWith("[security]")).length;
+  }
+
+  it.each(CASES)(
+    "[O1] auth=$auth session=$session flag=$flag creds=$creds",
+    async c => {
+      const argv = arrange(c);
+
+      if (rejectsForMissingCredentials(c)) {
+        await expect(main(argv)).rejects.toMatchObject({
+          exitCode: 3,
+          message: "Missing staging QA credentials.",
+        });
+        expect(mocks.runAgent).toHaveBeenCalledTimes(0);
+        expect(securityWarnings()).toBe(0);
+        return;
+      }
+
+      expect(await main(argv)).toBe(0);
+      expect(mocks.runAgent).toHaveBeenCalledTimes(1);
+      const query = String(mocks.runAgent.mock.calls[0][0]);
+      if (preauthenticated(c)) {
+        expect(query.includes(PASSWORD)).toBe(false);
+        expect(query.includes(EMAIL)).toBe(false);
+        expect(securityWarnings()).toBe(0);
+      } else {
+        expect(query.includes(PASSWORD)).toBe(true);
+        expect(securityWarnings()).toBe(1);
+      }
+    },
+  );
+
+  it.each(CASES)(
+    "[O21] dry-run auth=$auth session=$session flag=$flag creds=$creds",
+    async c => {
+      const argv = [...arrange(c), "--dry-run"];
+
+      if (rejectsForMissingCredentials(c)) {
+        await expect(main(argv)).rejects.toMatchObject({
+          exitCode: 3,
+          message: "Missing staging QA credentials.",
+        });
+      } else {
+        expect(await main(argv)).toBe(0);
+        const printed = vi.mocked(console.log).mock.calls.flat().join("\n");
+        expect(printed).toContain(
+          preauthenticated(c)
+            ? `auth mode:     preauthenticated (${c.auth})`
+            : "auth mode:     credentials-in-prompt",
+        );
+        expect(securityWarnings()).toBe(preauthenticated(c) ? 0 : 1);
+      }
+      expect(mocks.runAgent).toHaveBeenCalledTimes(0);
+      expect(mocks.launchAuthenticatedBrowser).toHaveBeenCalledTimes(0);
+      expect(mocks.connectExistingBrowser).toHaveBeenCalledTimes(0);
+    },
+  );
+
+  it("[O24] keeps the run's credential decision across a retried attempt", async () => {
+    const argv = arrange({ auth: "cdp-attach", session: "session-profile", flag: "absent", creds: "set" });
+    mocks.runAgent
+      .mockImplementationOnce(() => {
+        throw new EnvironmentError("login flap");
+      })
+      .mockImplementation(() => agentPayload());
+
+    expect(await main(argv)).toBe(0);
+
+    expect(mocks.runAgent).toHaveBeenCalledTimes(2);
+    for (const [query] of mocks.runAgent.mock.calls) {
+      expect(String(query).includes(PASSWORD)).toBe(false);
+    }
+    expect(mocks.launchAuthenticatedBrowser).toHaveBeenCalledTimes(2);
+    expect(readLedgerKinds().filter(entry => entry.kind === "judge-retry")).toHaveLength(1);
+    expect(securityWarnings()).toBe(0);
+  });
+});
+
+// Oracle refactor-entry-flows O2 (P2): the preflight plan is not written to disk.
+describe("judge plan file", () => {
+  it("[O2] leaves no plan file when the run fails before the final plan", async () => {
+    const file = join(root, "fixture.txt");
+    writeFileSync(file, "fixture");
+    mocks.uploadFixtures = { document: file };
+    mocks.capabilities.auth = "cdp-attach";
+    const probe = vi
+      .spyOn(uploadPreflight, "preflightUploads")
+      .mockRejectedValue(new EnvironmentError("Upload preflight failed"));
+
+    await expect(main(ARGV)).rejects.toThrow("Upload preflight failed");
+
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(mocks.runAgent).toHaveBeenCalledTimes(0);
+    const ledger = readLedgerKinds();
+    expect(ledger.at(-1)).toMatchObject({ kind: "judge", status: "error", cause: "ENVIRONMENT_DEFECT" });
+    expect(ledger.filter(entry => entry.kind === "judge-retry")).toHaveLength(0);
+    expect(existsSync(join(outputDir, "dashboard-qa-run.invalid"))).toBe(true);
+    expect(readdirSync(outputDir).filter(name => name.endsWith("-qa-judge-plan.md"))).toEqual([]);
+  });
+});
+
+// Oracle refactor-entry-flows O9 (P1): an unclassified error is quarantined, never retried.
+describe("judge unclassified failure", () => {
+  it("[O9] quarantines an unclassified error as HARNESS_DEFECT without a retry", async () => {
+    mocks.runAgent.mockImplementation(() => {
+      throw new Error("boom");
+    });
+
+    await expect(main(ARGV)).rejects.toThrow("boom");
+
+    expect(mocks.runAgent).toHaveBeenCalledTimes(1);
+    const ledger = readLedgerKinds();
+    expect(ledger.filter(entry => entry.kind === "judge-retry")).toHaveLength(0);
+    expect(ledger.at(-1)).toMatchObject({ kind: "judge", status: "error", cause: "HARNESS_DEFECT" });
+    expect(existsSync(join(outputDir, "dashboard-qa-run.invalid"))).toBe(true);
+    expect(existsSync(join(outputDir, "dashboard-hermes-judgment.json"))).toBe(false);
+  });
+});
+
+// Oracle refactor-entry-flows O20 (P3): the public module surface does not move.
+describe("public module surface", () => {
+  it("[O20] keeps the export names of the judge, config and doctor modules", async () => {
+    const judge = await import("../run-hermes-page-judge.mjs");
+    const config = await import("../hermes-qa-project-config.mjs");
+    const doctor = await import("../run-qa-doctor.mjs");
+
+    expect(Object.keys(judge).sort()).toEqual([
+      "buildBrowseHermesQuery",
+      "main",
+      "prepareJudgePlan",
+      "resolveAttachUrl",
+    ]);
+    expect(Object.keys(config).sort()).toEqual([
+      "DEFAULT_PATH_TEMPLATES",
+      "DEFAULT_STAGING_ACCOUNT",
+      "LIVE_RUN_POLICIES",
+      "applyPathTemplate",
+      "applyStagingAccountDefaults",
+      "applyStagingUrlDefaults",
+      "defineConfig",
+      "getAllowedOrigins",
+      "getGithubIssueConfig",
+      "getHooks",
+      "getLivePolicyOverrides",
+      "getPackageScriptsDir",
+      "getPageConfig",
+      "getProjectConfig",
+      "getStagingVersionUrl",
+      "getStorageStatePath",
+      "isPlaceholderBaseUrl",
+      "listConfiguredPages",
+      "loadProjectConfig",
+      "mergeUploadFixtures",
+      "printProjectConfigHelp",
+      "resetProjectConfigForTests",
+      "resolveBaseUrlForPage",
+      "resolveDefaultUploadFixtures",
+      "resolveFixturePaths",
+      "resolveJudgeTarget",
+      "resolveOutputDirForPage",
+      "resolvePageUrlForPage",
+      "resolvePathFromConfig",
+      "resolveSpecDirForPage",
+      "resolveTargetPathForPage",
+    ]);
+    expect(Object.keys(doctor).sort()).toEqual([
+      "collectDoctorReport",
+      "formatDoctorReport",
+      "parseDoctorArgs",
+    ]);
+  });
+});
+
+// A no-confirm check never attaches a file live, so its plan identity must not
+// offer one — offering it sent the agent to a tool that refuses the policy.
+describe("upload fixtures offered per check", () => {
+  it("offers no fixture to a judgment-interaction-no-confirm check", async () => {
+    const spec = {
+      scenarios: [
+        {
+          ...SPEC.scenarios[0],
+          tests: [
+            {
+              title: "shows the file name",
+              checkId: "shows-the-file-name",
+              liveRunPolicy: "judgment-interaction-no-confirm",
+              stagingMode: "judgment",
+              fixtures: { upload: "fixtures/a.png" },
+              expectations: [],
+            },
+          ],
+        },
+      ],
+    };
+    mocks.resolveSpecForJudge.mockReturnValue({
+      path: join(outputDir, "dashboard-qa-spec.json"),
+      definition: spec,
+      planSource: "spec-live.json",
+      staleness: { ok: true, expected: null, actual: "sha256:abc" },
+    });
+
+    expect(await main([...ARGV, "--dry-run"])).toBe(0);
+
+    const query = readFileSync(join(outputDir, "dashboard-hermes-query.txt"), "utf8");
+    const identities = JSON.parse(query.split("## Check identities")[1].split("```json")[1].split("```")[0]);
+    expect(identities).toHaveLength(1);
+    expect(identities[0].uploadFixtures).toEqual({});
+    expect(identities[0].requiredUploadFixtures).toEqual({});
+  });
+
+  it("tells the judge a no-confirm check that needs a file is a SPEC_GAP skip", () => {
+    const query = buildBrowseHermesQuery({
+      judgeDocument: "plan",
+      stagingLogin: { authRequired: false, targetUrl: "https://x.test/" },
+    });
+    expect(query).toContain(
+      "A judgment-interaction-no-confirm check whose plan needs an attached file cannot run live: report it `skip` with cause `SPEC_GAP`",
+    );
+  });
+});
+
+describe("upload repetition wording", () => {
+  it("scopes 'do not repeat an upload' to one check, not one file", () => {
+    const query = buildBrowseHermesQuery({
+      judgeDocument: "plan",
+      stagingLogin: { authRequired: false, targetUrl: "https://x.test/" },
+    });
+    expect(query).toContain(
+      "Each executable-interaction check that declares a fixture needs its own upload under its own checkId, even when an earlier check uploaded the same file; never reuse another check's upload or outcome.",
+    );
+    expect(query).toContain("Within one check, do not repeat an upload after an unknown outcome.");
+  });
+});
+
+describe("checkpoint timing wording", () => {
+  it("asks for a checkpoint at every state a pass quotes, transient ones included", () => {
+    const query = buildBrowseHermesQuery({
+      judgeDocument: "plan",
+      stagingLogin: { authRequired: false, targetUrl: "https://x.test/" },
+    });
+    expect(query).toContain(
+      "A pass may quote only text a checkpoint of that check captured: call qa_checkpoint again the moment each quoted state appears, including a transient one such as a processing indicator, before it changes.",
+    );
+  });
+});
+
+describe("truncated source wording", () => {
+  it("forbids a fail resting on behaviour a truncated excerpt does not show", () => {
+    const query = buildBrowseHermesQuery({
+      judgeDocument: "plan",
+      stagingLogin: { authRequired: false, targetUrl: "https://x.test/" },
+    });
+    expect(query).toContain(
+      "An excerpt ending in `// … excerpt truncated` is not the whole check: never `fail` on behaviour the excerpt does not show — use `manual_review`.",
+    );
   });
 });

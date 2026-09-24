@@ -117,3 +117,76 @@ describe("runner-owned evidence provenance", () => {
     expect(review.criteria.find(({ id }) => id === "evidence-cited")?.verdict).toBe("concern");
   });
 });
+
+// The review stage reads ARIA text, not images: a check that cites only the
+// screenshot of a checkpoint must carry that checkpoint's snapshot too, or the
+// reviewer sees a path it cannot open and flags the pass as uncited.
+describe("checkpoint captures travel together", () => {
+  it("adds the same checkpoint's ARIA snapshot to a screenshot-only citation", () => {
+    const screenshot = join(dir, "checkpoint-4-1.png");
+    const aria = join(dir, "checkpoint-4-1.yaml");
+    writeFileSync(screenshot, "png-bytes");
+    writeFileSync(aria, '- heading "DEEP Parser"\n');
+    const evidence = {
+      screenshots: [screenshot],
+      ariaSnapshots: [aria],
+      checkpoints: [{ checkId: "select", evidenceRefs: [screenshot, aria] }],
+    };
+    const decision = normalizeBrowseDecision(
+      { checks: [{ item: "select", result: "pass", detail: "Heading showed DEEP Parser", evidenceRefs: [screenshot] }] },
+      { plannedChecks: [{ checkId: "select", item: "select" }], runnerEvidence: evidence },
+    );
+    expect(decision.checks[0].evidenceRefs).toEqual([screenshot, aria]);
+    expect(decision.checks[0].result).toBe("pass");
+  });
+
+  it("never pulls in another check's checkpoint", () => {
+    const screenshot = join(dir, "checkpoint-5-1.png");
+    const foreign = join(dir, "checkpoint-5-other.yaml");
+    writeFileSync(screenshot, "png-bytes");
+    writeFileSync(foreign, '- text: other\n');
+    const evidence = {
+      screenshots: [screenshot],
+      ariaSnapshots: [foreign],
+      checkpoints: [
+        { checkId: "select", evidenceRefs: [screenshot] },
+        { checkId: "other", evidenceRefs: [foreign] },
+      ],
+    };
+    const decision = normalizeBrowseDecision(
+      { checks: [{ item: "select", result: "pass", detail: "ok", evidenceRefs: [screenshot] }] },
+      { plannedChecks: [{ checkId: "select", item: "select" }, { checkId: "other", item: "other" }], runnerEvidence: evidence },
+    );
+    expect(decision.checks[0].evidenceRefs).toEqual([screenshot]);
+  });
+});
+
+// A citation is trusted only as far as the captured text goes: a pass whose
+// cited ARIA snapshot contains none of its quotes was captured at a different
+// moment than the one it describes. One missing quote is not enough — agents
+// also quote what was absent ("검수 필요" rather than "실패").
+describe("quotes must be in the cited snapshot", () => {
+  const plannedChecks = [{ checkId: "upload", item: "upload" }];
+  function decide(detail: string) {
+    const aria = join(dir, "checkpoint-8-1.yaml");
+    writeFileSync(aria, '- button "parser-upload.png 삭제"\n- text: 검수 필요 · 1p\n');
+    return normalizeBrowseDecision(
+      { checks: [{ item: "upload", result: "pass", detail, evidenceRefs: [aria] }] },
+      { plannedChecks, runnerEvidence: { ariaSnapshots: [aria], checkpoints: [{ checkId: "upload", evidenceRefs: [aria] }] } },
+    ).checks[0];
+  }
+
+  it("keeps a pass whose every quote is in the cited snapshot", () => {
+    expect(decide('Row "parser-upload.png 삭제" shows "검수 필요 · 1p"').result).toBe("pass");
+  });
+
+  it("keeps a pass that also quotes text it says was absent", () => {
+    expect(decide('Row shows "검수 필요" rather than "실패"').result).toBe("pass");
+  });
+
+  it("demotes a pass whose cited snapshot contains none of its quotes", () => {
+    const check = decide('Dialog showed "파싱 중 · 지금" and "파일 업로드 영역"');
+    expect(check.result).toBe("manual_review");
+    expect(check.demotedFrom).toBe("pass");
+  });
+});

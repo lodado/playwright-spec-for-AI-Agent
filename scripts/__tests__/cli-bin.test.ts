@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -132,6 +133,29 @@ function specProject() {
   });
   return cwd;
 }
+
+describe("space-separated value flags the stage scripts parse", () => {
+  // The router rewrites `--flag value` only for flags in its VALUE_FLAGS list;
+  // any other value flag is silently dropped when typed space-separated. So
+  // every `--flag=` a stage script parses must be in that list.
+  // Boolean flags whose `=` form is only rejected, never read as a value.
+  const BOOLEAN_ONLY = ["--attach"];
+
+  it("lists every value flag a stage script reads", () => {
+    const scriptsDir = fileURLToPath(new URL("..", import.meta.url));
+    const parsed = new Set<string>();
+    for (const name of readdirSync(scriptsDir).filter(file => file.endsWith(".mjs"))) {
+      const source = readFileSync(join(scriptsDir, name), "utf8");
+      for (const match of source.matchAll(/"(--[a-z][a-z-]*)="/g)) parsed.add(match[1]);
+    }
+    const bin = readFileSync(BIN, "utf8");
+    const block = bin.slice(bin.indexOf("const VALUE_FLAGS"), bin.indexOf("]);", bin.indexOf("const VALUE_FLAGS")));
+    const routed = new Set([...block.matchAll(/"(--[a-z-]+)"/g)].map(match => match[1]));
+
+    const dropped = [...parsed].filter(flag => !routed.has(flag) && !BOOLEAN_ONLY.includes(flag)).sort();
+    expect(dropped).toEqual([]);
+  });
+});
 
 describe(".env loading", () => {
   it("applies file values but never overrides an already-set variable", () => {

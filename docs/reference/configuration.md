@@ -49,7 +49,7 @@ That is a complete, working config. Everything else on this page is optional.
 
 ## Top-level keys
 
-Exactly these eight are recognised. Any other top-level key is an unknown-key
+Exactly these nine are recognised. Any other top-level key is an unknown-key
 issue (see [Validation](#validation-and-errors)).
 
 | Key            | Type                  | Default                      | Required | Meaning                                              |
@@ -62,6 +62,7 @@ issue (see [Validation](#validation-and-errors)).
 | `fixtures`     | `{name: repoPath}`    | `{}`                         | no       | Default upload fixtures for every page.              |
 | `livePolicies` | `{name: object}`      | `{}`                         | no       | Project-specific `@qa-live-policy` names.            |
 | `hooks`        | object                | `{}`                         | no       | `onJudgment` and `onReview` callbacks.               |
+| `github`       | `{issueFooter?}`      | `{}`                         | no       | Footer appended to every issue `issues` files.       |
 
 ### `paths`
 

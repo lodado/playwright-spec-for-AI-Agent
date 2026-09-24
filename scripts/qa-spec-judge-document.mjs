@@ -14,7 +14,7 @@ const POLICY_WHEN = {
 };
 
 /** Per-test source excerpt budget: the whole document is re-sent each turn. */
-const MAX_EXCERPT_CHARS = 900;
+const MAX_EXCERPT_CHARS = 3200;
 
 const DATA_BEGIN = "<<<QA-PLAN-DATA:BEGIN>>>";
 const DATA_END = "<<<QA-PLAN-DATA:END>>>";
@@ -404,9 +404,12 @@ export function buildJudgeBrowseDocument({
     ? saved
     : renderGwtPlanFromSpec(spec, { alwaysRunScenarioIds }).trim();
 
+  // A saved live plan already lists its uploads (qa-spec-live-artifact renders
+  // them); a second list only doubles the prompt.
+  const planListsUploads = /^## Uploads$/m.test(body);
   const appendices = renderLiveSpecAppendices({
     spec,
-    uploadFixtures,
+    uploadFixtures: planListsUploads ? null : uploadFixtures,
     specSourceFiles,
   }).trim();
 

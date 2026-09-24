@@ -27,7 +27,11 @@ export function buildGwtPromptSpec(spec) {
         title: test.title,
         checkId: test.checkId,
         qaLivePolicy: test.livePolicyAnnotation ?? null,
-        ...(test.fixtures ? { fixtures: test.fixtures } : {}),
+        // Only safe-interaction may attach a file live (the judge's upload tool
+        // refuses every other policy), so no other test is told it uploads.
+        ...(test.fixtures && test.liveRunPolicy === "executable-interaction"
+          ? { fixtures: test.fixtures }
+          : {}),
       })),
     })),
   };

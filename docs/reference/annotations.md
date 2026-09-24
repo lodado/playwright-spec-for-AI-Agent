@@ -80,6 +80,10 @@ test comment > enclosing describe (innermost first) > file header
   > pages.{page}.fixtures > staging.fixtures > fixtures
 ```
 
+Only `safe-interaction` tests attach files live. A fixture on any other test is
+never offered to the judge, and one written directly on a
+`safe-interaction-no-confirm` test makes `spec` warn — that check can never run.
+
 `spec` warns `QA fixture missing on disk: <path>` for each missing file, then
 fails with `N upload fixture(s) referenced by the QA spec do not exist:` and the
 list. `--allow-missing-fixtures` downgrades that to the warnings alone.
@@ -146,6 +150,7 @@ shares the same verb. Key details and validation messages are in
 | `Configured @qa-live-policy "<name>" maps to unknown liveRunPolicy "<verb>".` | 2  | A `livePolicies` entry names a verb that is not one of the seven.        |
 | `N upload fixture(s) referenced by the QA spec do not exist:`               | 2    | A `@qa-fixture` path does not resolve to a file. Use `--allow-missing-fixtures` to downgrade. |
 | `[qa-spec] <file>: N test(s) could not be read and are missing from the QA spec.` | — | Warning, not an error. See [Unparsed tests](#unparsed-tests).       |
+| `[qa-spec] <file>: "<title>" declares @qa-fixture but is safe-interaction-no-confirm …` | — | Warning. The judge never attaches files on that policy; use `safe-interaction` if selecting a file cannot submit it. |
 
 ## What `spec` discovers
 

@@ -31,7 +31,7 @@ const HERMES_MAX_TURNS_ABSTRACT = 2;
  * stamped next to the input hash so a prompt change re-runs the agent even
  * though the specs are untouched.
  */
-export const ABSTRACT_PROMPT_REV = "4.1.1";
+export const ABSTRACT_PROMPT_REV = "4.1.2";
 
 function hasFlag(argv, flag) {
   return argv.includes(flag);
@@ -60,7 +60,7 @@ export function buildAbstractHermesQuery(payload) {
     "Scenario/Test options you must apply:",
     "- `alwaysRun: true` -> scenario header must include `always-run`.",
     "- `liveSkip: true` -> scenario should be marked as skipped on live; tests under it should not be executable.",
-    "- `fixtures` -> the check uploads those named files; say so in Given.",
+    "- `fixtures` on a test -> the check uploads those named files; say so in Given. Scenario-level `fixtures` are defaults for its `safe-interaction` tests only; never write an upload into any other test's plan.",
     "- `qaLivePolicy` values: `readonly`, `safe-interaction`, `safe-interaction-no-confirm`, `mock-judgment`, `subscription-mutation`, `auth-mock`, `skip`.",
     "- `safe-interaction` authorizes the action named by the test, including declared fixture uploads. Plan that action and its observable outcome. Do not replace its expected outcome with `skip` just because the action writes data.",
     "- `safe-interaction-no-confirm` means the confirm/submit action is UNSAFE on live. When must open the flow and stop before it; Then may only assert what is observable up to that point, and must never instruct clicking confirm/OK/submit. Dismiss with Esc.",

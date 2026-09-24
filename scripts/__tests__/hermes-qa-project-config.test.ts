@@ -8,6 +8,7 @@ import {
   applyStagingUrlDefaults,
   defineConfig,
   getAllowedOrigins,
+  getGithubIssueConfig,
   getHooks,
   getLivePolicyOverrides,
   getProjectConfig,
@@ -506,5 +507,66 @@ describe("defineConfig", () => {
   it("round-trips its argument", () => {
     const config = { pages: { search: { targetPath: "/search" } } };
     expect(defineConfig(config)).toBe(config);
+  });
+});
+
+// Oracle refactor-entry-flows O25 (P1): identical flags and cwd reuse the loaded config.
+describe("repeated load with the same flags", () => {
+  it("[O25] returns the cached config without re-reading the file", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "hermes-qa-cache-")));
+    const configPath = join(root, "playwright-spec-for-ai-agent.config.json");
+    const previousCwd = process.cwd();
+    process.chdir(root);
+    try {
+      writeFileSync(configPath, JSON.stringify({ staging: { baseUrl: "https://a.staging.internal" } }));
+      const first = await loadProjectConfig(["--strict-config"]);
+      writeFileSync(configPath, JSON.stringify({ staging: { baseUrl: "https://b.staging.internal" } }));
+      const second = await loadProjectConfig(["--strict-config"]);
+
+      expect(second).toBe(first);
+      expect(getProjectConfig().staging.baseUrl).toBe("https://a.staging.internal");
+      expect(warn.mock.calls.filter(call => String(call[0]).startsWith("[qa-config]"))).toHaveLength(0);
+    } finally {
+      process.chdir(previousCwd);
+      warn.mockRestore();
+    }
+  });
+});
+
+// The documented `github.issueFooter` key (docs/how-to/close-the-loop.md) is
+// read by getGithubIssueConfig, so validation must accept it.
+describe("github config block", () => {
+  it("accepts github.issueFooter under --strict-config", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "hermes-qa-github-")));
+    const previousCwd = process.cwd();
+    process.chdir(root);
+    try {
+      writeFileSync(
+        join(root, "playwright-spec-for-ai-agent.config.json"),
+        JSON.stringify({ github: { issueFooter: "@claude please investigate" } }),
+      );
+      await loadProjectConfig(["--strict-config"]);
+      expect(getGithubIssueConfig()).toEqual({ footer: "@claude please investigate" });
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it("still rejects an unknown key inside github under --strict-config", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "hermes-qa-github-")));
+    const previousCwd = process.cwd();
+    process.chdir(root);
+    try {
+      writeFileSync(
+        join(root, "playwright-spec-for-ai-agent.config.json"),
+        JSON.stringify({ github: { issueFootr: "x" } }),
+      );
+      await expect(loadProjectConfig(["--strict-config"])).rejects.toThrow(
+        /unknown config key "github\.issueFootr" — did you mean "issueFooter"\?/,
+      );
+    } finally {
+      process.chdir(previousCwd);
+    }
   });
 });

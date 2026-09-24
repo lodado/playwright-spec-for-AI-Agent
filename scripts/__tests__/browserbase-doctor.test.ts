@@ -135,7 +135,7 @@ describe("Browserbase doctor", () => {
     expect(remote.detail).toContain("not verified");
     expect(api.createClient).not.toHaveBeenCalled();
   });
-  it.each(["--cdp-url=wss://secret.test", "--cdp-url", "--creds-in-prompt"])("rejects conflicting option %s", async flag => {
+  it.each(["--cdp-url=wss://secret.test", "--cdp-url", "--credentials-in-prompt"])("rejects conflicting option %s", async flag => {
     expect(find(await collectDoctorReport([...argv, flag]), "Browserbase options").status).toBe("fail");
   });
   it("rejects a CDP environment URL without exposing it", async () => {

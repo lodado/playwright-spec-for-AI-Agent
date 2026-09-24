@@ -52,8 +52,8 @@ describe("buildGwtPromptSpec", () => {
             {
               title: "shows plan",
               checkId: "shows-plan",
-              livePolicyAnnotation: "readonly",
-              liveRunPolicy: "executable-readonly",
+              livePolicyAnnotation: "safe-interaction",
+              liveRunPolicy: "executable-interaction",
               fixtures: { avatar: "tests/fixtures/avatar.png" },
             },
           ],
@@ -66,8 +66,39 @@ describe("buildGwtPromptSpec", () => {
       fixtures: { logo: "tests/fixtures/logo.png" },
     });
     expect(compact.scenarios[0].tests[0]).toMatchObject({
-      qaLivePolicy: "readonly",
+      qaLivePolicy: "safe-interaction",
       fixtures: { avatar: "tests/fixtures/avatar.png" },
+    });
+  });
+
+  // Only safe-interaction may attach a file live; a fixture shown on any other
+  // test made the plan say "upload" for a check the judge can never upload in.
+  it.each([
+    ["safe-interaction-no-confirm", "judgment-interaction-no-confirm"],
+    ["readonly", "executable-readonly"],
+  ])("to withhold fixtures from a %s test", (annotation, liveRunPolicy) => {
+    const compact = buildGwtPromptSpec({
+      scenarios: [
+        {
+          scenarioId: "ACTIVE",
+          label: "Active",
+          sourceFile: "dash.spec.ts",
+          tests: [
+            {
+              title: "shows the file name",
+              checkId: "shows-the-file-name",
+              livePolicyAnnotation: annotation,
+              liveRunPolicy,
+              fixtures: { upload: "fixtures/a.png" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(compact.scenarios[0].tests[0]).toEqual({
+      title: "shows the file name",
+      checkId: "shows-the-file-name",
+      qaLivePolicy: annotation,
     });
   });
 

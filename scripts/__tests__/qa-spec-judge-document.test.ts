@@ -511,3 +511,47 @@ describe("Given-When-Then for blocked policies", () => {
     expect(doc).not.toContain("**Then:**");
   });
 });
+
+describe("judge document uploads", () => {
+  it("lists the uploads once when the saved live plan already carries them", () => {
+    const uploadFixtures = { defaults: {}, byCheckId: { a: { upload: "/abs/a.png" } } };
+    const saved = "# Live\n\n### ACTIVE — shows health score\nGiven: x\n\n## Uploads\n\n- upload: `/abs/a.png`\n";
+    const { document } = buildJudgeBrowseDocument({
+      page: "dashboard",
+      spec: sampleSpec,
+      specLiveMarkdown: saved,
+      planSource: "spec-live.md",
+      stagingLogin,
+      alwaysRunScenarioIds: [],
+      uploadFixtures,
+    });
+
+    expect(document.match(/^## Uploads$/gm)).toHaveLength(1);
+    expect(document).toContain("- upload: `/abs/a.png`");
+  });
+});
+
+// A conditional check keeps its "could not induce the state" branch at the end
+// of the body; cutting it off made the judge fail a product for a precondition
+// the test itself treats as an observation.
+describe("source excerpt budget", () => {
+  it("quotes a 3,000-character test body whole, down to its last branch", () => {
+    const body = `  await page.click("#a"); // ${"x".repeat(2900)}\n  // (3) could not induce failure: observe only`;
+    const md = renderFriendlyQaSpecMarkdown(
+      {
+        scenarios: [
+          {
+            scenarioId: "ACTIVE",
+            label: "Active",
+            sourceFile: "cond.spec.ts",
+            tests: [{ title: "conditional test", liveRunPolicy: "executable-interaction" }],
+          },
+        ],
+      },
+      "dashboard",
+      { specSourceFiles: { "cond.spec.ts": `test("conditional test", async ({ page }) => {\n${body}\n});` } },
+    );
+    expect(md).toContain("(3) could not induce failure: observe only");
+    expect(md).not.toContain("excerpt truncated");
+  });
+});

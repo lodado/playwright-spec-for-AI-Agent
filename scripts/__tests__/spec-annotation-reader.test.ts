@@ -389,3 +389,32 @@ test("로그인 후 기록을 시작한다", async ({ page }) => {});
     expect(new Set(ids).size).toBe(2);
   });
 });
+
+// A fixture on a no-confirm test is never attached live: the judge's upload
+// tool refuses that policy, so the author has to hear it at `spec` time.
+describe("@qa-fixture on a no-confirm test", () => {
+  it("warns once, naming the test, and keeps parsing", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const parsed = parseSpecFile(
+        "upload.spec.ts",
+        `// @qa-scenario: ACTIVE
+test.describe("upload", () => {
+  // @qa-live-policy: safe-interaction-no-confirm
+  // @qa-fixture: upload=fixtures/a.png
+  test("shows the file name", async ({ page }) => {});
+  // @qa-live-policy: safe-interaction
+  // @qa-fixture: upload=fixtures/a.png
+  test("accepts the upload", async ({ page }) => {});
+});`,
+      );
+      expect(parsed?.tests).toHaveLength(2);
+      const messages = warn.mock.calls.map(call => String(call[0]));
+      expect(messages).toEqual([
+        '[qa-spec] upload.spec.ts: "shows the file name" declares @qa-fixture but is safe-interaction-no-confirm — the judge never attaches files on that policy. Use safe-interaction if selecting a file cannot submit it.',
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
