@@ -13,6 +13,13 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [7.6.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.5.3...v7.6.0) (2026-09-28)
+
+### Features
+
+* Serve `qa_checkpoint` to exec adapters running under `QA_AGENT_AUTH=cdp-attach`. The prompt names a shell command (`scripts/qa-checkpoint.mjs`) that asks the runner to capture per-check evidence; the endpoint and token reach the CLI only through its environment. Exec passes are no longer demoted for lack of per-check evidence.
+* Add `examples/exec-codex-agent-browser.sh`, a `QA_AGENT_CMD` wrapper in which Codex drives the runner's browser through the agent-browser CLI.
+
 ## [7.5.3](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.5.2...v7.5.3) (2026-09-24)
 
 ### Fixes

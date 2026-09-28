@@ -5,6 +5,15 @@ import { basename, extname, join } from "node:path";
 import { captureSettledEvidence } from "./qa-evidence.mjs";
 import { redactSensitiveText } from "./agent-output.mjs";
 
+/**
+ * Checkpoint tools need a CLI that can reach this server: Hermes via its
+ * plugin, an exec CLI via qa-checkpoint.mjs. Either way the agent runs in a
+ * child process so the runner's event loop stays free to answer it.
+ */
+export function servesQaBrowserTools(adapter) {
+  return adapter.name === "hermes" || (adapter.name === "exec" && adapter.capabilities.auth === "cdp-attach");
+}
+
 /** The runner owns the browser and artifacts; the model can request only these two operations. */
 export async function startQaBrowserTools({ session, plannedChecks, allowedOrigins = [], allowedUrls = [], evidenceDir = null, label = "qa", secrets = [] }) {
   const checks = new Map(plannedChecks.map(check => [check.checkId, check]));

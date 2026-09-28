@@ -151,6 +151,52 @@ use a staging account whose permissions match the intended test.
 `exec` with `auth=cdp-attach`. The adapter supports a Claude-style `result`
 containing a JSON object or a JSON string, including one fenced JSON block.
 
+### Checkpoints for exec CLIs
+
+Under `QA_AGENT_AUTH=cdp-attach`, the runner serves the same `qa_checkpoint`
+evidence server it gives Hermes. The prompt names a shell command,
+`node <package>/scripts/qa-checkpoint.mjs <checkId> <full-url>`, which asks the
+runner to capture a screenshot and ARIA snapshot for that check. The endpoint
+and bearer token reach the CLI only as `QA_BROWSER_TOOLS_URL` and
+`QA_BROWSER_TOOLS_TOKEN` in its environment. Without a checkpoint, a pass
+whose screen changed before the final snapshot is demoted to `manual_review`.
+
+The agent's shell must see those two variables. Codex drops variables whose
+names contain `TOKEN` from shell commands by default; add
+`-c shell_environment_policy.ignore_default_excludes=true` to its command, or
+include the two names with `shell_environment_policy.include_only`.
+`qa_upload_fixture` is not available to exec CLIs.
+
+### Exec with Codex and agent-browser
+
+**Prerequisite:** authenticated `codex` and
+[`agent-browser`](https://github.com/vercel-labs/agent-browser) CLIs on `PATH`.
+Instead of an MCP server, Codex drives the runner's browser with shell
+commands: `agent-browser connect <cdp-url>`, `snapshot -i`, `click @e3`.
+
+**Configure:**
+
+```bash
+export QA_AI_ADAPTER=exec
+export QA_AGENT_AUTH=cdp-attach
+export QA_AGENT_CMD="$PWD/node_modules/playwright-spec-for-ai-agent/examples/exec-codex-agent-browser.sh"
+# Optional: pin the model; unset uses Codex's default.
+# export QA_CODEX_MODEL='your-model-name'
+```
+
+The wrapper prepends the agent-browser instructions to the judge prompt and
+prints only Codex's final message. It runs Codex with
+`--dangerously-bypass-approvals-and-sandbox`, because the agent-browser daemon
+and the checkpoint command need local sockets the sandbox blocks. Use it only
+with a dedicated staging account and on a machine where that is acceptable.
+`--ignore-user-config` keeps personal MCP servers and hooks out of the run, but
+Codex still reads `AGENTS.md` from `CODEX_HOME`; point `CODEX_HOME` at a
+directory holding only `auth.json` for a run free of personal instructions.
+
+**Run and verify:** use the [shared run sequence](#3-run-and-verify). Expect
+`exec` with `auth=cdp-attach`, and `runnerEvidence.checkpoints` with one entry
+per check.
+
 ### Exec with Codex
 
 **Prerequisite:** an authenticated `codex` CLI that accepts prompts on stdin and

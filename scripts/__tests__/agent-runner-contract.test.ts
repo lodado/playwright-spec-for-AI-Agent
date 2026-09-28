@@ -272,6 +272,35 @@ describe("exec adapter", () => {
     expect(execChildEnv().PLAYWRIGHT_MCP_CDP_ENDPOINT).toBeUndefined();
   });
 
+  it("to be: hands the checkpoint endpoint and its shell command to the agent when browser tools run", () => {
+    vi.stubEnv("QA_AGENT_CMD", "codex exec -");
+    spawnSyncMock.mockReturnValue(spawnResult());
+    runExecAgent("judge this page", 5, {
+      browserTools: { url: "http://127.0.0.1:4100/", token: "tool-token" },
+    });
+
+    const [, args, spawnOptions] = spawnSyncMock.mock.calls[0];
+    expect(spawnOptions.env.QA_BROWSER_TOOLS_URL).toBe("http://127.0.0.1:4100/");
+    expect(spawnOptions.env.QA_BROWSER_TOOLS_TOKEN).toBe("tool-token");
+    expect(spawnOptions.input).toMatch(/qa-checkpoint\.mjs" <checkId> <full-url>/);
+    expect(spawnOptions.input).toContain("judge this page");
+    expect(JSON.stringify(args)).not.toContain("tool-token");
+    expect(spawnOptions.input).not.toContain("tool-token");
+  });
+
+  it("to be: never leaks an inherited checkpoint endpoint into a run without browser tools", () => {
+    vi.stubEnv("QA_AGENT_CMD", "codex exec -");
+    vi.stubEnv("QA_BROWSER_TOOLS_URL", "http://127.0.0.1:4100/");
+    vi.stubEnv("QA_BROWSER_TOOLS_TOKEN", "stale-token");
+    spawnSyncMock.mockReturnValue(spawnResult());
+    runExecAgent("judge this page", 5, {});
+
+    const [, , spawnOptions] = spawnSyncMock.mock.calls[0];
+    expect(spawnOptions.env.QA_BROWSER_TOOLS_URL).toBeUndefined();
+    expect(spawnOptions.env.QA_BROWSER_TOOLS_TOKEN).toBeUndefined();
+    expect(spawnOptions.input).toBe("judge this page");
+  });
+
   it("fails with a named env var when QA_AGENT_CMD is unset", () => {
     vi.stubEnv("QA_AGENT_CMD", "");
     expect(() => runExecAgent("q", 5, {})).toThrow(/QA_AGENT_CMD/);

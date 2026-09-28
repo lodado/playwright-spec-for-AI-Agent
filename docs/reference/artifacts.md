@@ -151,7 +151,8 @@ An adapter that drives its own browser (`auth: "self-prelogin"`) leaves
 
 ### Intermediate checkpoints and uploads
 
-Hermes browse runs can capture intermediate states through `qa_checkpoint`.
+Hermes browse runs, and exec browse runs under `QA_AGENT_AUTH=cdp-attach`, can
+capture intermediate states through `qa_checkpoint`.
 `runnerEvidence.checkpoints` records each checkpoint's `checkId`, URL, and
 screenshot/ARIA `evidenceRefs`. An intermediate artifact owned by another check
 cannot satisfy a check's evidence requirement. Final snapshots remain available

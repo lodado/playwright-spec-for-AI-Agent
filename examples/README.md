@@ -34,6 +34,13 @@ These are documentation, not a runnable suite. Copy one into your own app and
 run the pipeline there. The annotation rules are in
 [../docs/reference/annotations.md](../docs/reference/annotations.md).
 
+## Agent wrappers
+
+- [`exec-codex-agent-browser.sh`](./exec-codex-agent-browser.sh) — `QA_AGENT_CMD`
+  for the exec adapter: Codex drives the runner's browser through the
+  agent-browser CLI. Setup and trade-offs:
+  [../docs/how-to/run-an-adapter.md](../docs/how-to/run-an-adapter.md#exec-with-codex-and-agent-browser).
+
 ## Where artifacts land
 
 Default layout, from `paths.specDir` and `paths.outputDir`:

@@ -87,8 +87,8 @@ its captures have been removed also flags its missing evidence.
 This checks evidence provenance, not whether the evidence proves the claim.
 A screenshot reference can point to the wrong part of the page, and a matching
 quote can describe the wrong element. Each manifest entry now links a stable
-check ID to its evidence paths within a run. Hermes can use `qa_checkpoint` to
-bind intermediate captures to that check before a dialog closes or the page
+check ID to its evidence paths within a run. Hermes, and an exec CLI attached
+with `cdp-attach`, can use `qa_checkpoint` to bind intermediate captures to that check before a dialog closes or the page
 changes; another check cannot reuse those artifacts to satisfy its evidence
 requirement. Local in-process module adapters can request intermediate captures
 through [`options.captureEvidence()`](../how-to/add-an-adapter.md#capture-an-intermediate-browser-state).

@@ -66,6 +66,7 @@ vi.mock("../resolve-spec-for-judge.mjs", () => ({
 }));
 
 import { buildBrowseHermesQuery, main } from "../run-hermes-page-judge.mjs";
+import { servesQaBrowserTools } from "../qa-browser-tools.mjs";
 
 const SPEC = {
   scenarios: [
@@ -237,6 +238,19 @@ function sessionStub(evidence: Record<string, unknown> = {}) {
     evidence: captured,
   };
 }
+
+describe("runner-owned checkpoint tools", () => {
+  it("to be: served to Hermes and to an exec CLI attached to the runner browser", () => {
+    expect(servesQaBrowserTools({ name: "hermes", capabilities: { auth: "cdp-attach" } })).toBe(true);
+    expect(servesQaBrowserTools({ name: "exec", capabilities: { auth: "cdp-attach" } })).toBe(true);
+  });
+
+  it("to be: withheld from adapters that drive their own browser or run in-process", () => {
+    expect(servesQaBrowserTools({ name: "exec", capabilities: { auth: "credentials-in-prompt" } })).toBe(false);
+    expect(servesQaBrowserTools({ name: "aside", capabilities: { auth: "self-prelogin" } })).toBe(false);
+    expect(servesQaBrowserTools({ name: "stagehand", capabilities: { auth: "cdp-attach" } })).toBe(false);
+  });
+});
 
 describe("judge wiring", () => {
   it("demotes an agent-only pass without runner-owned evidence", async () => {

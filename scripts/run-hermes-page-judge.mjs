@@ -18,7 +18,7 @@ import { inspectUploadFixtures, assertUploadAdapter, preflightUploads } from "./
 import { writeAgentQueryArtifact } from "./agent-output.mjs";
 import { browserbaseOptions, resolveBrowserProvider, readBrowserbaseContext, launchBrowserbaseSession } from "./browser-provider.mjs";
 import { runBrowserbaseAgent } from "./browserbase-agent-runner.mjs";
-import { startQaBrowserTools } from "./qa-browser-tools.mjs";
+import { servesQaBrowserTools, startQaBrowserTools } from "./qa-browser-tools.mjs";
 import { withSchema } from "./artifact-schema.mjs";
 import {
   AgentOutputError,
@@ -670,7 +670,7 @@ async function executeJudge({
   let checkpoint = 0;
   let browserTools;
   try {
-    if (session && adapter.name === "hermes") {
+    if (session && servesQaBrowserTools(adapter)) {
       browserTools = await startQaBrowserTools({ session, plannedChecks: plan.plannedChecks,
         allowedOrigins, evidenceDir: paths.evidenceDir, label: `${paths.slug}-${runId}`, secrets: plan.secrets });
     }

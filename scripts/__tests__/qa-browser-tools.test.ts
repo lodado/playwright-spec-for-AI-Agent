@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { chromium, type Browser } from '@playwright/test';
 import { startQaBrowserTools } from '../qa-browser-tools.mjs';
+import { requestCheckpoint } from '../qa-checkpoint.mjs';
 import { normalizeBrowseDecision } from '../judge-verdict.mjs';
 import { buildBrowseChecklist } from '../spec-annotation-reader.mjs';
 
@@ -123,6 +124,21 @@ it('refuses ambiguous tabs instead of silently capturing or uploading to the wro
   const result = await call({ action: 'upload', checkId: 'chk_upload', fixture: 'upload', url: page.url() });
   expect(result.ok).toBe(false);
   expect(JSON.stringify(await result.json())).toMatch(/exactly one/i);
+}));
+
+it('to be: the shell checkpoint command captures evidence owned by the named check', async () => withTools(async ({ page, session, tools }) => {
+  const env = { QA_BROWSER_TOOLS_URL: tools.url, QA_BROWSER_TOOLS_TOKEN: tools.token };
+  const captured = await requestCheckpoint({ checkId: 'chk_read', url: page.url(), env });
+  expect(captured.checkId).toBe('chk_read');
+  expect(captured.evidenceRefs.filter((file: string) => file.endsWith('.yaml'))).toHaveLength(1);
+  expect(session.evidence.checkpoints.map((checkpoint: any) => checkpoint.checkId)).toEqual(['chk_read']);
+}));
+
+it('to be: the shell checkpoint command reports a refusal instead of returning evidence', async () => withTools(async ({ page, session, tools }) => {
+  const env = { QA_BROWSER_TOOLS_URL: tools.url, QA_BROWSER_TOOLS_TOKEN: tools.token };
+  await expect(requestCheckpoint({ checkId: 'forged', url: page.url(), env })).rejects.toThrow(/check ID/i);
+  await expect(requestCheckpoint({ checkId: 'chk_read', url: page.url(), env: {} })).rejects.toThrow(/QA_BROWSER_TOOLS_URL/);
+  expect(session.evidence.checkpoints).toHaveLength(0);
 }));
 
 it('does not accept an upload-dependent pass without a runner receipt', () => {

@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   AGENT_DEFAULT_TIMEOUT_MS,
   finalizeAgentRun,
@@ -80,22 +81,48 @@ export function execAdapterCapabilities() {
   };
 }
 
+const CHECKPOINT_SCRIPT = fileURLToPath(new URL("./qa-checkpoint.mjs", import.meta.url));
+
+/**
+ * A terminal-only CLI cannot load Hermes's plugin, so it reaches the same
+ * runner-owned checkpoint server through a shell command. The note names the
+ * command; the token travels only in the child's environment.
+ */
+function withBrowserTools(query, env, browserTools) {
+  const childEnv = { ...env };
+  delete childEnv.QA_BROWSER_TOOLS_URL;
+  delete childEnv.QA_BROWSER_TOOLS_TOKEN;
+  if (!browserTools) return { query, env: childEnv };
+  childEnv.QA_BROWSER_TOOLS_URL = browserTools.url;
+  childEnv.QA_BROWSER_TOOLS_TOKEN = browserTools.token;
+  const note = [
+    "## qa_checkpoint in this run",
+    `qa_checkpoint is available as a shell command: "${process.execPath}" "${CHECKPOINT_SCRIPT}" <checkId> <full-url>`,
+    "It prints JSON with evidenceRefs. Use it wherever the rules below say qa_checkpoint. qa_upload_fixture is not available.",
+    "",
+    "",
+  ].join("\n");
+  return { query: note + query, env: childEnv };
+}
+
 export function runExecAgent(
   query,
   _maxTurns,
-  { paths = null, secrets = [], requiredKeys = ["status"], requiredKeyGroups = null } = {}
+  { paths = null, secrets = [], requiredKeys = ["status"], requiredKeyGroups = null, browserTools = null } = {}
 ) {
   const { command, args } = resolveExecInvocation();
+  const run = withBrowserTools(query, execChildEnv(), browserTools);
+  const redacted = browserTools ? [...secrets, browserTools.token] : secrets;
 
-  writeAgentQueryArtifact(paths, query, secrets);
+  writeAgentQueryArtifact(paths, run.query, redacted);
 
   const timeout = resolveExecTimeoutMs();
   const result = spawnSync(command, args, {
     shell: false,
     encoding: "utf8",
     maxBuffer: 1024 * 1024 * 10,
-    env: execChildEnv(),
-    input: query,
+    env: run.env,
+    input: run.query,
     timeout,
   });
 
@@ -103,7 +130,7 @@ export function runExecAgent(
     adapterLabel: `exec (${command})`,
     command,
     paths,
-    secrets,
+    secrets: redacted,
     requiredKeys,
     requiredKeyGroups,
     timeoutMs: timeout,
