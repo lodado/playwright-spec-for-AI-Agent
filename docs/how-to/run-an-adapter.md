@@ -185,10 +185,14 @@ export QA_AGENT_CMD="$PWD/node_modules/playwright-spec-for-ai-agent/examples/exe
 ```
 
 The wrapper prepends the agent-browser instructions to the judge prompt and
-prints only Codex's final message. It runs Codex with
-`--dangerously-bypass-approvals-and-sandbox`, because the agent-browser daemon
-and the checkpoint command need local sockets the sandbox blocks. Use it only
-with a dedicated staging account and on a machine where that is acceptable.
+prints only Codex's final message. Staging pages are untrusted input to the
+model, so Codex runs in its `workspace-write` sandbox: the agent's shell can
+write only to a per-run temporary directory, which also holds agent-browser's
+socket. Network access stays on because agent-browser and the checkpoint
+command reach the runner on `127.0.0.1`. The sandbox does not block reads, so
+the wrapper starts Codex with an allowlisted environment: provider keys and
+other secrets in your shell never reach the agent, only the CDP endpoint and
+the checkpoint token. Use a dedicated staging account all the same.
 `--ignore-user-config` keeps personal MCP servers and hooks out of the run, but
 Codex still reads `AGENTS.md` from `CODEX_HOME`; point `CODEX_HOME` at a
 directory holding only `auth.json` for a run free of personal instructions.

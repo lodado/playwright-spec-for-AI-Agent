@@ -13,6 +13,12 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [7.6.1](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.6.0...v7.6.1) (2026-09-28)
+
+### Security
+
+* `examples/exec-codex-agent-browser.sh` no longer runs Codex with `--dangerously-bypass-approvals-and-sandbox`. A prompt injected through a staging page could have run any shell command on the operator's machine. Codex now runs in its `workspace-write` sandbox with writes confined to a per-run directory, and starts from an allowlisted environment so provider keys and other secrets never reach the agent's shell.
+
 ## [7.6.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.5.3...v7.6.0) (2026-09-28)
 
 ### Features
