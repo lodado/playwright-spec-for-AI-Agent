@@ -151,7 +151,7 @@ use a staging account whose permissions match the intended test.
 `exec` with `auth=cdp-attach`. The adapter supports a Claude-style `result`
 containing a JSON object or a JSON string, including one fenced JSON block.
 
-### Checkpoints for exec CLIs
+### Checkpoints and uploads for exec CLIs
 
 Under `QA_AGENT_AUTH=cdp-attach`, the runner serves the same `qa_checkpoint`
 evidence server it gives Hermes. The prompt names a shell command,
@@ -165,7 +165,12 @@ The agent's shell must see those two variables. Codex drops variables whose
 names contain `TOKEN` from shell commands by default; add
 `-c shell_environment_policy.ignore_default_excludes=true` to its command, or
 include the two names with `shell_environment_policy.include_only`.
-`qa_upload_fixture` is not available to exec CLIs.
+
+Uploads work the same way. The prompt also names
+`node <package>/scripts/qa-upload-fixture.mjs <checkId> <full-url> <fixture> [selector]`;
+the runner attaches the declared fixture bytes and returns a receipt, under the
+same rules as Hermes's `qa_upload_fixture`. The upload preflight probes this
+runner-owned bridge directly, without a model call.
 
 ### Exec with Codex and agent-browser
 
@@ -185,8 +190,14 @@ export QA_AGENT_CMD="$PWD/node_modules/playwright-spec-for-ai-agent/examples/exe
 ```
 
 The wrapper prepends the agent-browser instructions to the judge prompt and
-prints only Codex's final message. Staging pages are untrusted input to the
-model, so Codex runs in its `workspace-write` sandbox: the agent's shell can
+prints only Codex's final message. `abstract-ai` and `review` get no browser from
+the runner, so for them the wrapper runs Codex read-only with no browser
+instructions; one `QA_AGENT_CMD` covers the whole `nightly` pipeline.
+
+An agent-browser action policy denies `upload`, `download`, cookie, storage and
+session-state access, and request routing. Files are attached only through
+`qa-upload-fixture.mjs`, so the agent cannot upload an arbitrary local file or
+read the session tokens. Staging pages are untrusted input to the model, so Codex runs in its `workspace-write` sandbox: the agent's shell can
 write only to a per-run temporary directory, which also holds agent-browser's
 socket. Network access stays on because agent-browser and the checkpoint
 command reach the runner on `127.0.0.1`. The sandbox does not block reads, so

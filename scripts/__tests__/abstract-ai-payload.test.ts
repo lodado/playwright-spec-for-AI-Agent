@@ -3,6 +3,23 @@ import { buildGwtPromptSpec } from "../abstract-ai-payload.mjs";
 import { buildAbstractHermesQuery } from "../run-hermes-spec-abstractor.mjs";
 
 describe("buildGwtPromptSpec", () => {
+  it("to be: passes a test's describe context to the abstraction agent", () => {
+    const compact = buildGwtPromptSpec({
+      scenarios: [{ scenarioId: "S", tests: [
+        { title: "shows result", checkId: "c", livePolicyAnnotation: "readonly", context: ["as is: a document awaiting review is open"] },
+        { title: "no context", checkId: "d", livePolicyAnnotation: "readonly" },
+      ] }],
+    });
+    expect(compact.scenarios[0].tests[0].context).toEqual(["as is: a document awaiting review is open"]);
+    expect("context" in compact.scenarios[0].tests[1]).toBe(false);
+  });
+
+  it("to be: tells the abstraction agent that a no-confirm test still runs and restates its precondition", () => {
+    const query = buildAbstractHermesQuery({ scenarios: [] });
+    expect(query).toContain("The test still runs: Then is that observable state, never `skip`.");
+    expect(query).toContain("An `as is:` entry is the precondition: restate it in Given");
+  });
+
   it("includes only qaLivePolicy annotation per test", () => {
     const compact = buildGwtPromptSpec({
       scenarios: [

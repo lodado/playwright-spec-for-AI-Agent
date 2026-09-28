@@ -283,6 +283,7 @@ describe("exec adapter", () => {
     expect(spawnOptions.env.QA_BROWSER_TOOLS_URL).toBe("http://127.0.0.1:4100/");
     expect(spawnOptions.env.QA_BROWSER_TOOLS_TOKEN).toBe("tool-token");
     expect(spawnOptions.input).toMatch(/qa-checkpoint\.mjs" <checkId> <full-url>/);
+    expect(spawnOptions.input).toMatch(/qa-upload-fixture\.mjs" <checkId> <full-url> <fixture> \[selector\]/);
     expect(spawnOptions.input).toContain("judge this page");
     expect(JSON.stringify(args)).not.toContain("tool-token");
     expect(spawnOptions.input).not.toContain("tool-token");

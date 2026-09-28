@@ -4,7 +4,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { EnvironmentError } from "./errors.mjs";
 import { collectUniqueUploadFixtures } from "./qa-spec-judge-document.mjs";
 import { runBrowserbaseAgent } from "./browserbase-agent-runner.mjs";
-import { startQaBrowserTools } from "./qa-browser-tools.mjs";
+import { servesQaBrowserTools, startQaBrowserTools } from "./qa-browser-tools.mjs";
 import { redactSensitiveText } from "./agent-output.mjs";
 
 const digest = bytes => createHash("sha256").update(bytes).digest("hex");
@@ -52,13 +52,13 @@ export async function preflightUploads(payload, { adapter, session = null, creat
       `<label>Fixture ${i + 1}<input type="file" id="fixture-${i + 1}"></label>`).join("");
     url = `data:text/html,${encodeURIComponent(html)}`;
     await probe.goto(url);
-    if (adapter.name === "hermes") {
+    if (servesQaBrowserTools(adapter)) {
       browserTools = await startQaBrowserTools({ session, allowedUrls: [url], plannedChecks: fixtures.map((file, i) => ({
         checkId: `fixture_${i + 1}`, liveRunPolicy: "executable-interaction", uploadFixtures: { upload: file.absPath },
       })) });
     }
     if (browserTools) {
-      // Hermes attachment is runner-owned; probe it without a second model session.
+      // Hermes and exec attachment is runner-owned; probe it without a model session.
       for (let i = 0; i < fixtures.length; i += 1) {
         const checkId = `fixture_${i + 1}`;
         const response = await fetch(browserTools.url, {

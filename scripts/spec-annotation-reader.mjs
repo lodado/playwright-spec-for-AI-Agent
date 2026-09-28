@@ -406,10 +406,12 @@ function findDescribeBlocks(source) {
 
     const bodyStart = start + arrow.index + arrow[0].length;
 
+    const title = after.match(/^test\.describe\s*\(\s*(["'`])((?:\\.|(?!\1).)*?)\1\s*,/);
     blocks.push({
       start,
       end: findBlockEnd(source, bodyStart) + 1,
       policy: parseLivePolicyBeforeIndex(source, start),
+      ...(title ? { title: unescapeString(title[2]) } : {}),
     });
   }
 
@@ -435,6 +437,18 @@ export function resolveTestLivePolicy(source, testIndex) {
   }
 
   return null;
+}
+
+/**
+ * Enclosing test.describe titles, outermost first. Specs state preconditions
+ * there ("as is: a document awaiting review is open"), so a judge that sees only
+ * the test title cannot tell a missing precondition from a product defect.
+ */
+export function resolveTestContext(source, testIndex) {
+  return findDescribeBlocks(source)
+    .filter(block => block.title && block.start < testIndex && testIndex < block.end)
+    .sort((left, right) => left.start - right.start)
+    .map(block => block.title);
 }
 
 /**
@@ -539,8 +553,10 @@ export function parseSpecFile(fileName, source) {
       );
     }
 
+    const context = resolveTestContext(source, block.index);
     return {
       title: block.title,
+      ...(context.length > 0 ? { context } : {}),
       stagingMode,
       liveRunPolicy,
       livePolicyAnnotation,
@@ -624,6 +640,7 @@ export function buildBrowseChecklist(spec) {
           scenarioId: scenario.scenarioId,
           alwaysRun: alwaysRunIds.has(scenario.scenarioId),
           title: test.title,
+          ...(test.context ? { context: test.context } : {}),
           liveRunPolicy: test.liveRunPolicy,
           stagingMode: test.stagingMode,
         };

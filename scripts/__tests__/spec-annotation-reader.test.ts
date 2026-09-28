@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildBrowseChecklist,
   countUnparsedTests,
   describeLiveRunPolicy,
   extractTestBlocks,
@@ -113,6 +114,30 @@ test.describe("group", () => {
     expect(
       resolveTestLivePolicy(source, source.indexOf('test("child",')).annotation,
     ).toBe("subscription-mutation");
+  });
+
+  it("to be: carries enclosing describe titles, outermost first, as the test's context", () => {
+    const spec = parseSpecFile(
+      "review.spec.ts",
+      `// @qa-scenario: ACTIVE
+test.describe("<Review>", () => {
+  test.describe("as is: a document awaiting review is open", () => {
+    // @qa-live-policy: readonly
+    test("shows the result panel", async ({ page }) => {});
+  });
+});
+// @qa-live-policy: readonly
+test("top level", async ({ page }) => {});
+`,
+    );
+    expect(spec.tests.map((test: any) => test.context)).toEqual([
+      ["<Review>", "as is: a document awaiting review is open"],
+      undefined,
+    ]);
+    expect(buildBrowseChecklist({ scenarios: [spec] })[0].context).toEqual([
+      "<Review>",
+      "as is: a document awaiting review is open",
+    ]);
   });
 
   it("throws on unknown policy keyword", () => {

@@ -780,6 +780,18 @@ describe("judge prompt", () => {
     expect(query).toMatch(/\*\*skip\*\* when the mocked precondition cannot exist/);
     expect(query).toMatch(/not `manual_review`/);
   });
+
+  it("to be: routes an unmet `as is:` precondition to skip/ENVIRONMENT_DEFECT, never fail", async () => {
+    const { buildBrowseHermesQuery } = await import("../run-hermes-page-judge.mjs");
+    const query = buildBrowseHermesQuery({
+      judgeDocument: "### ACTIVE — a check",
+      stagingLogin: { targetUrl: "https://staging.acmecorp.com/dashboard" },
+      preauthenticated: true,
+    });
+
+    expect(query).toContain("report `skip` with cause `ENVIRONMENT_DEFECT`");
+    expect(query).toContain("Never report `fail` for an action you did not perform");
+  });
 });
 
 // Oracle refactor-entry-flows O1/O21/O24: where staging credentials may appear

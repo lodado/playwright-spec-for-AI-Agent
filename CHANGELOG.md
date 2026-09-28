@@ -13,6 +13,19 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [7.7.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.6.1...v7.7.0) (2026-09-28)
+
+### Features
+
+* Serve `qa_upload_fixture` to `cdp-attach` exec adapters as a shell command (`scripts/qa-upload-fixture.mjs`). The upload preflight probes the runner-owned bridge directly, without a model call.
+* Carry each test's enclosing `test.describe` titles as `context` into the spec, the abstraction payload and the judge's check identities, so an `as is:` precondition reaches the plan's Given and the judge.
+* `examples/exec-codex-agent-browser.sh` answers the text-only `abstract-ai` and `review` stages read-only, so one `QA_AGENT_CMD` covers `nightly`, and denies agent-browser `upload`, `download`, cookie, storage, session-state and routing actions.
+
+### Fixes
+
+* A check whose precondition is absent, or whose action was never performed, is reported `skip` with `ENVIRONMENT_DEFECT` instead of a `fail` with `PRODUCT_DEFECT`; the review's cause check says the same.
+* Tell the abstraction agent that a `safe-interaction-no-confirm` test still runs and its Then is the state observable before confirm, never `skip` (prompt rev 4.2.0; cached plans regenerate).
+
 ## [7.6.1](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.6.0...v7.6.1) (2026-09-28)
 
 ### Security

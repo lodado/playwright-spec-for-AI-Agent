@@ -175,6 +175,7 @@ export function buildBrowseHermesQuery({
     "  - **manual_review** when intent match is **ambiguous** or evidence is thin — do **not** fail just because live differs from the mock.",
     "  - **fail** only when the UI **clearly** contradicts intent (missing control, broken state, wrong class of outcome).",
     "  - **skip** when the mocked precondition cannot exist on this account at all — the test needs `remaining_credits: 0` and you can see the account has 7, or it needs pay-as-you-go and this account is on Free. Quote what the account actually shows. This is not `manual_review`: nothing was ambiguous, the check simply had no way to run here.",
+    "- A check's `context` lists its enclosing describe titles; an `as is:` entry is its precondition. When the page is not in that state (the target record is in another status, the control the When needs is absent), the product was never tested: report `skip` with cause `ENVIRONMENT_DEFECT` and quote what the page shows instead. Never report `fail` for an action you did not perform or an outcome you could not observe.",
     "- For other semantic / abstracted expectations: same rule — reasonable for intent → pass; ambiguous → manual_review.",
     "- If blocked on live → **skip**.",
     "- An excerpt ending in `// … excerpt truncated` is not the whole check: never `fail` on behaviour the excerpt does not show — use `manual_review`.",

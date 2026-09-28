@@ -10,11 +10,17 @@ const root = mkdtempSync(join(tmpdir(), 'upload-preflight-test-'));
 const file = join(root, 'sample.txt');
 writeFileSync(file, 'fixture');
 const payload = { defaults: { sample: file }, byCheckId: { one: { sample: file } } };
-const adapter = { name: 'exec', capabilities: { auth: 'cdp-attach' } };
+// An attaching adapter the runner serves no upload bridge to: it must prove its own tooling.
+const adapter = { name: 'stagehand', capabilities: { auth: 'cdp-attach' } };
 afterEach(() => { vi.clearAllMocks(); vi.restoreAllMocks(); });
 
 it('checks Hermes runner uploads without another model call', async () => {
   await expect(preflightUploads(payload, { adapter: { ...adapter, name: 'hermes' } })).resolves.toEqual({ count: 1 });
+  expect(mocks.run).not.toHaveBeenCalled();
+});
+
+it('to be: checks exec runner uploads through the same bridge, without a model call', async () => {
+  await expect(preflightUploads(payload, { adapter: { name: 'exec', capabilities: { auth: 'cdp-attach' } } })).resolves.toEqual({ count: 1 });
   expect(mocks.run).not.toHaveBeenCalled();
 });
 

@@ -82,10 +82,11 @@ export function execAdapterCapabilities() {
 }
 
 const CHECKPOINT_SCRIPT = fileURLToPath(new URL("./qa-checkpoint.mjs", import.meta.url));
+const UPLOAD_SCRIPT = fileURLToPath(new URL("./qa-upload-fixture.mjs", import.meta.url));
 
 /**
  * A terminal-only CLI cannot load Hermes's plugin, so it reaches the same
- * runner-owned checkpoint server through a shell command. The note names the
+ * runner-owned browser tools server through shell commands. The note names the
  * command; the token travels only in the child's environment.
  */
 function withBrowserTools(query, env, browserTools) {
@@ -96,9 +97,10 @@ function withBrowserTools(query, env, browserTools) {
   childEnv.QA_BROWSER_TOOLS_URL = browserTools.url;
   childEnv.QA_BROWSER_TOOLS_TOKEN = browserTools.token;
   const note = [
-    "## qa_checkpoint in this run",
+    "## qa_checkpoint and qa_upload_fixture in this run",
     `qa_checkpoint is available as a shell command: "${process.execPath}" "${CHECKPOINT_SCRIPT}" <checkId> <full-url>`,
-    "It prints JSON with evidenceRefs. Use it wherever the rules below say qa_checkpoint. qa_upload_fixture is not available.",
+    `qa_upload_fixture is available as a shell command: "${process.execPath}" "${UPLOAD_SCRIPT}" <checkId> <full-url> <fixture> [selector]`,
+    "Each prints JSON (evidenceRefs, or an upload receipt). Use them wherever the rules below say qa_checkpoint or qa_upload_fixture.",
     "",
     "",
   ].join("\n");

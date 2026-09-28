@@ -25,6 +25,7 @@ export function buildGwtPromptSpec(spec) {
       ...(scenario.fixtures ? { fixtures: scenario.fixtures } : {}),
       tests: (scenario.tests ?? []).map(test => ({
         title: test.title,
+        ...(test.context ? { context: test.context } : {}),
         checkId: test.checkId,
         qaLivePolicy: test.livePolicyAnnotation ?? null,
         // Only safe-interaction may attach a file live (the judge's upload tool

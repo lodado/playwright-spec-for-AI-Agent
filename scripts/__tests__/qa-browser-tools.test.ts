@@ -6,6 +6,7 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { chromium, type Browser } from '@playwright/test';
 import { startQaBrowserTools } from '../qa-browser-tools.mjs';
 import { requestCheckpoint } from '../qa-checkpoint.mjs';
+import { requestUploadFixture } from '../qa-upload-fixture.mjs';
 import { normalizeBrowseDecision } from '../judge-verdict.mjs';
 import { buildBrowseChecklist } from '../spec-annotation-reader.mjs';
 
@@ -139,6 +140,16 @@ it('to be: the shell checkpoint command reports a refusal instead of returning e
   await expect(requestCheckpoint({ checkId: 'forged', url: page.url(), env })).rejects.toThrow(/check ID/i);
   await expect(requestCheckpoint({ checkId: 'chk_read', url: page.url(), env: {} })).rejects.toThrow(/QA_BROWSER_TOOLS_URL/);
   expect(session.evidence.checkpoints).toHaveLength(0);
+}));
+
+it('to be: the shell upload command attaches only the declared bytes and returns a receipt for its check', async () => withTools(async ({ page, session, tools }) => {
+  const env = { QA_BROWSER_TOOLS_URL: tools.url, QA_BROWSER_TOOLS_TOKEN: tools.token };
+  const receipt = await requestUploadFixture({ checkId: 'chk_upload', url: page.url(), fixture: 'upload', env });
+  expect(receipt.checkId).toBe('chk_upload');
+  expect(await page.locator('input').evaluate(async (el: HTMLInputElement) => el.files?.[0].text())).toBe('approved fixture bytes');
+  expect(session.evidence.uploads).toHaveLength(1);
+  await expect(requestUploadFixture({ checkId: 'chk_read', url: page.url(), fixture: 'upload', env })).rejects.toThrow(/does not authorize/);
+  expect(session.evidence.uploads).toHaveLength(1);
 }));
 
 it('does not accept an upload-dependent pass without a runner receipt', () => {

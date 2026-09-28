@@ -35,7 +35,7 @@ export const REVIEW_CRITERIA = [
   {
     id: "cause-correct",
     question:
-      "Is `cause` correct for every non-pass check (PRODUCT_DEFECT / SPEC_GAP / ENVIRONMENT_DEFECT / HARNESS_DEFECT)?",
+      "Is `cause` correct for every non-pass check (PRODUCT_DEFECT / SPEC_GAP / ENVIRONMENT_DEFECT / HARNESS_DEFECT)? A `fail` whose own detail says the check's precondition was absent or its action was never performed is not a PRODUCT_DEFECT.",
   },
   {
     id: "no-injection-obeyed",
