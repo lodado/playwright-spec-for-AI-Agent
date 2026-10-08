@@ -92,7 +92,14 @@ describe("executeWithRetries as a judge run whose attempts throw EnvironmentErro
   it("to be a second attempt that only starts after the first one settled (deferred barrier)", async () => {
     const executeWithRetries = await loadRetryCore();
     let calls = 0;
-    const first = Promise.withResolvers<{ status: string }>();
+    // A hand-rolled deferred: Promise.withResolvers needs Node 22, and engines allow Node 20.
+    let rejectFirst!: (error: unknown) => void;
+    const first = {
+      promise: new Promise<{ status: string }>((_resolve, reject) => {
+        rejectFirst = reject;
+      }),
+      reject: (error: unknown) => rejectFirst(error),
+    };
     const attempt = () => {
       calls += 1;
       return calls === 1 ? first.promise : Promise.resolve({ status: "pass" });
