@@ -15,6 +15,17 @@
 
 ## [8.0.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.7.0...v8.0.0) (2026-10-08)
 
+
+### ⚠ BREAKING CHANGES
+
+* package exports are now ./adapter, ./config and ./package.json; the ./scripts/* and ./* deep imports are removed. Ledger, spec-hash, spec reader and verdict functions now require injected IO arguments.
+
+### Code Refactoring
+
+* split the judge into pure core modules and inject Node IO ([1e81b36](https://github.com/lodado/playwright-spec-for-AI-Agent/commit/1e81b3684b2396c5c59b78841b0672d89007082d))
+
+## [8.0.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.7.0...v8.0.0) (2026-10-08)
+
 ### ⚠ BREAKING CHANGES
 
 * The package `exports` map is reduced to `./adapter`, `./config` and `./package.json`. The wildcard specifiers `./scripts/*` and `./*` are removed, so deep imports such as `playwright-spec-for-ai-agent/scripts/<file>.mjs` no longer resolve.
