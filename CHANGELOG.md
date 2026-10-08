@@ -13,6 +13,17 @@
 > forward, commit subjects are written in English (see `CONTRIBUTING.md`),
 > because release-please publishes each one unedited.
 
+## [8.0.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.7.0...v8.0.0) (2026-10-08)
+
+### ⚠ BREAKING CHANGES
+
+* The package `exports` map is reduced to `./adapter`, `./config` and `./package.json`. The wildcard specifiers `./scripts/*` and `./*` are removed, so deep imports such as `playwright-spec-for-ai-agent/scripts/<file>.mjs` no longer resolve.
+* Core modules take file and environment access as arguments instead of reading `node:fs` or the project config themselves: `hashFile(path, { readFile })`, `parseSpecFile(fileName, source, { livePolicyOverrides })`, `parseSpecDirectory(specDir, { io, livePolicyOverrides })`, and the run-ledger functions with `{ io }`.
+
+### Fixes
+
+* `nightly` exits with the larger of two different unrecognised stage exit codes, whatever order the stages exit in.
+
 ## [7.7.0](https://github.com/lodado/playwright-spec-for-AI-Agent/compare/v7.6.1...v7.7.0) (2026-09-28)
 
 ### Features

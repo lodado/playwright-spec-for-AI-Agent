@@ -12,6 +12,7 @@ import { runFixture } from "../fixture-runner.mjs";
 import { AgentOutputError } from "../errors.mjs";
 import { buildCoverage, buildEvidenceManifest, normalizeBrowseDecision } from "../judge-verdict.mjs";
 import { findUncitedChecks, normalizeJudgeReview, REVIEW_CRITERIA } from "../normalize-judge-review.mjs";
+import { evidenceIo } from "./test-node-io.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "qa-check-identity-"));
 const snapshot = join(dir, "capture.yaml");
@@ -158,7 +159,7 @@ describe("stable check identity", () => {
   it("links ID-free results by an exact unique title without mutating the report", () => {
     const plannedChecks = plan.map((check, i) => ({ ...check, item: `score ${i}` }));
     const reported = plannedChecks.map(({ item }) => ({ item, result: "pass", detail: 'Observed "98 pts"' })).reverse();
-    const decision = normalizeBrowseDecision({ checks: reported }, { plannedChecks, runnerEvidence });
+    const decision = normalizeBrowseDecision({ status: "pass", checks: reported }, { ...evidenceIo, plannedChecks, runnerEvidence });
     expect(decision.status).toBe("pass");
     expect(decision.checks.map(check => check.checkId)).toEqual([...plannedChecks].reverse().map(check => check.checkId));
     expect(reported.every(check => !("checkId" in check))).toBe(true);
@@ -171,7 +172,7 @@ describe("stable check identity", () => {
     { item: "Shows score" },
   ])("does not guess an identity for an invalid report: %j", report => {
     const decision = normalizeBrowseDecision({ checks: [{ ...checks[0], ...report, checkId: report.checkId }] },
-      { plannedChecks: [plan[0]], runnerEvidence });
+      { ...evidenceIo, plannedChecks: [plan[0]], runnerEvidence });
     expect(decision.status).toBe("manual_review");
   });
 
@@ -181,18 +182,18 @@ describe("stable check identity", () => {
     const receipt = { path: "/approved.pdf", sha256: "verified", receiptId: "receipt-one", checkId: plan[0].checkId };
     const evidence = { ...runnerEvidence, uploads: [receipt],
       checkpoints: [{ checkId: plan[0].checkId, evidenceRefs: [snapshot] }] };
-    expect(normalizeBrowseDecision({ checks: reported }, { plannedChecks, runnerEvidence: evidence }).status).toBe("pass");
+    expect(normalizeBrowseDecision({ status: "pass", checks: reported }, { ...evidenceIo, plannedChecks, runnerEvidence: evidence }).status).toBe("pass");
     for (const foreign of [
       { ...evidence, uploads: [{ ...receipt, checkId: plan[1].checkId }] },
       { ...evidence, checkpoints: [{ checkId: plan[1].checkId, evidenceRefs: [snapshot] }] },
     ]) {
-      expect(normalizeBrowseDecision({ checks: reported }, { plannedChecks, runnerEvidence: foreign }).status).toBe("manual_review");
+      expect(normalizeBrowseDecision({ checks: reported }, { ...evidenceIo, plannedChecks, runnerEvidence: foreign }).status).toBe("manual_review");
     }
-    expect(normalizeBrowseDecision({ checks: [...reported, ...reported] }, { plannedChecks, runnerEvidence: evidence }).status).toBe("manual_review");
+    expect(normalizeBrowseDecision({ checks: [...reported, ...reported] }, { ...evidenceIo, plannedChecks, runnerEvidence: evidence }).status).toBe("manual_review");
   });
 
   it("keeps same-title results and evidence separate by ID", () => {
-    const decision = normalizeBrowseDecision({ checks: [...checks].reverse() }, { plannedChecks: plan, runnerEvidence });
+    const decision = normalizeBrowseDecision({ status: "pass", checks: [...checks].reverse() }, { ...evidenceIo, plannedChecks: plan, runnerEvidence });
     expect(decision.status).toBe("pass");
     expect(decision.checks.map(check => check.checkId)).toEqual(["inactive/score", "active/score"]);
     const manifest = buildEvidenceManifest({ runId: "run-one", plannedChecks: plan, checks: decision.checks, runnerEvidence });
@@ -207,7 +208,7 @@ describe("stable check identity", () => {
     [checks[0], checks[0], checks[1]],
     [...checks, { ...checks[0], checkId: "unplanned" }],
   ])("does not accept missing, unknown, or duplicate reported IDs", reported => {
-    expect(normalizeBrowseDecision({ checks: reported }, { plannedChecks: plan, runnerEvidence }).status)
+    expect(normalizeBrowseDecision({ checks: reported }, { ...evidenceIo, plannedChecks: plan, runnerEvidence }).status)
       .toBe("manual_review");
   });
 
@@ -219,14 +220,14 @@ describe("stable check identity", () => {
     const reported = plannedChecks.map(check => ({
       ...check, item: "AI가 바꿔 쓴 제목", result: "pass", detail: 'Observed "98 pts"',
     }));
-    const valid = normalizeBrowseDecision({ checks: [...reported].reverse() }, { plannedChecks, runnerEvidence });
+    const valid = normalizeBrowseDecision({ status: "pass", checks: [...reported].reverse() }, { ...evidenceIo, plannedChecks, runnerEvidence });
     expect(valid.status).toBe("pass");
     expect(valid.checks.map(check => check.item)).toEqual(["같은 제목", "같은 제목"]);
     const id = reported[0].checkId;
     const corruptedId = id.slice(0, -1) + (id.endsWith("0") ? "1" : "0");
     const invalid = normalizeBrowseDecision({ checks: [
       { ...reported[0], item: plannedChecks[0].item, checkId: corruptedId }, reported[1],
-    ] }, { plannedChecks, runnerEvidence });
+    ] }, { ...evidenceIo, plannedChecks, runnerEvidence });
     expect(invalid.status).toBe("manual_review");
     expect(invalid.coverage.missingCheckIds).toEqual([id]);
     expect(invalid.coverage.unplannedCheckIds).toEqual([corruptedId]);
@@ -266,30 +267,30 @@ describe("invocation-scoped ARIA cache", () => {
     writeFileSync(file, '- text: 98 pts\n');
     const readText = vi.fn(path => readFileSync(path, "utf8"));
     const options = { runnerEvidence: { ariaSnapshots: [file] }, readText };
-    expect(normalizeBrowseDecision({ checks: Array(100).fill(checks[0]) }, options).status).toBe("pass");
+    expect(normalizeBrowseDecision({ status: "pass", checks: Array(100).fill(checks[0]) }, { ...evidenceIo, ...options }).status).toBe("pass");
     expect(readText).toHaveBeenCalledTimes(1);
     writeFileSync(file, '- text: 42 pts\n');
-    expect(normalizeBrowseDecision({ checks: [checks[0]] }, options).status).toBe("manual_review");
+    expect(normalizeBrowseDecision({ checks: [checks[0]] }, { ...evidenceIo, ...options }).status).toBe("manual_review");
     expect(readText).toHaveBeenCalledTimes(2);
     rmSync(file);
-    expect(normalizeBrowseDecision({ checks: [checks[0]] }, options).status).toBe("manual_review");
+    expect(normalizeBrowseDecision({ checks: [checks[0]] }, { ...evidenceIo, ...options }).status).toBe("manual_review");
     expect(readText).toHaveBeenCalledTimes(2);
   });
 
   it("caches read failures only within an invocation", () => {
     const readText = vi.fn(() => { throw new Error("unreadable"); });
     const options = { runnerEvidence, readText };
-    normalizeBrowseDecision({ checks }, options);
+    normalizeBrowseDecision({ checks }, { ...evidenceIo, ...options });
     expect(readText).toHaveBeenCalledTimes(1);
-    normalizeBrowseDecision({ checks }, options);
+    normalizeBrowseDecision({ checks }, { ...evidenceIo, ...options });
     expect(readText).toHaveBeenCalledTimes(2);
   });
 
   it("also scopes the reviewer cache to one review invocation", () => {
     const readText = vi.fn(path => readFileSync(path, "utf8"));
-    expect(findUncitedChecks({ checks, runnerEvidence }, { readText })).toEqual([]);
+    expect(findUncitedChecks({ checks, runnerEvidence }, { ...evidenceIo, readText })).toEqual([]);
     expect(readText).toHaveBeenCalledTimes(1);
-    expect(findUncitedChecks({ checks, runnerEvidence }, { readText })).toEqual([]);
+    expect(findUncitedChecks({ checks, runnerEvidence }, { ...evidenceIo, readText })).toEqual([]);
     expect(readText).toHaveBeenCalledTimes(2);
   });
 });

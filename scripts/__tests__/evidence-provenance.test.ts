@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { hasConcreteEvidence, normalizeBrowseDecision } from "../judge-verdict.mjs";
 import { findUncitedChecks, normalizeJudgeReview, REVIEW_CRITERIA } from "../normalize-judge-review.mjs";
+import { evidenceIo } from "./test-node-io.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "qa-evidence-provenance-"));
 const snapshot = join(dir, "current-run.yaml");
@@ -18,11 +19,11 @@ describe("runner-owned evidence provenance", () => {
     const plannedChecks = [{ checkId: "score", item: "score" }];
     const raw = { checks: [{ item: "score", result: "pass", detail: 'Observed "98 pts", not "Failed"' }] };
     const evidence = { ...runnerEvidence, checkpoints: [{ checkId: "score", evidenceRefs: [snapshot] }] };
-    const decision = normalizeBrowseDecision(raw, { plannedChecks, runnerEvidence: evidence });
+    const decision = normalizeBrowseDecision(raw, { ...evidenceIo, plannedChecks, runnerEvidence: evidence });
     expect(decision.checks[0].evidenceRefs).toEqual([snapshot]);
     expect(decision.checks[0].result).toBe("manual_review");
     expect(decision.checks[0].demotedFrom).toBe("pass");
-    expect(normalizeBrowseDecision(decision, { plannedChecks, runnerEvidence: evidence }).status).toBe("manual_review");
+    expect(normalizeBrowseDecision(decision, { ...evidenceIo, plannedChecks, runnerEvidence: evidence }).status).toBe("manual_review");
   });
 
   it("does not link foreign, unregistered, or missing checkpoint files", () => {
@@ -33,7 +34,7 @@ describe("runner-owned evidence provenance", () => {
       { checkId: "score", evidenceRefs: [join(dir, "missing.yaml")] },
     ]) {
       const decision = normalizeBrowseDecision({ checks: [{ item: "score", result: "pass", detail: "Looks fine" }] },
-        { plannedChecks, runnerEvidence: { ...runnerEvidence, checkpoints: [checkpoint] } });
+        { ...evidenceIo, plannedChecks, runnerEvidence: { ...runnerEvidence, checkpoints: [checkpoint] } });
       expect(decision.checks[0].evidenceRefs).toEqual([]);
       expect(decision.checks[0].result).toBe("manual_review");
     }
@@ -46,14 +47,14 @@ describe("runner-owned evidence provenance", () => {
     { detail: "Observed the page", evidenceRefs: [unrelated] },
   ])("demotes unsupported observations: %j", check => {
     const raw = { item: "score", result: "pass", confidence: "high", ...check };
-    const decision = normalizeBrowseDecision({ status: "pass", checks: [raw] });
+    const decision = normalizeBrowseDecision({ status: "pass", checks: [raw] }, evidenceIo);
     expect(decision.status).toBe("manual_review");
     expect(decision.checks[0].demotedFrom).toBe("pass");
-    expect(findUncitedChecks({ checks: [raw] })).toEqual(["score"]);
+    expect(findUncitedChecks({ checks: [raw] }, evidenceIo)).toEqual(["score"]);
   });
 
   it.each([snapshot, basename(snapshot)])("accepts a current captured reference: %s", ref => {
-    expect(hasConcreteEvidence({ evidenceRefs: [ref] }, runnerEvidence)).toBe(true);
+    expect(hasConcreteEvidence({ evidenceRefs: [ref] }, runnerEvidence, evidenceIo)).toBe(true);
   });
 
   it.each([
@@ -61,16 +62,16 @@ describe("runner-owned evidence provenance", () => {
     join(dir, "other-run", basename(snapshot)),
     "invented.png",
   ])("rejects unrelated or fabricated references: %s", ref => {
-    expect(hasConcreteEvidence({ evidenceRefs: [ref] }, runnerEvidence)).toBe(false);
+    expect(hasConcreteEvidence({ evidenceRefs: [ref] }, runnerEvidence, evidenceIo)).toBe(false);
   });
 
   it("rejects missing captures and ambiguous basename references", () => {
     expect(hasConcreteEvidence({ evidenceRefs: ["missing.yaml"] }, {
       ariaSnapshots: [join(dir, "missing.yaml")],
-    })).toBe(false);
+    }, evidenceIo)).toBe(false);
     expect(hasConcreteEvidence({ evidenceRefs: [basename(snapshot)] }, {
       ariaSnapshots: [snapshot, join(dir, "other-run", basename(snapshot))],
-    })).toBe(false);
+    }, evidenceIo)).toBe(false);
   });
 
   it("rejects directories, empty files, and unreadable ARIA", () => {
@@ -79,32 +80,32 @@ describe("runner-owned evidence provenance", () => {
     for (const file of [dir, empty]) {
       expect(hasConcreteEvidence({ evidenceRefs: [file] }, {
         ariaSnapshots: [file],
-      })).toBe(false);
+      }, evidenceIo)).toBe(false);
     }
     expect(hasConcreteEvidence({ detail: 'Observed "98 pts"' }, {
       ariaSnapshots: [dir],
-    }, { fileExists: () => true })).toBe(false);
+    }, { ...evidenceIo, fileExists: () => true })).toBe(false);
   });
 
   it("ignores malformed references and malformed capture lists", () => {
     expect(hasConcreteEvidence({ evidenceRefs: "invented.png" }, {
       screenshots: "invented.png", ariaSnapshots: null,
-    })).toBe(false);
+    }, evidenceIo)).toBe(false);
   });
 
   it("grounds quoted observations in captured ARIA and records the source", () => {
     const decision = normalizeBrowseDecision({
       status: "pass",
       checks: [{ item: "score", result: "pass", detail: 'Observed "98 pts"' }],
-    }, { runnerEvidence });
+    }, { ...evidenceIo, runnerEvidence });
     expect(decision.status).toBe("pass");
     expect(decision.checks[0].evidenceRefs).toEqual([snapshot]);
-    expect(findUncitedChecks({ ...decision, runnerEvidence })).toEqual([]);
+    expect(findUncitedChecks({ ...decision, runnerEvidence }, evidenceIo)).toEqual([]);
   });
 
   it.each(['Observed "42 pts"', 'Observed "Produ"', 'Observed "98 pts" and "42 pts"', 'Observed "98 pts" and "0"'])(
     "rejects unobserved or partial quotes: %s", detail => {
-      expect(hasConcreteEvidence({ detail }, runnerEvidence)).toBe(false);
+      expect(hasConcreteEvidence({ detail }, runnerEvidence, evidenceIo)).toBe(false);
     },
   );
 
@@ -134,7 +135,7 @@ describe("checkpoint captures travel together", () => {
     };
     const decision = normalizeBrowseDecision(
       { checks: [{ item: "select", result: "pass", detail: "Heading showed DEEP Parser", evidenceRefs: [screenshot] }] },
-      { plannedChecks: [{ checkId: "select", item: "select" }], runnerEvidence: evidence },
+      { ...evidenceIo, plannedChecks: [{ checkId: "select", item: "select" }], runnerEvidence: evidence },
     );
     expect(decision.checks[0].evidenceRefs).toEqual([screenshot, aria]);
     expect(decision.checks[0].result).toBe("pass");
@@ -155,7 +156,7 @@ describe("checkpoint captures travel together", () => {
     };
     const decision = normalizeBrowseDecision(
       { checks: [{ item: "select", result: "pass", detail: "ok", evidenceRefs: [screenshot] }] },
-      { plannedChecks: [{ checkId: "select", item: "select" }, { checkId: "other", item: "other" }], runnerEvidence: evidence },
+      { ...evidenceIo, plannedChecks: [{ checkId: "select", item: "select" }, { checkId: "other", item: "other" }], runnerEvidence: evidence },
     );
     expect(decision.checks[0].evidenceRefs).toEqual([screenshot]);
   });
@@ -172,7 +173,7 @@ describe("quotes must be in the cited snapshot", () => {
     writeFileSync(aria, '- button "parser-upload.png 삭제"\n- text: 검수 필요 · 1p\n');
     return normalizeBrowseDecision(
       { checks: [{ item: "upload", result: "pass", detail, evidenceRefs: [aria] }] },
-      { plannedChecks, runnerEvidence: { ariaSnapshots: [aria], checkpoints: [{ checkId: "upload", evidenceRefs: [aria] }] } },
+      { ...evidenceIo, plannedChecks, runnerEvidence: { ariaSnapshots: [aria], checkpoints: [{ checkId: "upload", evidenceRefs: [aria] }] } },
     ).checks[0];
   }
 

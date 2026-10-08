@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { verifyLedger } from "../qa-run-ledger.mjs";
+import { ledgerIo } from "./test-node-io.mjs";
 
 const BIN = fileURLToPath(
   new URL("../../bin/playwright-spec-for-ai-agent.mjs", import.meta.url)
@@ -320,7 +321,7 @@ describe("artifacts a later stage reads back", () => {
     expect(runPipeline().status).toBe(0);
     expect(cli(["review", `--page=${PAGE}`]).status).not.toBe(2);
 
-    expect(verifyLedger(artifact("qa-runs.jsonl"))).toMatchObject({ ok: true });
+    expect(verifyLedger(artifact("qa-runs.jsonl"), { io: ledgerIo })).toMatchObject({ ok: true });
 
     const show = cli(["show", `--page=${PAGE}`]);
     expect(show.status).toBe(0);

@@ -18,6 +18,7 @@ import {
   run as runAck,
   upsertAck,
 } from "../page-qa-ack.mjs";
+import { ledgerIo } from "./test-node-io.mjs";
 
 let root: string;
 let stdout: string;
@@ -273,7 +274,7 @@ describe("ack", () => {
         at: now.toISOString(),
       },
     ]);
-    expect(readLedger(join(root, "qa", "dashboard", "dashboard-qa-runs.jsonl"))).toMatchObject([
+    expect(readLedger(join(root, "qa", "dashboard", "dashboard-qa-runs.jsonl"), { io: ledgerIo })).toMatchObject([
       { kind: "ack", action: "add", item: ITEM },
     ]);
   });

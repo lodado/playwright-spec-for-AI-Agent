@@ -34,6 +34,7 @@ import {
   readLedger,
   verifyLedger,
 } from "../qa-run-ledger.mjs";
+import { ledgerIo } from "./test-node-io.mjs";
 
 const dirs: string[] = [];
 
@@ -158,27 +159,27 @@ describe("artifact shape contract", () => {
 describe("hash-chained run ledger", () => {
   it("chains entries and verifies clean", () => {
     const ledger = join(tempDir(), "runs.jsonl");
-    const first = appendRunEvent(ledger, { kind: "judge", status: "pass" });
-    const second = appendRunEvent(ledger, { kind: "review", status: "flagged" });
+    const first = appendRunEvent(ledger, { kind: "judge", status: "pass" }, { io: ledgerIo });
+    const second = appendRunEvent(ledger, { kind: "review", status: "flagged" }, { io: ledgerIo });
 
     expect(second.prevHash).toBe(first.hash);
-    expect(readLedger(ledger)).toHaveLength(2);
-    expect(verifyLedger(ledger)).toMatchObject({ ok: true, entries: 2 });
+    expect(readLedger(ledger, { io: ledgerIo })).toHaveLength(2);
+    expect(verifyLedger(ledger, { io: ledgerIo })).toMatchObject({ ok: true, entries: 2 });
   });
 
   it("detects tampering with a recorded verdict", () => {
     const ledger = join(tempDir(), "runs.jsonl");
-    const kept = appendRunEvent(ledger, { kind: "judge", status: "fail" });
-    appendRunEvent(ledger, { kind: "judge", status: "fail" });
+    const kept = appendRunEvent(ledger, { kind: "judge", status: "fail" }, { io: ledgerIo });
+    appendRunEvent(ledger, { kind: "judge", status: "fail" }, { io: ledgerIo });
 
-    const entries = readLedger(ledger);
+    const entries = readLedger(ledger, { io: ledgerIo });
     entries[0] = { ...entries[0], status: "pass" };
     writeFileSync(
       ledger,
       `${entries.map(entry => JSON.stringify(entry)).join("\n")}\n`,
     );
 
-    const result = verifyLedger(ledger);
+    const result = verifyLedger(ledger, { io: ledgerIo });
     expect(result.ok).toBe(false);
     expect(result.brokenAt).toBe(0);
     expect(kept.status).toBe("fail");
@@ -186,13 +187,13 @@ describe("hash-chained run ledger", () => {
 
   it("finds the last matching entry and tolerates an empty ledger", () => {
     const ledger = join(tempDir(), "runs.jsonl");
-    expect(readLedger(ledger)).toEqual([]);
-    expect(lastEntry(ledger)).toBeNull();
-    expect(verifyLedger(ledger).ok).toBe(true);
+    expect(readLedger(ledger, { io: ledgerIo })).toEqual([]);
+    expect(lastEntry(ledger, { io: ledgerIo })).toBeNull();
+    expect(verifyLedger(ledger, { io: ledgerIo }).ok).toBe(true);
 
-    appendRunEvent(ledger, { kind: "judge", status: "pass" });
-    appendRunEvent(ledger, { kind: "slack", status: "sent" });
-    expect(findLast(ledger, entry => entry.kind === "judge")).toMatchObject({
+    appendRunEvent(ledger, { kind: "judge", status: "pass" }, { io: ledgerIo });
+    appendRunEvent(ledger, { kind: "slack", status: "sent" }, { io: ledgerIo });
+    expect(findLast(ledger, entry => entry.kind === "judge", { io: ledgerIo })).toMatchObject({
       status: "pass",
     });
   });

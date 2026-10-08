@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { CAUSES, normalizeBrowseDecision } from "./judge-verdict.mjs";
 import { prepareAdapter, runAgentAsync } from "./ai-agent-adapter.mjs";
 import { BENCHMARK_CASES } from "./qa-benchmark-cases.mjs";
+import { evidenceIo } from "./node-io.mjs";
 const MAX_REPEAT = 100;
 const VALID_ARTIFACT = "__EVIDENCE__/capture.txt";
 const replaceEvidence = (value, dir) =>
@@ -28,6 +29,7 @@ function evaluateCase(spec, dir, raw = spec.raw) {
   writeFileSync(aria, spec.aria);
   const started = performance.now();
   const decision = normalizeBrowseDecision(replaceEvidence(raw, dir), {
+    ...evidenceIo,
     plannedChecks: spec.plannedChecks,
     runnerEvidence: {
       screenshots: spec.kind === "harness" ? [evidence] : [],

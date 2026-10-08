@@ -25,6 +25,7 @@ import {
 } from "./hermes-runner.mjs";
 import {
   getPageConfig,
+  getLivePolicyOverrides,
   getProjectConfig,
   getStorageStatePath,
   isPlaceholderBaseUrl,
@@ -41,6 +42,7 @@ import { parseSpecDirectory } from "./spec-annotation-reader.mjs";
 import { buildJudgeTargetUrl, redactEmail } from "./staging-qa-config.mjs";
 import { hasSessionProfile } from "./qa-browser-session.mjs";
 import { verifyLedger } from "./qa-run-ledger.mjs";
+import { ledgerIo, specDirIo } from "./node-io.mjs";
 import { browserbaseOptions, readBrowserbaseContext, resolveBrowserProvider, launchBrowserbaseSession } from "./browser-provider.mjs";
 import { createBrowserbaseClient } from "./browserbase-client.mjs";
 
@@ -302,7 +304,7 @@ function specChecks(page) {
 
   let parsed;
   try {
-    parsed = parseSpecDirectory(specDir);
+    parsed = parseSpecDirectory(specDir, { io: specDirIo, livePolicyOverrides: configuredLivePolicies() });
   } catch (error) {
     return [
       check(
@@ -410,7 +412,7 @@ function artifactChecks(page) {
   }
 
   if (existsSync(paths.runsLedger)) {
-    const ledger = verifyLedger(paths.runsLedger);
+    const ledger = verifyLedger(paths.runsLedger, { io: ledgerIo });
     checks.push(
       ledger.ok
         ? check(`${page} · run ledger`, "pass", `${ledger.entries} entries, chain verified`)
@@ -647,10 +649,22 @@ async function networkChecks(pages) {
   return checks;
 }
 
+/** Project config may alias extra annotation names onto an existing live policy. */
+function configuredLivePolicies() {
+  try {
+    return getLivePolicyOverrides() ?? {};
+  } catch {
+    return {};
+  }
+}
+
 async function uploadCheck(page, argv, browserbase) {
   const name = `${page} · upload fixtures`;
   try {
-    const parsed = parseSpecDirectory(resolveSpecDir(page));
+    const parsed = parseSpecDirectory(resolveSpecDir(page), {
+      io: specDirIo,
+      livePolicyOverrides: configuredLivePolicies(),
+    });
     const payload = buildUploadFixturesPayload({ scenarios: parsed.scenarios.filter(scenario => !scenario.liveSkip) }, page);
     const fixtures = inspectUploadFixtures(payload);
     if (!fixtures.length) return check(name, "skip", "No upload fixtures declared.");

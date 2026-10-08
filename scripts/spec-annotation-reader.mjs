@@ -1,6 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import * as projectConfig from "./hermes-qa-project-config.mjs";
 import { UsageError } from "./errors.mjs";
 import { hashJson } from "./spec-hash.mjs";
 
@@ -28,7 +26,8 @@ import { hashJson } from "./spec-hash.mjs";
  *   // @qa-live-policy: readonly | safe-interaction | safe-interaction-no-confirm | mock-judgment | subscription-mutation | auth-mock | skip
  *
  * Extra policy names may be aliased onto an existing liveRunPolicy through the
- * `livePolicies` config block (see getLivePolicyOverrides).
+ * `livePolicies` config block (see getLivePolicyOverrides); callers pass the
+ * resolved overrides in as `livePolicyOverrides`.
  *
  * Policy meanings:
  *   readonly — DOM-only checks; no interaction needed on live
@@ -349,17 +348,9 @@ const BUILT_IN_LIVE_RUN_POLICIES = Object.values(QA_LIVE_POLICY_MAP).map(
   entry => entry.liveRunPolicy
 );
 
-/** Project config may alias extra annotation names onto an existing verb. */
-function configuredLivePolicies() {
-  try {
-    return projectConfig.getLivePolicyOverrides?.() ?? {};
-  } catch {
-    return {};
-  }
-}
-
-export function mapLivePolicyAnnotation(annotation) {
-  const configured = configuredLivePolicies();
+/** `livePolicyOverrides` (from project config) may alias extra annotation names onto an existing verb. */
+export function mapLivePolicyAnnotation(annotation, livePolicyOverrides = {}) {
+  const configured = livePolicyOverrides;
 
   if (Object.hasOwn(configured, annotation)) {
     const { liveRunPolicy, stagingMode } = configured[annotation];
@@ -421,10 +412,10 @@ function findDescribeBlocks(source) {
 /**
  * Resolve live policy for a test: test-level comment wins, else innermost enclosing test.describe.
  */
-export function resolveTestLivePolicy(source, testIndex) {
+export function resolveTestLivePolicy(source, testIndex, livePolicyOverrides = {}) {
   const direct = parseLivePolicyBeforeIndex(source, testIndex);
   if (direct) {
-    return { annotation: direct, ...mapLivePolicyAnnotation(direct) };
+    return { annotation: direct, ...mapLivePolicyAnnotation(direct, livePolicyOverrides) };
   }
 
   const enclosing = findDescribeBlocks(source)
@@ -433,7 +424,7 @@ export function resolveTestLivePolicy(source, testIndex) {
 
   const inherited = enclosing.find(block => block.policy)?.policy;
   if (inherited) {
-    return { annotation: inherited, ...mapLivePolicyAnnotation(inherited) };
+    return { annotation: inherited, ...mapLivePolicyAnnotation(inherited, livePolicyOverrides) };
   }
 
   return null;
@@ -498,7 +489,12 @@ function slugify(value) {
     .slice(0, 80);
 }
 
-export function parseSpecFile(fileName, source) {
+/**
+ * @param {string} fileName
+ * @param {string} source
+ * @param {{ livePolicyOverrides?: Record<string, unknown> }} [options]
+ */
+export function parseSpecFile(fileName, source, { livePolicyOverrides = {} } = {}) {
   const annotations = parseAnnotations(source);
   const scenarioId = annotations.scenario;
   if (!scenarioId) return null;
@@ -526,7 +522,7 @@ export function parseSpecFile(fileName, source) {
       };
     }
 
-    const declared = resolveTestLivePolicy(source, block.index);
+    const declared = resolveTestLivePolicy(source, block.index, livePolicyOverrides);
     if (!declared) {
       const line = source.slice(0, block.index).split("\n").length;
       throw new UsageError(
@@ -578,16 +574,23 @@ export function parseSpecFile(fileName, source) {
   };
 }
 
-/** Read all annotated spec files in a directory. Requires @qa-scenario. */
-export function parseSpecDirectory(specDir) {
-  const files = readdirSync(specDir)
+/**
+ * Read all annotated spec files in a directory. Requires @qa-scenario.
+ *
+ * @param {string} specDir
+ * @param {{ io: { readdir: (dir: string) => string[], readFile: (path: string) => string },
+ *           livePolicyOverrides?: Record<string, unknown> }} options
+ */
+export function parseSpecDirectory(specDir, { io, livePolicyOverrides = {} }) {
+  const files = io
+    .readdir(specDir)
     .filter(file => file.endsWith(".spec.ts"))
     .sort();
 
   const scenarios = files
     .map(file => {
-      const source = readFileSync(join(specDir, file), "utf8");
-      return parseSpecFile(file, source);
+      const source = io.readFile(join(specDir, file));
+      return parseSpecFile(file, source, { livePolicyOverrides });
     })
     .filter(Boolean);
 

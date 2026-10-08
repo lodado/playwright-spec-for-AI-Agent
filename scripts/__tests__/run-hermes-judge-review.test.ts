@@ -15,6 +15,7 @@ import { resetProjectConfigForTests } from "../hermes-qa-project-config.mjs";
 import { REVIEW_CRITERIA } from "../normalize-judge-review.mjs";
 import { readLedger } from "../qa-run-ledger.mjs";
 import { buildJudgeReviewHermesQuery, readRecordedSpecHash, readRunnerAriaSnapshots, run } from "../run-hermes-judge-review.mjs";
+import { ledgerIo } from "./test-node-io.mjs";
 
 const SPEC_HASH = `sha256:${"a".repeat(64)}`;
 const OTHER_HASH = `sha256:${"d".repeat(64)}`;
@@ -193,7 +194,7 @@ describe("review stage wiring", () => {
     expect(runAgentMock.mock.calls[0][0]).toContain('- heading "Invoice"');
     expect(runAgentMock.mock.calls[0][0]).not.toContain("TOPSECRET");
 
-    const events = readLedger(join(outputDir, "dashboard-qa-runs.jsonl"));
+    const events = readLedger(join(outputDir, "dashboard-qa-runs.jsonl"), { io: ledgerIo });
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       kind: "review",
@@ -241,7 +242,7 @@ describe("review stage wiring", () => {
       verdict: "pass",
       unstable: true,
     });
-    expect(readLedger(join(outputDir, "dashboard-qa-runs.jsonl"))[0].unstable).toBe(true);
+    expect(readLedger(join(outputDir, "dashboard-qa-runs.jsonl"), { io: ledgerIo })[0].unstable).toBe(true);
   });
 
   it("rejects an out-of-range --samples", async () => {

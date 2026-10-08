@@ -7,6 +7,7 @@ npm ci
 npm test                       # vitest run — the whole suite
 npx vitest run scripts/__tests__/judge-verdict.test.ts   # one file
 node bin/playwright-spec-for-ai-agent.mjs demo           # offline end-to-end run
+npm run test:formal            # Bend world/trace conformance and proof re-checks (local Oracle artifacts + Bend)
 ```
 
 `demo` serves the bundled app on a local port and runs spec → abstract-ai →
@@ -39,6 +40,9 @@ Shared modules under `scripts/` back those stages: `hermes-qa-project-config.mjs
 (config discovery and defaults), `page-qa-paths.mjs` (`artifactPaths` — the only
 place artifact filenames are spelled), `errors.mjs` (error classes and exit
 codes), `ai-agent-adapter.mjs` (backend selection), `judge-verdict.mjs`,
+`judge-plan.mjs` (judge plan and auth-mode decisions), `judgment.mjs`
+(judgment building, rendering and the retry loop), `node-io.mjs` (the one
+`node:fs` / `process.env` port the shells pass to the core modules),
 `agent-output.mjs`, and `qa-evidence.mjs`.
 
 ## Exit codes

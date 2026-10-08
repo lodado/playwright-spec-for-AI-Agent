@@ -138,7 +138,9 @@ are `judge-start`, `judge-retry`, `judge`, `deploy`, `slack`, and `ack`.
 The chain makes verdict history tamper-evident. A re-run cannot silently
 overwrite last night's `fail`, and a report can cite a `runId` instead of
 restating a verdict in prose. `doctor` verifies the chain and reports
-`chain broken at entry N: …` when a file was edited or truncated.
+`chain broken at entry N: …` when an entry was edited or the last line was cut
+mid-entry. Removing whole trailing entries is not detected: the shorter chain
+still verifies.
 
 The ledger is also where the judge's retry behaviour becomes visible. `judge`
 retries on cause — two attempts for an environment failure, one for unusable

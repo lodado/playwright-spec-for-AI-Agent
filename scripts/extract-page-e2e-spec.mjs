@@ -15,6 +15,8 @@ import {
   SPEC_READER_VERSION,
 } from "./spec-annotation-reader.mjs";
 import { runMain, UsageError } from "./errors.mjs";
+import { getLivePolicyOverrides } from "./hermes-qa-project-config.mjs";
+import { specDirIo } from "./node-io.mjs";
 import {
   artifactPaths,
   ensureProjectConfig,
@@ -29,6 +31,15 @@ import {
   filterSpecForLiveJson,
   printLiveSkippedTable,
 } from "./spec-live-filter.mjs";
+
+/** Project config may alias extra annotation names onto an existing live policy. */
+function configuredLivePolicies() {
+  try {
+    return getLivePolicyOverrides() ?? {};
+  } catch {
+    return {};
+  }
+}
 
 function pageLabel(page) {
   return page
@@ -50,7 +61,10 @@ export async function run(argv) {
 
   mkdirSync(paths.outputDir, { recursive: true });
 
-  const parsedSpec = parseSpecDirectory(specDir);
+  const parsedSpec = parseSpecDirectory(specDir, {
+    io: specDirIo,
+    livePolicyOverrides: configuredLivePolicies(),
+  });
   assertFixturesExist(parsedSpec, page, {
     allowMissing: argv.includes("--allow-missing-fixtures"),
   });

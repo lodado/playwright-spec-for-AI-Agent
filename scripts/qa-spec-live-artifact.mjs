@@ -43,9 +43,10 @@ export function renderLiveSpecMarkdown({
     .filter(s => s.alwaysRun)
     .map(s => s.scenarioId);
 
+  // A blank plan is as good as none: `||` so "" falls back, not just null.
   const agentPlan = gwtBody?.trim();
   const gwt =
-    agentPlan ?? renderGwtPlanFromSpec(spec, { alwaysRunScenarioIds }).trim();
+    agentPlan || renderGwtPlanFromSpec(spec, { alwaysRunScenarioIds }).trim();
   // The rule-based fallback states only what should happen; without the agent's
   // `Never:` line nothing in it can fail, and the judge must be told so.
   const fallbackWarning = agentPlan

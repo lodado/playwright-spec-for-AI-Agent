@@ -21,11 +21,9 @@ import { runBrowserbaseAgent } from "./browserbase-agent-runner.mjs";
 import { servesQaBrowserTools, startQaBrowserTools } from "./qa-browser-tools.mjs";
 import { withSchema } from "./artifact-schema.mjs";
 import {
-  AgentOutputError,
   EnvironmentError,
   EXIT_ENVIRONMENT,
   EXIT_OK,
-  EXIT_VERDICT_FAIL,
   UsageError,
   runMain,
 } from "./errors.mjs";
@@ -37,13 +35,15 @@ import {
   resolveFixturePaths,
   isPlaceholderBaseUrl,
 } from "./hermes-qa-project-config.mjs";
+import { analyzeHarViolations, buildEvidenceManifest } from "./judge-verdict.mjs";
+import { decideAuthMode, prepareJudgePlan as decideJudgePlan } from "./judge-plan.mjs";
 import {
-  analyzeHarViolations,
-  buildEvidenceManifest,
-  isReadOnlyPlan,
-  normalizeBrowseDecision,
-  resolveJudgeTurnBudget,
-} from "./judge-verdict.mjs";
+  buildJudgment,
+  executeWithRetries,
+  renderMarkdown,
+  verdictExitCode,
+} from "./judgment.mjs";
+import { envValue, evidenceIo, ledgerIo } from "./node-io.mjs";
 import { resolveSpecForJudge } from "./resolve-spec-for-judge.mjs";
 import { seedAsideSession, seedProfileSession, readStorageState, cookiesForOrigin, buildLocalStorageEntries } from "./qa-session-seed.mjs";
 import {
@@ -61,7 +61,7 @@ import { appendRunEvent, newRunId } from "./qa-run-ledger.mjs";
 import { writeCtrf } from "./qa-ctrf.mjs";
 import { appendVerdict } from "./qa-verdict-history.mjs";
 import { appendStepSummary, renderJudgmentSummary } from "./github-summary.mjs";
-import { describeHashMismatch, hashSpecDefinition } from "./spec-hash.mjs";
+import { describeHashMismatch } from "./spec-hash.mjs";
 import {
   buildHermesStagingLogin,
   assertStagingQaCredentials,
@@ -76,11 +76,6 @@ import {
 } from "./qa-browser-session.mjs";
 import { clearRunInvalid, markRunInvalid } from "./qa-run-invalid.mjs";
 import { resolveStagingQaConfig } from "./staging-qa-prompt.mjs";
-import {
-  buildBrowseChecklist,
-  listAlwaysRunScenarios,
-  selectScenariosForLiveRun,
-} from "./spec-annotation-reader.mjs";
 import { buildJudgeBrowseDocument } from "./qa-spec-judge-document.mjs";
 import {
   buildUploadFixturesPayload,
@@ -229,89 +224,6 @@ export function buildBrowseHermesQuery({
   ].join("\n");
 }
 
-function renderMarkdown(judgment) {
-  const checkRows = judgment.checks?.length
-    ? judgment.checks.map(check => {
-        const demoted = check.demotedFrom ? ` (was ${check.demotedFrom})` : "";
-        return `| ${check.result}${demoted} | ${check.cause ?? ""} | ${check.item} | ${(check.detail ?? "").replace(/\|/g, "\\|")} |`;
-      })
-    : [];
-
-  return [
-    `# Hermes QA Judgment — ${judgment.page}`,
-    "",
-    `- Status: **${judgment.status}**`,
-    `- Cause: \`${judgment.cause}\``,
-    `- Run: \`${judgment.runId}\` at ${judgment.judgedAt}`,
-    `- Mode: \`browse\``,
-    `- Page: \`${judgment.targetPath}\``,
-    `- Plan source: ${judgment.planSource}`,
-    `- Coverage: ${judgment.coverage.addressed}/${judgment.coverage.planned} planned checks addressed`,
-    `- Source: ${judgment.source}`,
-    ...(judgment.agentMeta
-      ? [
-          `- Adapter: ${judgment.agentMeta.adapter}${judgment.agentMeta.model ? ` (${judgment.agentMeta.model})` : ""}, ${Math.round(judgment.agentMeta.durationMs / 1000)}s`,
-        ]
-      : []),
-    "",
-    "## Summary",
-    "",
-    judgment.summary,
-    "",
-    ...(judgment.coverage.missing.length
-      ? [
-          "## Unaddressed planned checks",
-          "",
-          ...judgment.coverage.missing.map(item => `- ${item}`),
-          "",
-        ]
-      : []),
-    ...(checkRows.length
-      ? [
-          "## Checks",
-          "",
-          "| Result | Cause | Item | Detail |",
-          "|--------|-------|------|--------|",
-          ...checkRows,
-          "",
-        ]
-      : []),
-    "## Evidence",
-    "",
-    ...(judgment.evidence?.length
-      ? judgment.evidence.map(item => `- ${item}`)
-      : ["- none"]),
-    ...(judgment.runnerEvidence
-      ? [
-          "",
-          "## Runner-captured evidence",
-          "",
-          ...(judgment.runnerEvidence.browserProvider?.name === "browserbase"
-            ? [`- Browserbase session: [${judgment.runnerEvidence.browserProvider.sessionId}](https://www.browserbase.com/sessions/${encodeURIComponent(judgment.runnerEvidence.browserProvider.sessionId)})`]
-            : []),
-          ...[
-            judgment.runnerEvidence.tracePath &&
-              `- trace: \`${judgment.runnerEvidence.tracePath}\``,
-            judgment.runnerEvidence.harPath &&
-              `- har: \`${judgment.runnerEvidence.harPath}\``,
-            judgment.runnerEvidence.videoPath &&
-              `- video: \`${judgment.runnerEvidence.videoPath}\``,
-            `- screenshots: ${judgment.runnerEvidence.screenshots?.length ?? 0}`,
-            `- aria snapshots: ${judgment.runnerEvidence.ariaSnapshots?.length ?? 0}`,
-            ...(judgment.runnerEvidence.violations ?? []).map(
-              violation => `- violation: ${violation.kind} — ${violation.detail}`
-            ),
-          ].filter(Boolean),
-        ]
-      : []),
-    "",
-    "## Recommended action",
-    "",
-    judgment.recommendedAction || "none",
-    "",
-  ].join("\n");
-}
-
 /**
  * Settle the account state before the plan is built. Returns null when there is
  * nothing to choose between, when the operator forced a state, or when the
@@ -381,7 +293,7 @@ async function detectAccountState({
     expected: reconciled.expected,
     mismatch: reconciled.mismatch,
     confidence: detection.confidence,
-  });
+  }, { io: ledgerIo });
 
   if (detection.state === UNKNOWN_STATE) {
     console.warn(
@@ -396,6 +308,56 @@ async function detectAccountState({
 }
 
 /**
+ * The file- and config-backed lookups the core plan decision calls. They stay
+ * here: judge-plan.mjs reads no file and no config.
+ */
+const JUDGE_PLAN_PORTS = {
+  resolveSpecForJudge,
+  buildStagingLogin: buildHermesStagingLogin,
+  loadSpecSourceFiles: page => loadSpecSourceFiles(resolveSpecDir(page)),
+  buildUploadFixturesPayload,
+  inspectUploadFixtures,
+  resolveFixturePaths,
+  scopeSavedPlan: (paths, scenarioIds) =>
+    existsSync(paths.specLiveMd)
+      ? scopePlanMarkdown(readFileSync(paths.specLiveMd, "utf8"), scenarioIds)
+      : null,
+  buildJudgeDocument: buildJudgeBrowseDocument,
+  buildQuery: buildBrowseHermesQuery,
+};
+
+/**
+ * The plan without writing it. The preflight plan uses this: it only has to
+ * prove the run is judgeable, and writing it would leave a plan on disk for a
+ * run that never reached the final one. A live plan stamped with another
+ * `spec` revision is refused with exit 2, naming the command to re-run.
+ */
+function buildJudgePlan({ accountState, ...inputs }) {
+  const prepared = decideJudgePlan(
+    {
+      ...inputs,
+      accountState: accountState === UNKNOWN_STATE ? null : accountState,
+      turnBudgetOverride: envValue("QA_JUDGE_MAX_TURNS"),
+    },
+    JUDGE_PLAN_PORTS
+  );
+  if (prepared.mismatch) {
+    throw new UsageError(
+      describeHashMismatch({
+        expected: prepared.mismatch.expected,
+        actual: prepared.mismatch.actual,
+        producer: "abstract-ai",
+        consumer: "judge",
+      }),
+      {
+        hint: `Re-run: npx playwright-spec-for-ai-agent abstract-ai --page=${inputs.page}`,
+      }
+    );
+  }
+  return prepared;
+}
+
+/**
  * Everything needed to run (or dry-run) the judge: resolved plan, prompt, turn
  * budget, and the planned-check list the verdict floor is measured against.
  * Writes the plan document `review` later reads.
@@ -404,151 +366,6 @@ export function prepareJudgePlan(inputs) {
   const { plan, planMarkdown } = buildJudgePlan(inputs);
   writeFileSync(inputs.paths.specJudgePlanMd, planMarkdown);
   return plan;
-}
-
-/**
- * The plan without writing it. The preflight plan uses this: it only has to
- * prove the run is judgeable, and writing it would leave a plan on disk for a
- * run that never reached the final one.
- */
-function buildJudgePlan({
-  page,
-  target,
-  targetUrl,
-  paths,
-  config,
-  adapter,
-  preauthenticated,
-  accountState = null,
-}) {
-  const resolved = resolveSpecForJudge(paths);
-  if (!resolved) {
-    throw new UsageError(`Missing qa spec JSON for page "${page}".`, {
-      hint: `Run: npx playwright-spec-for-ai-agent spec --page=${page}`,
-    });
-  }
-  if (resolved.staleness && resolved.staleness.ok === false) {
-    throw new UsageError(
-      describeHashMismatch({
-        expected: resolved.staleness.expected,
-        actual: resolved.staleness.actual,
-        producer: "abstract-ai",
-        consumer: "judge",
-      }),
-      {
-        hint: `Re-run: npx playwright-spec-for-ai-agent abstract-ai --page=${page}`,
-      }
-    );
-  }
-
-  const specDefinition = resolved.definition;
-  // Provenance, not identity: record the hash of the raw `spec` artifact this
-  // plan descends from (what `resolveSpecForJudge` compares against), so
-  // `show`/`report`/`review` can re-derive it. Hashing the resolved plan
-  // instead would make every later staleness check read as a mismatch.
-  const specHash =
-    resolved.staleness.actual ?? hashSpecDefinition(specDefinition);
-
-  const stagingLogin = buildHermesStagingLogin(config);
-  if (preauthenticated) {
-    // The agent browses a pre-authenticated browser over CDP; credentials and
-    // even the account email stay out of the prompt and the judge plan.
-    stagingLogin.email = "";
-    stagingLogin.password = "";
-  }
-  stagingLogin.targetUrl = targetUrl;
-
-  // One live account is in one state. Judging the other states' scenarios costs
-  // a prompt that grows with every state the product has, and reports them as
-  // `skip` for "wrong account" — noise measured against a denominator that was
-  // never applicable. With a state settled, the run carries that state plus the
-  // always-run scenarios and nothing else.
-  const scopedScenarios =
-    accountState && accountState !== UNKNOWN_STATE
-      ? selectScenariosForLiveRun(specDefinition, accountState)
-      : null;
-  const notApplicable = scopedScenarios
-    ? (specDefinition.scenarios ?? [])
-        .map(scenario => scenario.scenarioId)
-        .filter(id => !scopedScenarios.some(scenario => scenario.scenarioId === id))
-    : [];
-  const scopedSpec = scopedScenarios
-    ? { ...specDefinition, scenarios: scopedScenarios }
-    : specDefinition;
-
-  const specSourceFiles = loadSpecSourceFiles(resolveSpecDir(page));
-  const uploadFixtures = buildUploadFixturesPayload(scopedSpec, page);
-  inspectUploadFixtures(uploadFixtures);
-  const hasScenarios = Array.isArray(scopedSpec?.scenarios);
-  const alwaysRunScenarioIds = hasScenarios
-    ? listAlwaysRunScenarios(scopedSpec).map(scenario => scenario.scenarioId)
-    : [];
-  const checklist = hasScenarios ? buildBrowseChecklist(scopedSpec) : [];
-  // One planned entry per plan block, duplicates included: the same title is
-  // planned once per scenario and the agent reports one check per block, so
-  // deduplicating here made `coverage.planned` disagree with the very document
-  // the agent was handed — which the review stage then flags, correctly.
-  const plannedChecks = checklist.map(({ checkId, title, scenarioId, sourceFile, fixtures, requiredUploadFixtures, liveRunPolicy }) => ({
-    checkId, item: title, scenarioId, sourceFile, liveRunPolicy,
-    // Only executable-interaction may attach a file (qa_upload_fixture refuses
-    // the rest), so no other check is offered one.
-    uploadFixtures: liveRunPolicy === "executable-interaction"
-      ? { ...uploadFixtures.defaults, ...resolveFixturePaths(fixtures) }
-      : {},
-    requiredUploadFixtures: liveRunPolicy === "executable-interaction" ? resolveFixturePaths(requiredUploadFixtures) : {},
-  }));
-
-  const savedPlanMarkdown = existsSync(paths.specLiveMd)
-    ? scopePlanMarkdown(
-        readFileSync(paths.specLiveMd, "utf8"),
-        scopedScenarios?.map(scenario => scenario.scenarioId) ?? []
-      )
-    : null;
-
-  const { document: judgeDocument, planSource } = buildJudgeBrowseDocument({
-    page,
-    spec: scopedSpec,
-    plannedChecks,
-    specLiveMarkdown: savedPlanMarkdown,
-    planSource: savedPlanMarkdown ? "spec-live.md" : null,
-    stagingLogin: {
-      loginUrl: stagingLogin.loginUrl,
-      email: stagingLogin.email,
-      targetUrl: stagingLogin.targetUrl,
-    },
-    alwaysRunScenarioIds,
-    uploadFixtures,
-    specSourceFiles,
-  });
-
-  return {
-    plan: {
-      query: buildBrowseHermesQuery({
-        judgeDocument,
-        stagingLogin,
-        preauthenticated,
-      }),
-      uploadFixtures,
-      secrets: [config.email, config.password].filter(Boolean),
-      stagingLogin,
-      specPath: resolved.path,
-      specHash,
-      planSource,
-      plannedChecks,
-      notApplicable,
-      readOnly: isReadOnlyPlan(checklist),
-      // An adapter that cannot cap its turns ignores the budget entirely.
-      maxTurns: adapter.capabilities.supportsMaxTurns
-        ? resolveJudgeTurnBudget(plannedChecks.length)
-        : null,
-    },
-    // `review` re-checks this stamp against the judgment's `specHash` before it
-    // critiques anything. Stamping the value the judgment will carry is what
-    // makes that check real: the plan's own front matter records `sourceHash`
-    // (a different key, absent entirely when abstract-ai never ran), so the
-    // reviewer found nothing to compare and silently reviewed any revision.
-    planMarkdown: `<!-- specHash: ${specHash} -->\n${judgeDocument}`,
-  };
 }
 
 function inspectRecordedHar(harPath, { allowedOrigins, readOnly }) {
@@ -711,41 +528,6 @@ async function executeJudge({
   return { raw, runnerEvidence, violations };
 }
 
-/**
- * Bounded retries with cause routing. A flapping login or an unparseable answer
- * is worth one more attempt; scenario checks are never silently re-judged, so a
- * completed judgment is returned as-is however bad it is.
- */
-async function executeWithRetries(options) {
-  const budget = { environment: 2, agentOutput: 1 };
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      return await executeJudge(options);
-    } catch (error) {
-      const kind =
-        error instanceof EnvironmentError
-          ? "environment"
-          : error instanceof AgentOutputError
-            ? "agentOutput"
-            : null;
-      // On exhaustion the last real failure is what propagates — never a
-      // synthesised "final attempt" verdict.
-      if (!kind || budget[kind] <= 0) throw error;
-      budget[kind] -= 1;
-      appendRunEvent(options.paths.runsLedger, {
-        runId: options.runId,
-        kind: "judge-retry",
-        attempt,
-        reason: kind,
-        error: error.message,
-      });
-      console.warn(
-        `Judge attempt ${attempt} failed (${kind}): ${error.message}\nRetrying.`
-      );
-    }
-  }
-}
-
 /** Zero-LLM reachability check: an outage must not be judged as a product bug. */
 async function preflightTarget(targetUrl) {
   let response;
@@ -784,37 +566,6 @@ function parseFailOn(argv) {
     });
   }
   return value;
-}
-
-function verdictExitCode(status, failOn) {
-  if (failOn === "never") return EXIT_OK;
-  if (status === "fail") return EXIT_VERDICT_FAIL;
-  if (status === "manual_review" && failOn === "manual_review") {
-    return EXIT_VERDICT_FAIL;
-  }
-  return EXIT_OK;
-}
-
-/**
- * Session-first: with an operator-authenticated browser the run needs no
- * credentials anywhere, and --credentials-in-prompt forces the legacy flow
- * (plaintext credentials inside the prompt). The matrix reads the adapter's
- * declared auth capability, never its name. A configured storage state IS the
- * session, so nothing needs to type credentials — demanding them anyway blocks
- * exactly the apps this path exists for (no login form to drive at all).
- */
-function decideAuthMode({ auth, credentialsInPrompt, cloud, attachUrl, sessionProfile, seedable }) {
-  const selfPrelogin = auth === "self-prelogin";
-  const cdpAttach = auth === "cdp-attach";
-  const attachable = cdpAttach && (cloud || Boolean(attachUrl) || sessionProfile);
-  return {
-    requireCredentials:
-      credentialsInPrompt || (!seedable && selfPrelogin) || (!seedable && !attachable),
-    // A session covers login; the run is preauthenticated only when the page
-    // also requires login.
-    sessionCoversLogin:
-      !credentialsInPrompt && (selfPrelogin || attachable || (seedable && cdpAttach)),
-  };
 }
 
 function assertBrowserbaseCompatible({ adapter, argv, attachUrl }) {
@@ -1045,7 +796,7 @@ async function judgeInSession(run) {
       adapter: adapter.name,
       specHash: plan.specHash,
       spec: plan.specPath,
-    });
+    }, { io: ledgerIo });
     if (!cloud) console.log(
       `Preflight ${targetUrl} -> HTTP ${await preflightTarget(targetUrl)}`
     );
@@ -1057,18 +808,33 @@ async function judgeInSession(run) {
         "Using the pre-authenticated browser session (session validity is not verified before the run)."
       );
     }
-    result = await executeWithRetries({
-      page,
-      paths,
-      plan,
-      adapter,
-      config,
-      preauthenticated,
-      allowedOrigins: run.allowedOrigins,
-      attachUrl: run.attachUrl,
-      runId,
-      remoteSession,
-    });
+    result = await executeWithRetries(
+      () => executeJudge({
+        page,
+        paths,
+        plan,
+        adapter,
+        config,
+        preauthenticated,
+        allowedOrigins: run.allowedOrigins,
+        attachUrl: run.attachUrl,
+        runId,
+        remoteSession,
+      }),
+      {
+        onRetry: entry => {
+          appendRunEvent(paths.runsLedger, {
+            runId,
+            kind: "judge-retry",
+            ...entry,
+          }, { io: ledgerIo });
+          // oracle:side-effect the retry log the loop printed at 9b2031c, moved out of the core retry loop
+          console.warn(
+            `Judge attempt ${entry.attempt} failed (${entry.reason}): ${entry.error}\nRetrying.`
+          );
+        },
+      }
+    );
     return { plan, result, accountState };
   } finally {
     if (remoteSession) {
@@ -1098,59 +864,10 @@ async function judgeQuarantined(run) {
       coverage: null,
       artifact: null,
       error: error.message,
-    });
+    }, { io: ledgerIo });
     markRunInvalid(run.paths, error?.message ?? error);
     throw error;
   }
-}
-
-function summarizeAccountState(accountState) {
-  if (!accountState) return null;
-  return {
-    state: accountState.state,
-    expected: accountState.expected ?? null,
-    mismatch: Boolean(accountState.mismatch),
-    source: accountState.source,
-    evidence: accountState.evidence || null,
-  };
-}
-
-function buildJudgment({ run, plan, result, accountState, judgedAt }) {
-  const decision = normalizeBrowseDecision(result.raw, {
-    plannedChecks: plan.plannedChecks,
-    runnerEvidence: result.runnerEvidence,
-    // A page judged in a state nobody asked for was not the test anyone
-    // planned, so the run does not get to be green — but the reading still
-    // stands, so this lowers the verdict instead of quarantining the run.
-    violations: accountState?.mismatch
-      ? [...result.violations, { kind: "account-state-mismatch", detail: accountState.note }]
-      : result.violations,
-  });
-
-  return withSchema(
-    {
-      runId: run.runId,
-      page: run.page,
-      judgedAt,
-      targetUrl: run.targetUrl,
-      targetPath: run.targetPath,
-      planSource: plan.planSource,
-      specHash: plan.specHash,
-      accountState: summarizeAccountState(accountState),
-      notApplicable: plan.notApplicable,
-      status: decision.status,
-      cause: decision.cause,
-      summary: decision.summary,
-      recommendedAction: decision.recommendedAction,
-      source: decision.source,
-      ...(decision.agentMeta ? { agentMeta: decision.agentMeta } : {}),
-      checks: decision.checks,
-      coverage: decision.coverage,
-      evidence: decision.evidence,
-      runnerEvidence: result.runnerEvidence ?? null,
-    },
-    "judgment"
-  );
 }
 
 /** Every artifact, ledger entry and notification a finished judgment produces. */
@@ -1197,7 +914,7 @@ async function publishJudgment({ run, plan, result, judgment }) {
     cause: judgment.cause,
     coverage: judgment.coverage,
     artifact: paths.hermesJudgmentJson,
-  });
+  }, { io: ledgerIo });
 
   appendStepSummary(renderJudgmentSummary(judgment, { page }));
 
@@ -1238,13 +955,19 @@ export async function main(argv = process.argv.slice(2)) {
   if (run.dryRun) return dryRunJudge(run);
 
   const { plan, result, accountState } = await judgeQuarantined(run);
-  const judgment = buildJudgment({
-    run,
-    plan,
-    result,
-    accountState,
-    judgedAt: new Date().toISOString(),
-  });
+  const judgment = withSchema(
+    buildJudgment(
+      {
+        run,
+        plan,
+        result,
+        accountState,
+        judgedAt: new Date().toISOString(),
+      },
+      { io: evidenceIo }
+    ),
+    "judgment"
+  );
   await publishJudgment({ run, plan, result, judgment });
   return settleJudgment(run, judgment);
 }

@@ -12,6 +12,7 @@ import {
   normalizeCause,
   resolveJudgeTurnBudget,
 } from "../judge-verdict.mjs";
+import { evidenceIo } from "./test-node-io.mjs";
 
 let evidenceDir: string;
 let evidenceFile: string;
@@ -36,7 +37,7 @@ function passing(item: string, detail = 'header reads "Pro plan"') {
 
 describe("verdict floor", () => {
   it("passes when every check passes with concrete evidence", () => {
-    expect(normalizeBrowseDecision({ checks: [passing("a")] }, { runnerEvidence: runnerEvidence() }).status).toBe(
+    expect(normalizeBrowseDecision({ status: "pass", checks: [passing("a")] }, { ...evidenceIo, runnerEvidence: runnerEvidence() }).status).toBe(
       "pass",
     );
   });
@@ -44,12 +45,13 @@ describe("verdict floor", () => {
   it("passes when checks are pass and skip (skip does not elevate status)", () => {
     expect(
       normalizeBrowseDecision({
+        status: "pass",
         checks: [
           passing("a"),
           { item: "b", result: "skip", detail: "blocked on live" },
         ],
       },
-      { runnerEvidence: runnerEvidence() },
+      { ...evidenceIo, runnerEvidence: runnerEvidence() },
     ).status,
     ).toBe("pass");
   });
@@ -59,23 +61,23 @@ describe("verdict floor", () => {
       normalizeBrowseDecision({
         status: "pass",
         checks: [{ item: "a", result: "skip", detail: "login failed" }],
-      }).status,
+      }, evidenceIo).status,
     ).toBe("manual_review");
   });
 
   it("manual_reviews when the checks array is empty", () => {
-    expect(normalizeBrowseDecision({ checks: [] }).status).toBe(
+    expect(normalizeBrowseDecision({ checks: [] }, evidenceIo).status).toBe(
       "manual_review",
     );
   });
 
   it("never upgrades the agent's own verdict", () => {
     expect(
-      normalizeBrowseDecision({ status: "manual_review", checks: [passing("a")] })
+      normalizeBrowseDecision({ status: "manual_review", checks: [passing("a")] }, evidenceIo)
         .status,
     ).toBe("manual_review");
     expect(
-      normalizeBrowseDecision({ status: "fail", checks: [passing("a")] }).status,
+      normalizeBrowseDecision({ status: "fail", checks: [passing("a")] }, evidenceIo).status,
     ).toBe("fail");
   });
 
@@ -84,7 +86,7 @@ describe("verdict floor", () => {
       normalizeBrowseDecision({
         status: "pass",
         checks: [{ item: "a", result: "fail", detail: "", cause: "PRODUCT_DEFECT" }],
-      }).status,
+      }, evidenceIo).status,
     ).toBe("fail");
   });
 
@@ -93,7 +95,7 @@ describe("verdict floor", () => {
       normalizeBrowseDecision({
         checks: [passing("a")],
         agentMeta: { adapter: "aside", model: "m", durationMs: 12 },
-      }).agentMeta,
+      }, evidenceIo).agentMeta,
     ).toEqual({ adapter: "aside", model: "m", durationMs: 12 });
   });
 });
@@ -102,7 +104,7 @@ describe("scenario coverage", () => {
   it("counts planned checks the agent never addressed and forces manual_review", () => {
     const decision = normalizeBrowseDecision(
       { status: "pass", checks: [passing("shows health score")] },
-      { plannedChecks: ["shows health score", "shows renewal date"], runnerEvidence: runnerEvidence() },
+      { ...evidenceIo, plannedChecks: ["shows health score", "shows renewal date"], runnerEvidence: runnerEvidence() },
     );
 
     expect(decision.coverage).toEqual({
@@ -155,8 +157,8 @@ describe("scenario coverage", () => {
 
   it("stays pass when every planned check is addressed", () => {
     const decision = normalizeBrowseDecision(
-      { checks: [passing("shows health score")] },
-      { plannedChecks: ["shows health score"], runnerEvidence: runnerEvidence() },
+      { status: "pass", checks: [passing("shows health score")] },
+      { ...evidenceIo, plannedChecks: ["shows health score"], runnerEvidence: runnerEvidence() },
     );
     expect(decision.status).toBe("pass");
     expect(decision.coverage.missing).toEqual([]);
@@ -169,18 +171,19 @@ describe("evidence-or-demote", () => {
       hasConcreteEvidence(
         { detail: 'plan badge reads "Pro"', evidenceRefs: [] },
         { ariaSnapshots: [ariaFile] },
+        evidenceIo,
       ),
     ).toBe(true);
   });
 
   it("rejects URL and number prose without runner evidence", () => {
-    expect(hasConcreteEvidence({ detail: "landed on /dashboard/billing" })).toBe(false);
-    expect(hasConcreteEvidence({ detail: "score rendered as 98%" })).toBe(false);
+    expect(hasConcreteEvidence({ detail: "landed on /dashboard/billing" }, null, evidenceIo)).toBe(false);
+    expect(hasConcreteEvidence({ detail: "score rendered as 98%" }, null, evidenceIo)).toBe(false);
   });
 
   it("rejects vague prose", () => {
     expect(
-      hasConcreteEvidence({ detail: "everything looked correct on the page" }),
+      hasConcreteEvidence({ detail: "everything looked correct on the page" }, null, evidenceIo),
     ).toBe(false);
   });
 
@@ -189,6 +192,7 @@ describe("evidence-or-demote", () => {
       hasConcreteEvidence(
         { detail: "looked fine", evidenceRefs: [evidenceFile] },
         { screenshots: [evidenceFile] },
+        evidenceIo,
       ),
     ).toBe(true);
   });
@@ -198,7 +202,7 @@ describe("evidence-or-demote", () => {
       hasConcreteEvidence(
         { detail: "looked fine", evidenceRefs: ["imagined.png"] },
         { screenshots: ["/tmp/evidence/dashboard-final.png"] },
-        { fileExists: () => false },
+        { ...evidenceIo, fileExists: () => false },
       ),
     ).toBe(false);
   });
@@ -207,7 +211,7 @@ describe("evidence-or-demote", () => {
     const decision = normalizeBrowseDecision({
       status: "pass",
       checks: [{ item: "a", result: "pass", detail: "all good" }],
-    });
+    }, evidenceIo);
 
     expect(decision.status).toBe("manual_review");
     expect(decision.checks[0]).toMatchObject({
@@ -224,7 +228,7 @@ describe("evidence-or-demote", () => {
       checks: [
         { item: "a", result: "pass", detail: 'reads "Pro"', confidence: "low" },
       ],
-    });
+    }, evidenceIo);
 
     expect(decision.status).toBe("manual_review");
     expect(decision.summary).toContain("low confidence");
@@ -232,8 +236,8 @@ describe("evidence-or-demote", () => {
 
   it("treats a missing confidence as medium, not low", () => {
     const decision = normalizeBrowseDecision(
-      { checks: [{ item: "a", result: "pass", detail: 'reads "Pro"' }] },
-      { runnerEvidence: runnerEvidence() },
+      { status: "pass", checks: [{ item: "a", result: "pass", detail: 'reads "Pro"' }] },
+      { ...evidenceIo, runnerEvidence: runnerEvidence() },
     );
     expect(decision.status).toBe("pass");
     expect(decision.checks[0].confidence).toBe("medium");
@@ -253,7 +257,7 @@ describe("cause classification", () => {
   });
 
   it("reports NONE for a green run", () => {
-    expect(normalizeBrowseDecision({ checks: [passing("a")] }, { runnerEvidence: runnerEvidence() }).cause).toBe(
+    expect(normalizeBrowseDecision({ status: "pass", checks: [passing("a")] }, { ...evidenceIo, runnerEvidence: runnerEvidence() }).cause).toBe(
       "NONE",
     );
   });
@@ -266,7 +270,7 @@ describe("cause classification", () => {
         checks: [
           { item: "a", result: "fail", detail: "no button", cause: "PRODUCT_DEFECT" },
         ],
-      }).cause,
+      }, evidenceIo).cause,
     ).toBe("PRODUCT_DEFECT");
   });
 
@@ -277,7 +281,7 @@ describe("cause classification", () => {
         checks: [
           { item: "a", result: "skip", detail: "login page", cause: "ENVIRONMENT_DEFECT" },
         ],
-      }).cause,
+      }, evidenceIo).cause,
     ).toBe("ENVIRONMENT_DEFECT");
   });
 
@@ -289,7 +293,7 @@ describe("cause classification", () => {
           { item: "a", result: "fail", detail: "x", cause: "PRODUCT_DEFECT" },
           { item: "b", result: "skip", detail: "y", cause: "ENVIRONMENT_DEFECT" },
         ],
-      }).cause,
+      }, evidenceIo).cause,
     ).toBe("PRODUCT_DEFECT");
   });
 });
@@ -369,7 +373,7 @@ describe("HAR violation analysis", () => {
   it("fails the verdict with HARNESS_DEFECT on an off-origin navigation", () => {
     const decision = normalizeBrowseDecision(
       { status: "pass", checks: [passing("a")] },
-      {
+      { ...evidenceIo,
         violations: [
           { kind: "off-origin-navigation", detail: "https://evil.example.net/" },
         ],
@@ -384,7 +388,7 @@ describe("HAR violation analysis", () => {
   it("forces manual_review on an unexpected mutation", () => {
     const decision = normalizeBrowseDecision(
       { status: "pass", checks: [passing("a")] },
-      { violations: [{ kind: "unexpected-mutation", detail: "POST /api/x" }], runnerEvidence: runnerEvidence() },
+      { ...evidenceIo, violations: [{ kind: "unexpected-mutation", detail: "POST /api/x" }], runnerEvidence: runnerEvidence() },
     );
 
     expect(decision.status).toBe("manual_review");
@@ -392,8 +396,8 @@ describe("HAR violation analysis", () => {
 
   it("records a capture failure without moving the verdict", () => {
     const decision = normalizeBrowseDecision(
-      { checks: [passing("a")] },
-      { violations: [{ kind: "capture-failed", detail: "tracing.stop" }], runnerEvidence: runnerEvidence() },
+      { status: "pass", checks: [passing("a")] },
+      { ...evidenceIo, violations: [{ kind: "capture-failed", detail: "tracing.stop" }], runnerEvidence: runnerEvidence() },
     );
 
     expect(decision.status).toBe("pass");
@@ -515,7 +519,7 @@ describe("account state mismatch", () => {
     const { normalizeBrowseDecision } = await import("../judge-verdict.mjs");
     const decision = normalizeBrowseDecision(
       { status: "pass", checks: [passing("shows the plan name")] },
-      {
+      { ...evidenceIo,
         violations: [
           {
             kind: "account-state-mismatch",

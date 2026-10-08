@@ -336,7 +336,7 @@ describe("@qa-live-policy vocabulary", () => {
       "payments-mutation": { liveRunPolicy: "blocked-subscription-mutation" },
     });
 
-    expect(mapLivePolicyAnnotation("payments-mutation")).toEqual({
+    expect(mapLivePolicyAnnotation("payments-mutation", getLivePolicyOverrides())).toEqual({
       liveRunPolicy: "blocked-subscription-mutation",
       stagingMode: "interaction",
     });
@@ -347,7 +347,7 @@ describe("@qa-live-policy vocabulary", () => {
       bogus: { liveRunPolicy: "not-a-verb" },
     });
 
-    expect(() => mapLivePolicyAnnotation("bogus")).toThrow(
+    expect(() => mapLivePolicyAnnotation("bogus", getLivePolicyOverrides())).toThrow(
       /unknown liveRunPolicy "not-a-verb"/,
     );
   });
@@ -357,7 +357,7 @@ describe("@qa-live-policy vocabulary", () => {
       "payments-mutation": { liveRunPolicy: "blocked-subscription-mutation" },
     });
 
-    expect(() => mapLivePolicyAnnotation("typo")).toThrow(
+    expect(() => mapLivePolicyAnnotation("typo", getLivePolicyOverrides())).toThrow(
       /payments-mutation/,
     );
   });

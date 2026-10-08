@@ -34,6 +34,7 @@ import {
 } from "./page-qa-paths.mjs";
 import { assertRunNotInvalid } from "./qa-run-invalid.mjs";
 import { appendRunEvent, readLedger } from "./qa-run-ledger.mjs";
+import { evidenceIo, ledgerIo } from "./node-io.mjs";
 import { describeHashMismatch } from "./spec-hash.mjs";
 import { appendStepSummary } from "./github-summary.mjs";
 
@@ -300,7 +301,7 @@ export async function run(argv) {
     ariaSnapshots: readRunnerAriaSnapshots({ runnerEvidence: judgment.runnerEvidence, evidenceDir: paths.evidenceDir }),
     suspiciousAria: listSuspiciousAria(judgment.runnerEvidence),
     ledgerEntries: judgment.runId
-      ? readLedger(paths.runsLedger).filter(
+      ? readLedger(paths.runsLedger, { io: ledgerIo }).filter(
           entry => entry.runId === judgment.runId
         )
       : [],
@@ -330,7 +331,7 @@ export async function run(argv) {
       mode: "text-only",
     });
     reviewed.push(
-      normalizeJudgeReview(raw, judgment, { packetSha256: packet.packetSha256 })
+      normalizeJudgeReview(raw, judgment, { packetSha256: packet.packetSha256, ...evidenceIo })
     );
   }
 
@@ -350,7 +351,7 @@ export async function run(argv) {
     overallReview: review.overallReview,
     unstable: review.unstable,
     packetSha256: review.packetSha256,
-  });
+  }, { io: ledgerIo });
 
   try {
     await getHooks().onReview?.({ page, review, paths, packetPath });

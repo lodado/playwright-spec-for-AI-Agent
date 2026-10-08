@@ -24,6 +24,7 @@ import {
 } from "./hermes-qa-project-config.mjs";
 import { readArtifact } from "./artifact-schema.mjs";
 import { appendRunEvent } from "./qa-run-ledger.mjs";
+import { ledgerIo } from "./node-io.mjs";
 import {
   EnvironmentError,
   EXIT_ENVIRONMENT,
@@ -366,7 +367,7 @@ function recordSlackEvent(paths, page, status, notified, runId) {
     status,
     notified,
     ...(runId ? { runId } : {}),
-  });
+  }, { io: ledgerIo });
 }
 
 async function main() {

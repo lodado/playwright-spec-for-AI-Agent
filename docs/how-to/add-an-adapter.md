@@ -123,13 +123,14 @@ not that a screenshot proves an interaction or assertion.
 
 Your `run` owns the tail every built-in adapter performs: write the prompt and
 the raw output as artifacts with `secrets` redacted, then extract and key-check
-the JSON. Import it rather than reimplementing it:
+the JSON. Reuse it rather than reimplementing it. The package no longer exports
+`scripts/*`, so import it from a checkout of the repository by relative path:
 
 ```js
 import {
   finalizeAgentRun,
   writeAgentQueryArtifact,
-} from "playwright-spec-for-ai-agent/scripts/agent-output.mjs";
+} from "./scripts/agent-output.mjs";
 ```
 
 `writeAgentQueryArtifact(paths, query, secrets)` and `finalizeAgentRun(result,
@@ -207,12 +208,14 @@ real stage instead.
 
 ## Run the contract suite against your adapter
 
-The suite the four built-ins pass is exported from the published package. Point
-it at your `run` from your own vitest file:
+The suite the four built-ins pass lives in the repository
+(`scripts/__tests__/agent-runner-contract.test.ts`); it is not part of the
+published package. From a checkout, point it at your `run` from your own vitest
+file:
 
 ```ts
 // my-adapter.contract.test.ts
-import { runAdapterContractSuite } from "playwright-spec-for-ai-agent/scripts/__tests__/agent-runner-contract.test.ts";
+import { runAdapterContractSuite } from "./scripts/__tests__/agent-runner-contract.test.ts";
 import { run } from "./qa-adapters/my-agent.mjs";
 
 runAdapterContractSuite("my-agent", run);

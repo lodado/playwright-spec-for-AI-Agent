@@ -43,6 +43,7 @@ import {
 } from "./page-qa-handoff.mjs";
 import { artifactPaths, ensureProjectConfig } from "./page-qa-paths.mjs";
 import { appendRunEvent } from "./qa-run-ledger.mjs";
+import { ledgerIo } from "./node-io.mjs";
 import { flakinessReport, readHistory } from "./qa-verdict-history.mjs";
 import { activeAcks, selectAlertChecks } from "./slack-page-qa-report.mjs";
 import { hashJson } from "./spec-hash.mjs";
@@ -323,7 +324,7 @@ export async function applyPlan(plan, client, options, paths) {
       action: "closed",
       number: existing.number,
       ...(plan.runId ? { runId: plan.runId } : {}),
-    });
+    }, { io: ledgerIo });
     return { acted: true, number: existing.number };
   }
 
@@ -343,7 +344,7 @@ export async function applyPlan(plan, client, options, paths) {
       number: created.number,
       fingerprint: plan.fingerprint,
       ...(plan.runId ? { runId: plan.runId } : {}),
-    });
+    }, { io: ledgerIo });
     return { acted: true, number: created.number };
   }
 
@@ -376,7 +377,7 @@ export async function applyPlan(plan, client, options, paths) {
     number: existing.number,
     fingerprint: plan.fingerprint,
     ...(plan.runId ? { runId: plan.runId } : {}),
-  });
+  }, { io: ledgerIo });
   return { acted: true, number: existing.number };
 }
 

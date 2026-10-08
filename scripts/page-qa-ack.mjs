@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { artifactPaths, ensureProjectConfig } from "./page-qa-paths.mjs";
 import { readArtifact } from "./artifact-schema.mjs";
 import { appendRunEvent } from "./qa-run-ledger.mjs";
+import { ledgerIo } from "./node-io.mjs";
 import { EXIT_OK, runMain, UsageError } from "./errors.mjs";
 
 export const DEFAULT_ACK_DAYS = 14;
@@ -164,7 +165,7 @@ export async function run(argv = process.argv.slice(2), { now = new Date() } = {
       page,
       action: "remove",
       item: removeItem,
-    });
+    }, { io: ledgerIo });
     console.log(`Removed ack for "${removeItem}" on ${page}.`);
     return EXIT_OK;
   }
@@ -198,7 +199,7 @@ export async function run(argv = process.argv.slice(2), { now = new Date() } = {
     action: "add",
     item,
     until: ack.until,
-  });
+  }, { io: ledgerIo });
   console.log(`Acked "${item}" on ${page} until ${ack.until} (${ack.by}).`);
   return EXIT_OK;
 }

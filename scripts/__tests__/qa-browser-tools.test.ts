@@ -9,6 +9,7 @@ import { requestCheckpoint } from '../qa-checkpoint.mjs';
 import { requestUploadFixture } from '../qa-upload-fixture.mjs';
 import { normalizeBrowseDecision } from '../judge-verdict.mjs';
 import { buildBrowseChecklist } from '../spec-annotation-reader.mjs';
+import { evidenceIo } from "./test-node-io.mjs";
 
 const root = mkdtempSync(join(tmpdir(), 'qa-tools-test-'));
 const fixture = join(root, 'fixture.txt');
@@ -61,7 +62,7 @@ it('binds upload receipts and intermediate snapshots to their own check', () => 
     uploads: [{ checkId: 'chk_upload', receiptId: 'upload_1', path: fixture, sha256: 'a'.repeat(64) }] };
   const decision = normalizeBrowseDecision({ checks: [checks[0], other].map(check => ({
     checkId: check.checkId, result: 'pass', detail: 'Saw "Upload complete"', evidenceRefs: [snapshot], uploadRefs: ['upload_1'],
-  })) }, { plannedChecks: [checks[0], other], runnerEvidence: evidence });
+  })) }, { ...evidenceIo, plannedChecks: [checks[0], other], runnerEvidence: evidence });
   expect(decision.checks.map(check => check.result)).toEqual(['pass', 'manual_review']);
   expect(decision.checks[1].evidenceRefs).toEqual([]);
   expect(decision.checks[1].uploadRefs).toEqual([]);
@@ -71,8 +72,8 @@ it('does not turn available fixture defaults into a readonly upload requirement'
   const snapshot = join(root, 'readonly.yaml');
   writeFileSync(snapshot, '- text: Readonly content');
   const planned = { ...checks[1], uploadFixtures: { upload: fixture }, requiredUploadFixtures: {} };
-  const decision = normalizeBrowseDecision({ checks: [{ checkId: planned.checkId, result: 'pass', detail: 'Saw "Readonly content"' }] },
-    { plannedChecks: [planned], runnerEvidence: { ariaSnapshots: [snapshot] } });
+  const decision = normalizeBrowseDecision({ status: 'pass', checks: [{ checkId: planned.checkId, result: 'pass', detail: 'Saw "Readonly content"' }] },
+    { ...evidenceIo, plannedChecks: [planned], runnerEvidence: { ariaSnapshots: [snapshot] } });
   expect(decision.status).toBe('pass');
 });
 
@@ -93,7 +94,7 @@ it('retains per-check evidence after a transient dialog disappears', async () =>
   await page.getByRole('dialog').evaluate((el: HTMLElement) => el.remove());
   expect(session.evidence.checkpoints[0].checkId).toBe('chk_read');
   expect(readFileSync(session.evidence.ariaSnapshots[0], 'utf8')).toContain('Transient dialog');
-  const result = normalizeBrowseDecision({ checks: [{ checkId: 'chk_read', result: 'pass', detail: 'Saw "Transient dialog"' }] }, { plannedChecks: [checks[1]], runnerEvidence: session.evidence });
+  const result = normalizeBrowseDecision({ status: 'pass', checks: [{ checkId: 'chk_read', result: 'pass', detail: 'Saw "Transient dialog"' }] }, { ...evidenceIo, plannedChecks: [checks[1]], runnerEvidence: session.evidence });
   expect(result.status).toBe('pass');
 }));
 
@@ -156,7 +157,7 @@ it('does not accept an upload-dependent pass without a runner receipt', () => {
   const snapshot = join(root, 'completed.yaml');
   writeFileSync(snapshot, '- text: Upload complete');
   const raw = { checks: [{ checkId: 'chk_upload', result: 'pass', detail: 'Saw "Upload complete"', uploadRefs: ['invented'] }] };
-  const result = normalizeBrowseDecision(raw, { plannedChecks: checks.slice(0, 1), runnerEvidence: { ariaSnapshots: [snapshot] } });
+  const result = normalizeBrowseDecision(raw, { ...evidenceIo, plannedChecks: checks.slice(0, 1), runnerEvidence: { ariaSnapshots: [snapshot] } });
   expect(result.status).toBe('manual_review');
   expect(result.summary).toMatch(/upload.*receipt/i);
 });

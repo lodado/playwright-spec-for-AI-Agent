@@ -46,6 +46,7 @@ import { artifactPaths, ensureProjectConfig } from "./page-qa-paths.mjs";
 import { readArtifact } from "./artifact-schema.mjs";
 import { hashSpecDefinition } from "./spec-hash.mjs";
 import { appendRunEvent, findLast } from "./qa-run-ledger.mjs";
+import { ledgerIo } from "./node-io.mjs";
 import {
   EXIT_AGENT_OUTPUT,
   EXIT_ENVIRONMENT,
@@ -121,7 +122,12 @@ function severityOf(code) {
 export function worstExitCode(codes) {
   let worst = EXIT_OK;
   for (const code of codes) {
-    if (severityOf(code) > severityOf(worst)) worst = code;
+    const rank = severityOf(code);
+    const worstRank = severityOf(worst);
+    // Between two unrecognised codes the larger is worse, whatever the order.
+    if (rank > worstRank || (rank === SEVERITY_ORDER.length && rank === worstRank && code > worst)) {
+      worst = code;
+    }
   }
   return worst;
 }
@@ -302,7 +308,7 @@ async function fetchBuildId(url, fetchImpl) {
 
 function recordDeployEvent(paths, page, event) {
   mkdirSync(paths.outputDir, { recursive: true });
-  appendRunEvent(paths.runsLedger, { kind: "deploy", page, ...event });
+  appendRunEvent(paths.runsLedger, { kind: "deploy", page, ...event }, { io: ledgerIo });
 }
 
 /**
@@ -319,7 +325,8 @@ async function deployGate(page, paths, specHash, ctx) {
   const judgment = readJsonArtifact(paths.hermesJudgmentJson, "judgment");
   const lastDeploy = findLast(
     paths.runsLedger,
-    entry => entry?.kind === "deploy" && entry.page === page
+    entry => entry?.kind === "deploy" && entry.page === page,
+    { io: ledgerIo }
   );
   const judgedBuildId = judgment?.stagingBuildId ?? lastDeploy?.buildId ?? null;
   const judgedSpecHash = judgment?.specHash ?? lastDeploy?.specHash ?? null;

@@ -318,8 +318,8 @@ atomically through a `.tmp` file and a rename.
 | `keep`      | number            | Ring size, `30` by default.                                    |
 | `runs`      | object[]          | Oldest first. Each is `{ runId, judgedAt, status, specHash, checks[] }` with checks reduced to `{ item, result }`. |
 
-`flakinessReport()` and `stableVerdict()`, exported from
-`playwright-spec-for-ai-agent/scripts/qa-verdict-history.mjs`, read this file.
+`flakinessReport()` and `stableVerdict()`, defined in
+`scripts/qa-verdict-history.mjs` (not an exported package subpath), read this file.
 Both confine their analysis to runs sharing the newest `specHash` — a verdict
 that changed after the spec changed is a new expectation, not a flake. Their
 thresholds are documented in

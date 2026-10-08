@@ -19,6 +19,7 @@ import { listConfiguredPages } from "./hermes-qa-project-config.mjs";
 import { artifactPaths, ensureProjectConfig } from "./page-qa-paths.mjs";
 import { readArtifact } from "./artifact-schema.mjs";
 import { lastEntry } from "./qa-run-ledger.mjs";
+import { ledgerIo } from "./node-io.mjs";
 import { appendStepSummary } from "./github-summary.mjs";
 import {
   EXIT_ENVIRONMENT,
@@ -113,7 +114,7 @@ export function collectPageReport(page, now = new Date()) {
   const marker = existsSync(paths.runInvalidMarker);
   const judgment = readOptional(paths.hermesJudgmentJson, "judgment");
   const review = readOptional(paths.hermesReviewJson, "review");
-  const ledgerTail = lastEntry(paths.runsLedger);
+  const ledgerTail = lastEntry(paths.runsLedger, { io: ledgerIo });
 
   let status;
   if (marker) status = "quarantined";

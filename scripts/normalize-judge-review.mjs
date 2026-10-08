@@ -10,6 +10,7 @@
 import { AgentOutputError } from "./errors.mjs";
 import { hashText } from "./spec-hash.mjs";
 import { hasConcreteEvidence } from "./judge-verdict.mjs";
+import { evidenceIo } from "./node-io.mjs";
 
 /**
  * The rubric. Order is part of the contract — panel merging aligns samples by
@@ -76,8 +77,8 @@ function judgedChecks(judgment) {
  *
  * @returns {string[]}
  */
-export function findUncitedChecks(judgment, { readText } = {}) {
-  const options = { readText, ariaCache: new Map() };
+export function findUncitedChecks(judgment, { readText = evidenceIo.readText, fileExists = evidenceIo.fileExists } = {}) {
+  const options = { readText, fileExists, ariaCache: new Map() };
   return judgedChecks(judgment)
     .filter(check => !hasConcreteEvidence(check, judgment?.runnerEvidence, options))
     .map(check => String(check?.item ?? "Untitled check"));
@@ -270,12 +271,14 @@ function normalizeRecommendations(raw, judgment) {
 /**
  * @param {object} raw parsed reviewer payload
  * @param {object} judgment the judgment under review
- * @param {{ packetSha256?: string|null }} [options]
+ * @param {{ packetSha256?: string|null,
+ *           fileExists?: (path: string) => boolean,
+ *           readText?: (path: string) => string }} [options] evidence port from the shell
  */
-export function normalizeJudgeReview(raw, judgment, { packetSha256 = null } = {}) {
+export function normalizeJudgeReview(raw, judgment, { packetSha256 = null, fileExists = evidenceIo.fileExists, readText = evidenceIo.readText } = {}) {
   assertPacketEcho(raw, packetSha256);
 
-  const uncited = findUncitedChecks(judgment);
+  const uncited = findUncitedChecks(judgment, { fileExists, readText });
   const coverageIssues = findCoverageIssues(judgment);
   const checkIdIssues = findCheckIdIssues(judgment);
   const incoming = Array.isArray(raw?.criteria) ? raw.criteria : [];

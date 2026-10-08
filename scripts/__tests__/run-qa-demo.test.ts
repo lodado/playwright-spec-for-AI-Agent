@@ -8,6 +8,7 @@ import {
   resetProjectConfigForTests,
 } from "../hermes-qa-project-config.mjs";
 import { parseDemoArgs, startDemoServer } from "../run-qa-demo.mjs";
+import { specDirIo } from "./test-node-io.mjs";
 
 const DEMO_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -36,7 +37,7 @@ describe("demo app", () => {
   });
 
   it("parses into a QA spec with the annotated policies", () => {
-    const spec = parseSpecDirectory(DEMO_DIR);
+    const spec = parseSpecDirectory(DEMO_DIR, { io: specDirIo });
 
     expect(spec.scenarios).toHaveLength(1);
     const [scenario] = spec.scenarios;
@@ -54,7 +55,7 @@ describe("demo app", () => {
     const { livePlan } = JSON.parse(
       readFileSync(join(DEMO_DIR, "fixtures", "abstract.json"), "utf8")
     );
-    const spec = parseSpecDirectory(DEMO_DIR);
+    const spec = parseSpecDirectory(DEMO_DIR, { io: specDirIo });
 
     for (const test of spec.scenarios[0].tests) {
       if (test.liveRunPolicy === "blocked-auth-mock") continue;

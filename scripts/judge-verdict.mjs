@@ -9,8 +9,10 @@
  * raise it. An agent that says `fail` is believed; an agent that says `pass`
  * has to show its work.
  */
-import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
+
+/** @typedef {"pass" | "manual_review" | "fail"} Status */
+/** @typedef {import("type-fest").JsonValue} JsonValue */
 
 export const CAUSES = [
   "PRODUCT_DEFECT",
@@ -46,6 +48,11 @@ const MUTATING_POLICIES = new Set([
 export const JUDGE_TURNS_MIN = 20;
 export const JUDGE_TURNS_MAX = 150;
 
+/**
+ * @param {Status} a
+ * @param {Status} b
+ * @returns {Status}
+ */
 function worst(a, b) {
   return SEVERITY[a] >= SEVERITY[b] ? a : b;
 }
@@ -83,13 +90,8 @@ export function collectEvidenceArtifacts(runnerEvidence) {
 /** Resolve citations against this run's captures; prose alone is not evidence. */
 function resolveEvidenceRefs(check, runnerEvidence, {
   ariaCache = new Map(),
-  readText = file => readFileSync(file, "utf8"),
-  fileExists = file => {
-    const stat = statSync(file);
-    if (!stat.isFile() || stat.size === 0) return false;
-    accessSync(file, constants.R_OK);
-    return true;
-  },
+  readText,
+  fileExists,
 } = {}) {
   const foreignCheckpoints = new Set((runnerEvidence?.checkpoints ?? [])
     .filter(checkpoint => checkpoint.checkId !== check?.checkId)
@@ -380,12 +382,31 @@ function deriveCause({ status, declared, checks, violations }) {
 }
 
 /**
- * @param {object} raw agent JSON
- * @param {{ plannedChecks?: Array<string|{checkId: string, item: string}>, runnerEvidence?: object|null,
- *           violations?: Array<{kind:string,detail?:string}>,
- *           fileExists?: (path: string) => boolean }} [options]
+ * @typedef {object} BrowseDecision
+ * @property {Status} status
+ * @property {string} cause
+ * @property {string} summary
+ * @property {Array<Record<string, any>>} checks
+ * @property {{ planned: number, addressed: number, missing: string[] }} coverage
+ * @property {string[]} evidence
+ * @property {string} recommendedAction
+ * @property {string} source
+ * @property {Array<{ kind: string, detail: string }>} violations
+ * @property {object} [agentMeta]
  */
-export function normalizeBrowseDecision(raw = {}, options = {}) {
+
+/**
+ * File access arrives in `options`: the shell passes `evidenceIo` from node-io.mjs.
+ *
+ * @param {JsonValue} [raw] agent JSON, untrusted output of a user-selectable adapter
+ * @param {{ plannedChecks?: Array<string | { checkId?: string, item: string, [key: string]: unknown }>,
+ *           runnerEvidence?: object | null,
+ *           violations?: Array<{ kind: string, detail?: string }>,
+ *           fileExists: (path: string) => boolean,
+ *           readText: (path: string) => string }} options
+ * @returns {BrowseDecision}
+ */
+export function normalizeBrowseDecision(raw = {}, options) {
   const {
     plannedChecks = [],
     runnerEvidence = null,
@@ -432,6 +453,9 @@ export function normalizeBrowseDecision(raw = {}, options = {}) {
       : "medium";
 
     let result = CHECK_RESULTS.has(check?.result) ? check.result : "manual_review";
+    if (!CHECK_RESULTS.has(check?.result)) {
+      floorNotes.push(`"${item}" reported an unrecognised result`);
+    }
     let demotedFrom = null;
     if (result === "pass") {
       if (confidence === "low") {
@@ -471,6 +495,7 @@ export function normalizeBrowseDecision(raw = {}, options = {}) {
   // must never report green — same principle as pytest exit code 5 / Playwright
   // "no tests found".
   const executed = checks.filter(check => check.result !== "skip");
+  if (executed.length === 0) floorNotes.push("no check was executed");
   let derived = checks.some(check => check.result === "fail")
     ? "fail"
     : checks.some(check => check.result === "manual_review") ||
@@ -499,8 +524,20 @@ export function normalizeBrowseDecision(raw = {}, options = {}) {
 
   // Normalization may only downgrade the agent's own verdict, never upgrade
   // it: if the agent said manual_review/fail, checks cannot turn that into pass.
-  const agentStatus = STATUSES.has(raw.status) ? raw.status : null;
-  const status = agentStatus ? worst(agentStatus, derived) : derived;
+  // A top-level skip, a missing status or any other string is not a verdict the
+  // agent gave: it claims manual_review, so it can never end as a pass.
+  const claim = STATUSES.has(raw.status) ? raw.status : "manual_review";
+  if (!STATUSES.has(raw.status)) {
+    floorNotes.push(
+      raw.status === undefined
+        ? "the agent reported no status"
+        : `the agent status ${JSON.stringify(String(raw.status))} is not pass, fail or manual_review`
+    );
+  }
+  const status = worst(claim, derived);
+  if (status !== claim && floorNotes.length === 0) {
+    floorNotes.push(`the checks derive ${status} where the agent claimed ${claim}`);
+  }
 
   const summary = String(raw.summary ?? "Hermes QA judgment completed.");
   return {
@@ -583,12 +620,13 @@ export function buildEvidenceManifest({
 
 /**
  * Turn budget scaled to the plan: a 3-test page never needed 150 turns, and a
- * 30-test page should not be cut off at a flat one. QA_JUDGE_MAX_TURNS wins.
+ * 30-test page should not be cut off at a flat one. The override (the shell
+ * passes QA_JUDGE_MAX_TURNS) wins.
+ *
+ * @param {number} executableTests
+ * @param {string | number | undefined} override
  */
-export function resolveJudgeTurnBudget(
-  executableTests,
-  override = process.env.QA_JUDGE_MAX_TURNS
-) {
+export function resolveJudgeTurnBudget(executableTests, override) {
   const parsed = Number(override);
   if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
   const scaled = 12 + 8 * Math.max(0, Number(executableTests) || 0);

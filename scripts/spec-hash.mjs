@@ -7,7 +7,6 @@
  * saw — both silent, both indistinguishable from a real verdict.
  */
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 
 /** Stable stringify: key order must not change the hash. */
 export function canonicalize(value) {
@@ -31,8 +30,12 @@ export function hashJson(value) {
   return hashText(canonicalize(value));
 }
 
-export function hashFile(path) {
-  return hashText(readFileSync(path, "utf8"));
+/**
+ * @param {string} path
+ * @param {{ readFile: (path: string) => string }} options — the one file port, injected by the shell
+ */
+export function hashFile(path, { readFile }) {
+  return hashText(readFile(path));
 }
 
 /**

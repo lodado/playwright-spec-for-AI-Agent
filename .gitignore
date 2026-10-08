@@ -13,3 +13,4 @@ node_modules/
 *.har
 *.webm
 *-trace.zip
+.ai
